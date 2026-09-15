@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs
+logs/
+*.log
+
+# Config with secrets
+config.yaml
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Temp files
+*.tmp
+*.temp
+nul
+.sisyphus
+tmp/
+.claude
+# Harness
+harness-progress.txt
+harness-tasks.json
+harness-tasks.json.bak
+harness-init.sh
+.harness-stop-counter
+.harness-active
+
+# 打包产物
+*.tgz
