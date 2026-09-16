@@ -357,22 +357,93 @@ function isCancelMessageItem(item: Record<string, unknown>): boolean {
 }
 
 /** 普通消息和撤回共用公开会话编号；原生sessionID可能只是KK9数据库行ID。 */
-function resolvePublicSessionId(raw: Record<string, unknown>, fallbackId?: string): string {
+function resolvePublicSessionId(
+  raw: Record<string, unknown>,
+  fallbackId?: string,
+  currentUserId?: string | number
+): string {
   const session =
     raw['session'] && typeof raw['session'] === 'object'
       ? (raw['session'] as Record<string, unknown>)
       : undefined;
-  const id =
-    raw['sessionId'] ??
-    raw['sesUUID'] ??
-    (session?.['type'] != null && session['typeID'] != null
-      ? `${toSafeString(session['type'])}-${toSafeString(session['typeID'])}`
-      : undefined) ??
-    raw['sessionID'] ??
-    session?.['id'] ??
-    session?.['sesUUID'] ??
-    fallbackId;
-  return toSafeString(id, '').trim();
+  const myUid =
+    currentUserId !== undefined && currentUserId !== null
+      ? toSafeString(currentUserId).trim()
+      : undefined;
+
+  // 1. 优先使用明确的 sesUUID / sessionId
+  // 若为私聊且值恰好为指向机器人自身的 0-myUid 或 myUid，需跳过，不能直接采纳为有效会话
+  const sessionSesUuid = toSafeString(session?.['sesUUID']).trim();
+  if (sessionSesUuid && (!myUid || (sessionSesUuid !== `0-${myUid}` && sessionSesUuid !== myUid))) {
+    return sessionSesUuid;
+  }
+
+  const rawSesUuid = toSafeString(raw['sesUUID']).trim();
+  if (rawSesUuid && (!myUid || (rawSesUuid !== `0-${myUid}` && rawSesUuid !== myUid))) {
+    return rawSesUuid;
+  }
+
+  const rawSessionId = toSafeString(raw['sessionId']).trim();
+  if (rawSessionId && (!myUid || (rawSessionId !== `0-${myUid}` && rawSessionId !== myUid))) {
+    return rawSessionId;
+  }
+
+  // 2. 从 session 对象组装：优先 sesTypeID，其次根据 creater / typeID 判断
+  if (session && session['type'] != null) {
+    const sType = toSafeString(session['type']);
+    const isGroup = sType === '1' || sType === 'group';
+    const sesTypeID = session['sesTypeID'] != null ? toSafeString(session['sesTypeID']).trim() : '';
+    const typeID = session['typeID'] != null ? toSafeString(session['typeID']).trim() : '';
+    const creater = session['creater'] != null ? toSafeString(session['creater']).trim() : '';
+
+    if (isGroup) {
+      const targetId = sesTypeID || typeID;
+      if (targetId) return `${sType}-${targetId}`;
+    } else {
+      // 私聊：目标必须是对方用户 ID，不能是当前用户 (myUid)
+      let peerId = sesTypeID;
+      if (!peerId || (myUid && peerId === myUid)) {
+        if (creater && (!myUid || creater !== myUid)) {
+          peerId = creater;
+        } else if (typeID && (!myUid || typeID !== myUid)) {
+          peerId = typeID;
+        }
+      }
+      if (peerId && (!myUid || peerId !== myUid)) {
+        return `${sType}-${peerId}`;
+      }
+    }
+  }
+
+  // 3. 原生 sessionID 或 session.id
+  const rawSessionID = toSafeString(raw['sessionID']).trim();
+  if (rawSessionID && (!myUid || (rawSessionID !== `0-${myUid}` && rawSessionID !== myUid))) {
+    return rawSessionID;
+  }
+
+  const sessionIdFromObj = toSafeString(session?.['id']).trim();
+  if (
+    sessionIdFromObj &&
+    (!myUid || (sessionIdFromObj !== `0-${myUid}` && sessionIdFromObj !== myUid))
+  ) {
+    return sessionIdFromObj;
+  }
+
+  // 4. 回退 fallbackId
+  const fallback = toSafeString(fallbackId).trim();
+  if (fallback && (!myUid || (fallback !== `0-${myUid}` && fallback !== myUid))) {
+    return fallback;
+  }
+
+  return (
+    sessionSesUuid ||
+    rawSesUuid ||
+    rawSessionId ||
+    rawSessionID ||
+    sessionIdFromObj ||
+    fallback ||
+    ''
+  );
 }
 
 export function normalizeNativeMessage(
@@ -389,7 +460,14 @@ export function normalizeNativeMessage(
     rawObj['session'] && typeof rawObj['session'] === 'object' ? rawObj['session'] : {}
   ) as Record<string, unknown>;
 
-  const sessionId = resolvePublicSessionId(rawObj, context?.session?.id);
+  const currentUserId =
+    context?.currentUserId !== undefined ? toSafeString(context.currentUserId) : null;
+
+  const baseSessionId = resolvePublicSessionId(
+    rawObj,
+    context?.session?.id,
+    currentUserId ?? undefined
+  );
 
   const rawSessionName =
     rawObj['sessionName'] ??
@@ -397,7 +475,7 @@ export function normalizeNativeMessage(
     sessionObj['typeName'] ??
     sessionObj['createrName'] ??
     context?.session?.name;
-  const sessionName = toSafeString(rawSessionName, sessionId || '未知会话');
+  const sessionName = toSafeString(rawSessionName, baseSessionId || '未知会话');
 
   const isGroup =
     rawObj['sessionType'] === 'group' ||
@@ -425,8 +503,6 @@ export function normalizeNativeMessage(
     rawList = [rawObj];
   }
   const now = Date.now();
-  const currentUserId =
-    context?.currentUserId !== undefined ? toSafeString(context.currentUserId) : null;
 
   return rawList
     .filter(
@@ -658,6 +734,35 @@ export function normalizeNativeMessage(
           .map(value => toSafeString(value).trim())
           .find(Boolean) ?? '';
 
+      let sessionId = baseSessionId;
+      // 在私聊场景下，若为他人发来的入站消息（!isMe）：
+      // 1. 会话 partner 必然是发送者 senderId。
+      // 2. 如果 sessionId 缺失、或者错误地指向了机器人自身 (0-currentUserId 或 currentUserId)，
+      //    必须收敛纠正为 0-senderId，确保不会在客户端寻找自身会话失败，也不会导致多用户会话串线。
+      if (sessionType === 'private' && !isMe && senderId) {
+        if (
+          !sessionId ||
+          (currentUserId &&
+            (sessionId === `0-${currentUserId}` || sessionId === currentUserId))
+        ) {
+          sessionId = `0-${senderId}`;
+        }
+      }
+
+      let effectiveSessionName = sessionName;
+      if (
+        sessionType === 'private' &&
+        !isMe &&
+        sender &&
+        sender !== '未知用户' &&
+        (!rawSessionName ||
+          rawSessionName === baseSessionId ||
+          (currentUserId &&
+            (rawSessionName === currentUserId || rawSessionName === `0-${currentUserId}`)))
+      ) {
+        effectiveSessionName = sender;
+      }
+
       const missingFields: Array<'sessionId' | 'nativeMessageId'> = [];
       if (!sessionId) {
         missingFields.push('sessionId');
@@ -703,7 +808,7 @@ export function normalizeNativeMessage(
         id: nativeMessageId,
         messageId: nativeMessageId,
         sessionId,
-        sessionName,
+        sessionName: effectiveSessionName,
         sessionType,
         origin,
         direction,
