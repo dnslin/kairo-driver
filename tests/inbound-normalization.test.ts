@@ -654,4 +654,96 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       expect(emittedMessages.every(message => message.messageId === 'shared-native-id')).toBe(true);
     });
   });
+
+  describe('6. 私聊会话 ID 归一化与防指向 Bot 自身测试', () => {
+    const botUid = '5761';
+    const peerUid = '7783';
+
+    it('当原生私聊载荷的 typeID 指向 Bot 自身时，必须收敛为对方成员 ID (0-senderId)', () => {
+      const payload = {
+        session: {
+          type: 0,
+          typeID: botUid,
+          creater: peerUid,
+          createrName: '陈鹏',
+        },
+        message: {
+          id: 'kk-msg-001',
+          sender: '陈鹏',
+          senderId: peerUid,
+          content: '你好',
+          time: '14:20:12',
+          isMe: false,
+        },
+      };
+
+      const [msg] = normalizeNativeMessage(payload, { currentUserId: botUid });
+      expect(msg).toBeDefined();
+      expect(msg.sessionId).toBe(`0-${peerUid}`);
+      expect(msg.sessionName).toBe('陈鹏');
+      expect(msg.sessionType).toBe('private');
+      expect(msg.senderId).toBe(peerUid);
+      expect(msg.direction).toBe('inbound');
+    });
+
+    it('当原生私聊载荷顶层 sessionId 错误写为 0-botUid 时，入站消息自动纠正为 0-senderId', () => {
+      const payload = {
+        sessionId: `0-${botUid}`,
+        sessionType: 'private',
+        sender: '陈鹏',
+        senderId: peerUid,
+        id: 'kk-msg-002',
+        content: '在吗',
+        isMe: false,
+      };
+
+      const [msg] = normalizeNativeMessage(payload, { currentUserId: botUid });
+      expect(msg).toBeDefined();
+      expect(msg.sessionId).toBe(`0-${peerUid}`);
+    });
+
+    it('当原生载荷带有明确且正确的 sesUUID 时，优先采纳 sesUUID', () => {
+      const payload = {
+        session: {
+          sesUUID: `0-${peerUid}`,
+          type: 0,
+          typeID: botUid,
+        },
+        message: {
+          id: 'kk-msg-003',
+          sender: '陈鹏',
+          senderId: peerUid,
+          content: '测试明确 sesUUID',
+          isMe: false,
+        },
+      };
+
+      const [msg] = normalizeNativeMessage(payload, { currentUserId: botUid });
+      expect(msg).toBeDefined();
+      expect(msg.sessionId).toBe(`0-${peerUid}`);
+    });
+
+    it('群聊消息不应受私聊规则影响', () => {
+      const groupId = '92001';
+      const payload = {
+        session: {
+          type: 1,
+          typeID: groupId,
+          name: '技术攻坚群',
+        },
+        message: {
+          id: 'kk-msg-group-1',
+          sender: '陈鹏',
+          senderId: peerUid,
+          content: '大家好',
+          isMe: false,
+        },
+      };
+
+      const [msg] = normalizeNativeMessage(payload, { currentUserId: botUid });
+      expect(msg).toBeDefined();
+      expect(msg.sessionId).toBe(`1-${groupId}`);
+      expect(msg.sessionType).toBe('group');
+    });
+  });
 });

@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 title KK9 CDP Launcher
 cls
 

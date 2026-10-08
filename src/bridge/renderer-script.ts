@@ -5,13 +5,31 @@ export function encodeRendererPayload(data: unknown): string {
 export const RENDERER_SESSION_RESOLVER_SCRIPT = `
   function resolveRendererSession(sessions, target) {
     if (!Array.isArray(sessions) || !target) return null;
+    const cleanTarget = String(target).trim();
+    const targetNoPrefix = cleanTarget.replace(/^[01]-/, '');
+
     const idMatch = sessions.find(
-      session => session && (session.sesUUID === target || String(session.id) === target)
+      session => session && (
+        session.sesUUID === cleanTarget ||
+        String(session.id) === cleanTarget ||
+        session.sesUUID === ('0-' + cleanTarget) ||
+        session.sesUUID === ('1-' + cleanTarget)
+      )
     );
     if (idMatch) return idMatch;
 
+    if (targetNoPrefix) {
+      const typeIdMatch = sessions.find(
+        session => session && (
+          String(session.sesTypeID) === targetNoPrefix ||
+          String(session.typeID) === targetNoPrefix
+        )
+      );
+      if (typeIdMatch) return typeIdMatch;
+    }
+
     const nameMatches = sessions.filter(
-      session => session && (session.typeName === target || session.name === target)
+      session => session && (session.typeName === cleanTarget || session.name === cleanTarget)
     );
     return nameMatches.length === 1 ? nameMatches[0] : null;
   }
@@ -19,10 +37,18 @@ export const RENDERER_SESSION_RESOLVER_SCRIPT = `
   function resolveRendererSessionIdentity(sessions, targetId, targetName) {
     if (!Array.isArray(sessions)) return null;
     if (targetId) {
+      const cleanId = String(targetId).trim();
+      const targetNoPrefix = cleanId.replace(/^[01]-/, '');
       const idMatch = sessions.find(
         session => session && (
-          session.sesUUID === targetId ||
-          String(session.id) === String(targetId)
+          session.sesUUID === cleanId ||
+          String(session.id) === cleanId ||
+          session.sesUUID === ('0-' + cleanId) ||
+          session.sesUUID === ('1-' + cleanId) ||
+          (targetNoPrefix && (
+            String(session.sesTypeID) === targetNoPrefix ||
+            String(session.typeID) === targetNoPrefix
+          ))
         )
       );
       if (idMatch) return idMatch;
