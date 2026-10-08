@@ -2,25 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import mime from 'mime-types';
 import type { CdpClient } from '../cdp/client.js';
-import type { SendOptions, SendResult } from '../types/index.js';
+import type { SendOptions, SendOutcome } from '../types/index.js';
 import {
   encodeRendererPayload,
   RENDERER_IPC_HELPERS_SCRIPT,
-  RENDERER_SESSION_RESOLVER_SCRIPT,
+  NATIVE_SEND_CONTEXT_SCRIPT,
+  CONFIRM_SENT_MESSAGE_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
-import {
-  createNativeMessageKey,
-  isCdpUnavailableBeforeSend,
-  sendResultToOperationUpdate,
-} from './send-status.js';
+import { createNativeMessageKey, isCdpUnavailableBeforeSend } from './send-status.js';
 
 const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
-function imagePreflightFailure(operationAware: boolean, error: unknown): SendResult {
-  if (!operationAware) throw error;
+function imagePreflightFailure(error: unknown): SendOutcome {
   const message = error instanceof Error ? error.message : String(error);
   return {
-    success: false,
     status: 'failed',
     error: `图片文件预检失败: ${message}`,
     isPreTrigger: true,
@@ -90,40 +85,15 @@ function getImageDimensions(buffer: Buffer): { width: number; height: number } {
   return { width: 300, height: 300 };
 }
 
-const CONFIRM_SENT_MESSAGE_SCRIPT = `
-  async function waitForPersistedMessage(sessionID, msgFlag) {
-    for (let attempt = 0; attempt < 15; attempt++) {
-      const messagesRes = await callIpc('getMessages', {
-        sessionID,
-        count: 100,
-        endIdx: 2147483647,
-        sendTime: 0
-      });
-      if (messagesRes?.code === 0 && Array.isArray(messagesRes.data)) {
-        const found = messagesRes.data.find(message =>
-          message && message.msgFlag === msgFlag && Number(message.id) > 0
-        );
-        if (found) return found;
-      }
-      if (attempt < 14) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
-    }
-    return null;
-  }
-`;
-
 export async function sendNativeImage(
   cdp: CdpClient,
   imagePath: string,
   options: SendOptions = {},
   nativeKey?: string
-): Promise<SendResult> {
+): Promise<SendOutcome> {
   const fullPath = path.resolve(imagePath);
-  const operationAware = nativeKey !== undefined || options.operationId !== undefined;
   if (!fs.existsSync(fullPath)) {
     return {
-      success: false,
       status: 'failed',
       error: `图片文件不存在: ${fullPath}`,
       isPreTrigger: true,
@@ -134,11 +104,10 @@ export async function sendNativeImage(
   try {
     stats = fs.statSync(fullPath);
   } catch (error) {
-    return imagePreflightFailure(operationAware, error);
+    return imagePreflightFailure(error);
   }
   if (stats.isDirectory()) {
     return {
-      success: false,
       status: 'failed',
       error: `不能发送目录作为图片: ${fullPath}`,
       isPreTrigger: true,
@@ -146,7 +115,6 @@ export async function sendNativeImage(
   }
   if (stats.size > MAX_IMAGE_SIZE_BYTES) {
     return {
-      success: false,
       status: 'failed',
       error: `图片大小超出限制 (20MB): ${stats.size} bytes`,
       isPreTrigger: true,
@@ -156,7 +124,6 @@ export async function sendNativeImage(
   const mimeType = mime.lookup(fullPath) || 'image/png';
   if (!mimeType.startsWith('image/')) {
     return {
-      success: false,
       status: 'failed',
       error: `不支持的图片格式: ${mimeType}`,
       isPreTrigger: true,
@@ -167,7 +134,7 @@ export async function sendNativeImage(
   try {
     buffer = fs.readFileSync(fullPath);
   } catch (error) {
-    return imagePreflightFailure(operationAware, error);
+    return imagePreflightFailure(error);
   }
   const { width, height } = getImageDimensions(buffer);
   const base64Thumb = buffer.toString('base64');
@@ -182,7 +149,6 @@ export async function sendNativeImage(
     mimeType,
     width,
     height,
-    operationAware,
   };
 
   const encoded = encodeRendererPayload(payloadData);
@@ -191,47 +157,24 @@ export async function sendNativeImage(
     (async () => {
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
-      const app = document.querySelector('#app')?.__vue__;
-      const main = document.querySelector('.main-page')?.__vue__;
-      const editor = document.querySelector('.chat-editor, .message-editor')?.__vue__;
-      const bus = main?.$bus || app?.$bus || window.vueBus;
-      const store = app?.$store || window.$store;
-      ${RENDERER_SESSION_RESOLVER_SCRIPT}
       ${RENDERER_IPC_HELPERS_SCRIPT}
       const callIpc = callKairoIpc;
+      ${NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
-
       const data = JSON.parse(decodeURIComponent(${encoded}));
-      const target = data.target;
-
-      let targetSes = editor?.activedSes;
-      if (target) {
-        if (!Array.isArray(editor?.sortedSessions)) {
-          return { success: false, error: '当前会话列表不可用', isPreTrigger: true };
-        }
-        const found = resolveRendererSession(editor.sortedSessions, target);
-        if (!found) {
-          return { success: false, error: '未在会话列表中找到目标会话 [' + target + ']', isPreTrigger: true };
-        }
-        targetSes = found;
-      }
-
-      if (!targetSes) {
-        return { success: false, error: '未指定目标会话且当前无激活会话', isPreTrigger: true };
-      }
-
-      const myUid = main?.userID || editor?.userID;
-      if (!myUid) {
-        return { success: false, error: '未获取到当前登录用户身份 (userID)', isPreTrigger: true };
-      }
-      const myName = main?.userName || editor?.userName || '我';
+      let context;
+      try { context = await readNativeSendContext(data.target); }
+      catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
+      const { identity, session: targetSes, receiver } = context;
+      const myUid = identity.id;
+      const myName = identity.name;
 
       // 1. 调用 Native 预处理图片与缩略图
       const handleRes = await callIpc('sendingImgBeforeHandle', data.base64Thumb, data.fullPath);
       if (!handleRes || handleRes.code !== 0 || !handleRes.data) {
         return {
-          success: false,
+          status: 'failed',
           error: 'sendingImgBeforeHandle 失败: ' + (handleRes?.message || JSON.stringify(handleRes)),
           isPreTrigger: true
         };
@@ -268,102 +211,42 @@ export async function sendNativeImage(
         senderName: myName,
         senderNameEN: myName,
         senderNameTC: myName,
-        receiver: resolveRendererReceiver(targetSes, myUid),
+        receiver,
         sendTime: Math.floor(Date.now() / 1000),
         sessionType: targetSes.type,
         sessionID: targetSes.id,
         atState: 1,
         atMemberIDList: [],
-        status: 1,
+        status: 'sending',
         type: 0,
         msgFlag: data.msgFlag,
-        filepath: artworkPath,
-        deviceID: main?.deviceID || editor?.deviceID || ''
+        filepath: artworkPath
       };
 
       const submission = await submitNativeMessage(msgObj, targetSes);
-      if (submission.failure) {
-        // 旧图片入口的预插入失败分类保持不变，操作登记入口使用实际触发证据。
-        if (submission.insertFailed && !data.operationAware) submission.failure.isPreTrigger = true;
-        return submission.failure;
-      }
-      const confirmedMessage = submission.confirmedMessage;
-
+      if (submission.failure) return submission.failure;
+      // 未切换的图片显示通知保持可用；只在业务确认后执行。
+      const app = document.querySelector('#app')?.__vue__;
+      const main = document.querySelector('.main-page')?.__vue__;
+      const bus = main?.$bus || app?.$bus || window.vueBus;
+      const store = app?.$store || window.$store;
       try {
-        if (store) {
-          store.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: confirmedMessage });
-        }
-        if (bus) {
-          bus.$emit(targetSes.sesUUID + '-msg', [confirmedMessage]);
-        }
-      } catch (updateErr) {}
-
-      return { success: true, messageId: String(confirmedMessage.id) };
+        store?.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: submission.confirmedMessage });
+        bus?.$emit(targetSes.sesUUID + '-msg', [submission.confirmedMessage]);
+      } catch (error) { console.warn('[KairoDriver] 图片显示通知失败: ' + String(error)); }
+      return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
     })()
   `;
 
   try {
-    const res = await cdp.evaluate<{
-      success: boolean;
-      messageId?: string;
-      error?: string;
-      isPreTrigger?: boolean;
-      status?: SendResult['status'];
-    }>(script, 15000);
-
-    if (!operationAware) {
-      const legacyResult: SendResult = res
-        ? {
-            ...res,
-            ...(!res.success && res.error === undefined ? { error: '底层图片 IPC 发送失败' } : {}),
-            ...(!res.success && res.isPreTrigger === undefined ? { isPreTrigger: false } : {}),
-            ...(res.success ? { verifyLatencyMs: Date.now() - startTime } : {}),
-          }
-        : {
-            success: false,
-            error: '底层图片 IPC 发送失败',
-            isPreTrigger: false,
-          };
-      return {
-        ...legacyResult,
-        status: legacyResult.status ?? sendResultToOperationUpdate(legacyResult).status,
-      };
+    const result = await cdp.evaluate<SendOutcome>(script, options.verifyTimeoutMs ?? 20000);
+    if (!result || !['sent', 'failed', 'unknown'].includes(result.status)) {
+      return { status: 'unknown', error: '底层图片IPC未返回有效结果', isPreTrigger: false };
     }
-
-    const isPreTrigger = res?.isPreTrigger ?? false;
-    if (!res?.success) {
-      const result: SendResult = {
-        success: false,
-        error: res?.error || '底层图片 IPC 发送失败',
-        isPreTrigger,
-      };
-      return {
-        ...result,
-        status: sendResultToOperationUpdate(result).status,
-      };
-    }
-
-    const messageId = typeof res.messageId === 'string' ? res.messageId.trim() : '';
-    if (!messageId || !Number.isFinite(Number(messageId)) || Number(messageId) <= 0) {
-      return {
-        success: false,
-        status: 'unknown',
-        error: '底层图片 IPC 已触发，但未确认有效 native 消息 ID',
-        isPreTrigger: false,
-        verifyLatencyMs: Date.now() - startTime,
-      };
-    }
-
-    return {
-      success: true,
-      status: 'delivered',
-      messageId,
-      verifyLatencyMs: Date.now() - startTime,
-    };
+    return { ...result, verifyLatencyMs: Date.now() - startTime };
   } catch (err) {
     const isPreTrigger = cdpWasUnavailable;
     return {
-      success: false,
       status: isPreTrigger ? 'failed' : 'unknown',
       error: `底层图片 IPC 发送异常: ${err instanceof Error ? err.message : String(err)}`,
       isPreTrigger,

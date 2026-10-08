@@ -1,128 +1,50 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type {
-  SendOperationRecord,
-  SendOperationStore,
-  SendOperationUpdate,
-} from '../send-operation.js';
-import type { SendFileOptions, SendOptions, SendResult, SendStatus } from '../types/index.js';
+import type { SendOperationRecord, SendOperationStore } from '../send-operation.js';
+import type { SendOutcome, SendResult } from '../types/index.js';
 import type { CdpClient } from '../cdp/client.js';
-import {
-  encodeRendererPayload,
-  RENDERER_IPC_HELPERS_SCRIPT,
-  RENDERER_SESSION_RESOLVER_SCRIPT,
-} from './renderer-script.js';
-import { createChildLogger } from '../utils/logger.js';
+import { encodeRendererPayload, RENDERER_IPC_HELPERS_SCRIPT } from './renderer-script.js';
+import { DriverError } from '../utils/errors.js';
 
-const log = createChildLogger('bridge-send-status');
-const NATIVE_MEDIA_KINDS: Record<string, true> = {
-  'url-card': true,
-  'biz-message': true,
-  'app-message': true,
-  'chat-record': true,
-  voice: true,
-};
 export function isCdpUnavailableBeforeSend(cdp: CdpClient): boolean {
   const getStatus = (cdp as Partial<CdpClient>).getStatus;
   return typeof getStatus === 'function' && getStatus.call(cdp) !== 'connected';
 }
 
-export interface NativeSendStatusObservation {
-  messageId: string;
-  sessionId: string;
-}
-
+/** 原生历史把C/D开头作为撤回标记，并过滤C；所有新意图统一使用无C/c的稳定摘要。 */
 export function createNativeMessageKey(kind: string, operationId?: string): string {
-  const isNativeMedia = NATIVE_MEDIA_KINDS[kind] === true;
-  const normalizedOperationId = operationId?.trim();
-  if (normalizedOperationId) {
-    const key = `kairo:operation:${encodeURIComponent(normalizedOperationId)}`;
-    // 旧类型保留已有短键供历史回查；新媒体类型不能生成会被原生历史过滤的 C/c。
-    if (key.length <= 64 && (!isNativeMedia || !/[Cc]/.test(key))) return key;
-    // 原生历史查询过滤 %C%；同时避开 SQLite LIKE 可能折叠的小写 c。
-    // . 和 ~ 不在 Base64URL 字母表中，替换保持一一对应与完整摘要长度。
-    const digest = createHash('sha256')
-      .update(normalizedOperationId)
-      .digest('base64url')
-      .replaceAll('C', '.')
-      .replaceAll('c', '~');
-    return `k:op:${digest}`;
-  }
-  const key = `kairo:${kind}:${randomUUID()}`;
-  return isNativeMedia ? key.replaceAll('C', '.').replaceAll('c', '~') : key;
-}
-export async function resolveActiveSendOptions<T extends SendOptions | SendFileOptions>(
-  cdp: CdpClient,
-  options: T
-): Promise<T | null> {
-  if (options.targetSessionId?.trim()) return options;
-  if (options.targetSessionId !== undefined && options.targetSessionId !== '') return null;
-
-  try {
-    const active = await cdp.evaluate<{
-      id?: string | number;
-      sesUUID?: string;
-    } | null>(`
-      (() => {
-        const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-        const activeSession = editor?.activedSes;
-        if (!activeSession) return null;
-        return { id: activeSession.id, sesUUID: activeSession.sesUUID };
-      })()
-    `);
-    const targetSessionId = active?.id !== undefined ? String(active.id).trim() : '';
-    return targetSessionId ? { ...options, targetSessionId } : null;
-  } catch {
-    return null;
-  }
+  const digest = createHash('sha256')
+    .update(operationId?.trim() || `${kind}:${randomUUID()}`)
+    .digest('base64url')
+    .replaceAll('C', '.')
+    .replaceAll('c', '~');
+  return `k:op:${digest}`;
 }
 
 export function sendOperationRecordToResult(operation: SendOperationRecord): SendResult {
-  return {
-    success: operation.status === 'delivered',
+  const common = {
     operationId: operation.operationId,
-    status: operation.status,
-    ...(operation.messageId !== undefined ? { messageId: operation.messageId } : {}),
-    ...(operation.error !== undefined ? { error: operation.error } : {}),
-    isPreTrigger: operation.status === 'failed' && operation.isPreTrigger === true,
-    ...(operation.verifyLatencyMs !== undefined
-      ? { verifyLatencyMs: operation.verifyLatencyMs }
-      : {}),
+    isPreTrigger: operation.isPreTrigger,
+    verifyLatencyMs: operation.verifyLatencyMs,
+    nativeCode: operation.nativeCode,
+    receipt: operation.receipt,
   };
-}
-export function sendResultToOperationUpdate(result: SendResult): SendOperationUpdate {
-  const hasMessageId = typeof result.messageId === 'string' && result.messageId.trim().length > 0;
-  const status: SendStatus =
-    (result.status === 'delivered' || result.success) && hasMessageId
-      ? 'delivered'
-      : result.isPreTrigger === true
-        ? 'failed'
-        : 'unknown';
-  return {
-    status,
-    ...(status === 'delivered' && result.messageId !== undefined
-      ? { messageId: result.messageId }
-      : {}),
-    ...(result.error !== undefined ? { error: result.error } : {}),
-    isPreTrigger: status === 'failed',
-    ...(result.verifyLatencyMs !== undefined ? { verifyLatencyMs: result.verifyLatencyMs } : {}),
-  };
-}
-
-function unknownResult(operation: SendOperationRecord, error?: string): SendResult {
-  const reason = error ?? operation.error;
-  return {
-    success: false,
-    operationId: operation.operationId,
-    status: 'unknown',
-    ...(reason !== undefined ? { error: reason } : {}),
-    isPreTrigger: false,
-  };
-}
-
-function isValidNativeMessageId(messageId: string): boolean {
-  const normalized = messageId.trim();
-  const numericId = Number(normalized);
-  return normalized.length > 0 && Number.isFinite(numericId) && numericId > 0;
+  if (operation.status === 'sent') {
+    if (!operation.messageId)
+      throw new DriverError(
+        `发送操作 ${operation.operationId} 的sent记录缺messageId`,
+        'INVALID_SEND_RECORD'
+      );
+    return { ...common, status: 'sent', messageId: operation.messageId };
+  }
+  if (operation.status === 'failed') {
+    if (!operation.error)
+      throw new DriverError(
+        `发送操作 ${operation.operationId} 的failed记录缺error`,
+        'INVALID_SEND_RECORD'
+      );
+    return { ...common, status: 'failed', error: operation.error };
+  }
+  return { ...common, status: 'unknown', ...(operation.error ? { error: operation.error } : {}) };
 }
 
 export class BridgeSendStatus {
@@ -131,103 +53,55 @@ export class BridgeSendStatus {
     private readonly store: SendOperationStore
   ) {}
 
-  private async readNativeMessage(
-    targetSessionId: string,
-    nativeKey: string
-  ): Promise<NativeSendStatusObservation | null> {
-    const encoded = encodeRendererPayload({ target: targetSessionId, nativeKey });
-    try {
-      return await this.cdp.evaluate<NativeSendStatusObservation | null>(
-        `
-          (async () => {
-            const electron = window.require ? window.require('electron') : null;
-            const ipc = window.ipcRenderer || electron?.ipcRenderer;
-            const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-            ${RENDERER_SESSION_RESOLVER_SCRIPT}
-            ${RENDERER_IPC_HELPERS_SCRIPT}
-            const data = JSON.parse(decodeURIComponent(${encoded}));
-            const targetSession = resolveRendererSession(editor?.sortedSessions, data.target);
-            if (!targetSession) return null;
-            const targetSessionIds = [targetSession.id, targetSession.sesUUID, data.target]
-              .filter(value => value !== undefined && value !== null && String(value).trim() !== '')
-              .map(value => String(value));
-
-            const response = await callKairoIpc('getMessages', {
-              sessionID: targetSession.id,
-              count: 100,
-              endIdx: targetSession.maxMessageIndex ?? 2147483647,
-              sendTime: 0
-            });
-            if (response?.code !== 0 || !Array.isArray(response.data)) return null;
-
-            const found = response.data.find(message => {
-              if (!message || message.msgFlag !== data.nativeKey || Number(message.id) <= 0) {
-                return false;
-              }
-              const rawSessionId = message.sessionId ?? message.sessionID ?? message.sesUUID;
-              return rawSessionId === undefined ||
-                rawSessionId === null ||
-                String(rawSessionId).trim() === '' ||
-                targetSessionIds.includes(String(rawSessionId));
-            });
-            if (!found) return null;
-            return { messageId: String(found.id), sessionId: String(data.target) };
-          })()
-        `,
-        15000
-      );
-    } catch (err) {
-      log.warn({ err: String(err) }, 'Bridge 查询发送操作原生历史异常');
-      return null;
-    }
-  }
-
   public async getSendStatus(operationId: string): Promise<SendResult> {
-    const normalizedOperationId = operationId.trim();
-    const operation = await this.store.get(normalizedOperationId);
-    if (!operation) {
-      return {
-        success: false,
-        operationId: normalizedOperationId,
-        status: 'unknown',
-        isPreTrigger: false,
-      };
-    }
+    const id = operationId.trim();
+    const operation = await this.store.get(id);
+    if (!operation) return { operationId: id, status: 'unknown', isPreTrigger: false };
     return this.resolve(operation);
   }
 
   public async resolve(operation: SendOperationRecord): Promise<SendResult> {
-    if (operation.status === 'failed' && operation.isPreTrigger === true) {
-      return sendOperationRecordToResult(operation);
-    }
-
-    const targetSessionId = operation.fingerprint.targetSessionId.trim();
-    if (!targetSessionId) {
-      return unknownResult(operation, '发送操作缺少可查询的目标会话');
-    }
-
+    if (operation.status !== 'unknown') return sendOperationRecordToResult(operation);
+    const target = operation.fingerprint.targetSessionId;
+    if (!target) return sendOperationRecordToResult(operation);
+    if (isCdpUnavailableBeforeSend(this.cdp))
+      return {
+        operationId: operation.operationId,
+        status: 'unknown',
+        isPreTrigger: operation.isPreTrigger,
+        error: '原生发送状态查询时CDP未连接',
+      };
     const nativeKey = createNativeMessageKey(
       operation.fingerprint.messageType,
       operation.operationId
     );
-    const observation = await this.readNativeMessage(targetSessionId, nativeKey);
-    if (
-      !observation ||
-      !isValidNativeMessageId(observation.messageId) ||
-      observation.sessionId.trim() !== targetSessionId
-    ) {
-      return unknownResult(operation);
-    }
-
-    return {
-      success: true,
-      operationId: operation.operationId,
-      status: 'delivered',
-      messageId: observation.messageId,
-      isPreTrigger: false,
-      ...(operation.verifyLatencyMs !== undefined
-        ? { verifyLatencyMs: operation.verifyLatencyMs }
-        : {}),
-    };
+    const encoded = encodeRendererPayload({ nativeKey, target });
+    // 只读本次采集的业务证据；没有回执时，任意正ID历史也不能变成sent。
+    const observation = await this.cdp.evaluate<SendOutcome | null>(
+      `(async () => {
+      const electron = window.require ? window.require('electron') : null;
+      const ipc = window.ipcRenderer || electron?.ipcRenderer;
+      ${RENDERER_IPC_HELPERS_SCRIPT}
+      const data = JSON.parse(decodeURIComponent(${encoded}));
+      const entry = window.__kairo_send_receipts?.get(data.nativeKey);
+      if (!entry || entry.receipt?.sessionId !== data.target) return null;
+      if (entry.failure) return entry.failure;
+      const receipt = entry.receipt;
+      if (receipt.code !== 0 || (receipt.businessCode !== undefined && receipt.businessCode !== 0)) return null;
+      let messageId = receipt.messageId;
+      if (!/^[1-9]\\d*$/.test(String(messageId))) {
+        const response = await callKairoIpc('getMessages', { sessionID: Number(data.target), count: 100, endIdx: 2147483647, sendTime: 0 });
+        if (response?.code !== 0 || !Array.isArray(response.data)) throw new Error('getMessages状态查询失败 (' + response?.code + '): ' + (response?.error || '无效数组'));
+        const found = response.data.find(message => message.msgFlag === data.nativeKey && String(message.sessionID) === data.target && /^[1-9]\\d*$/.test(String(message.id)));
+        if (!found) return null;
+        messageId = String(found.id);
+        receipt.msgIdx = Number(found.msgIdx);
+      }
+      return { status: 'sent', messageId: String(messageId), receipt: { ...receipt, messageId: String(messageId) }, isPreTrigger: false };
+    })()`,
+      6000
+    );
+    if (!observation) return sendOperationRecordToResult(operation);
+    return sendOperationRecordToResult(await this.store.update(operation.operationId, observation));
   }
 }

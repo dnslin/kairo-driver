@@ -9,7 +9,7 @@ import {
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
   encodeRendererPayload,
 } from '../src/bridge/renderer-script.js';
-import type { SendStatus } from '../src/types/index.js';
+import type { SendOutcome, SendResult } from '../src/types/index.js';
 
 interface TargetSession {
   id: number | string;
@@ -32,15 +32,7 @@ interface AuthorizedSessionInfo {
   targetSes: TargetSession;
 }
 
-export interface SpikeCardResult {
-  contentType: number;
-  typeName: string;
-  success: boolean;
-  status: SendStatus;
-  error?: string;
-  isPreTrigger: boolean;
-  messageId?: string;
-}
+export type SpikeCardResult = SendResult & { contentType: number; typeName: string };
 
 export interface SpikeCardTestSummary {
   exitCode: number;
@@ -186,12 +178,7 @@ async function sendCustomMessage(
   });
 
   try {
-    const result = await cdp.evaluate<{
-      success: boolean;
-      error?: string;
-      isPreTrigger?: boolean;
-      messageId?: string;
-    }>(
+    const result = await cdp.evaluate<SendOutcome>(
       `
       (async () => {
         const electron = window.require ? window.require('electron') : null;
@@ -216,10 +203,9 @@ async function sendCustomMessage(
           sessionID: targetSes.id,
           atState: 1,
           atMemberIDList: [],
-          status: 1,
+          status: 'sending',
           type: 0,
-          msgFlag: data.msgFlag,
-          deviceID: ''
+          msgFlag: data.msgFlag
         };
 
         const submission = await submitNativeMessage(msgObj, targetSes);
@@ -227,8 +213,9 @@ async function sendCustomMessage(
           return submission.failure;
         }
         return {
-          success: true,
+          status: 'sent',
           messageId: String(submission.confirmedMessage.id),
+          receipt: submission.receipt,
           isPreTrigger: false
         };
       })()
@@ -236,26 +223,14 @@ async function sendCustomMessage(
       15000
     );
 
-    const delivered = Boolean(result?.success && /^[1-9]\d*$/.test(result.messageId ?? ''));
-    const status: SendStatus = delivered
-      ? 'delivered'
-      : result?.isPreTrigger === true
-        ? 'failed'
-        : 'unknown';
     const normalized: SpikeCardResult = {
+      ...(result || { status: 'unknown', error: '原生提交未取得业务结果', isPreTrigger: false }),
+      operationId: msgFlag,
       contentType: testCase.contentType,
       typeName: testCase.typeName,
-      success: status === 'delivered',
-      status,
-      error:
-        status === 'unknown' && result?.success
-          ? '发送动作已触发，但未获得落库后的正式消息 ID'
-          : result?.error,
-      isPreTrigger: status === 'failed',
-      messageId: delivered ? result?.messageId : undefined,
     };
 
-    if (normalized.status === 'delivered') {
+    if (normalized.status === 'sent') {
       logger.log(`发送已确认落库，正式消息 ID: ${normalized.messageId}`);
     } else {
       logger.error(
@@ -269,7 +244,7 @@ async function sendCustomMessage(
     return {
       contentType: testCase.contentType,
       typeName: testCase.typeName,
-      success: false,
+      operationId: msgFlag,
       status: 'unknown',
       error: message,
       isPreTrigger: false,
@@ -287,7 +262,7 @@ export async function runSpikeCardTest(
   const targetName = env['KK9_MEDIA_TARGET_NAME']?.trim() || '';
   const keep = env['KK9_MEDIA_KEEP'] === '1';
   const results: SpikeCardResult[] = [];
-  const deliveredMessageIds: string[] = [];
+  const sentMessageIds: string[] = [];
   const recalledMessageIds: string[] = [];
   let exitCode = 0;
   let connected = false;
@@ -335,8 +310,8 @@ export async function runSpikeCardTest(
         logger
       );
       results.push(result);
-      if (result.status === 'delivered' && result.messageId) {
-        deliveredMessageIds.push(result.messageId);
+      if (result.status === 'sent') {
+        sentMessageIds.push(result.messageId);
       } else {
         exitCode = 1;
       }
@@ -357,7 +332,7 @@ export async function runSpikeCardTest(
     logger.error('Spike 测试执行异常:', error);
   } finally {
     if (connected && !keep) {
-      for (const messageId of deliveredMessageIds) {
+      for (const messageId of sentMessageIds) {
         const recalled = await recallNativeMessage(options.cdp, messageId, targetId);
         if (recalled) {
           recalledMessageIds.push(messageId);
@@ -367,8 +342,8 @@ export async function runSpikeCardTest(
           logger.error(`未撤回 Spike 消息 ${messageId}: 原生撤回返回失败`);
         }
       }
-    } else if (keep && deliveredMessageIds.length > 0) {
-      logger.log(`保留供界面检查的消息: ${deliveredMessageIds.join(', ')}`);
+    } else if (keep && sentMessageIds.length > 0) {
+      logger.log(`保留供界面检查的消息: ${sentMessageIds.join(', ')}`);
     }
 
     if (connected) {

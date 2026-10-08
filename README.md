@@ -82,7 +82,7 @@ const history = await driver.getRecentMessages(session, 10);
 
 ## 发送消息
 
-发送时明确指定 `targetSessionId`。下面的函数使用上例中已连接的 `driver`，只有调用函数时才会发送：
+发送必须提供 `getSessions()` 返回的原生 `targetSessionId`；缺省、界面标识或会话名称均不会改投当前窗口。文本直接读取原生身份与指定会话，预插入草稿、订阅本次业务回执后提交，不读聊天编辑器、按钮或 Vue。下面的函数使用上例中已连接的 `driver`，只有调用函数时才会发送：
 
 ```ts
 import { randomUUID } from 'node:crypto';
@@ -98,7 +98,9 @@ async function sendToSession(targetSessionId: string, text: string) {
 }
 ```
 
-`unknown` 表示尚不能确认结果，消息可能已经送达；查询后仍可能是 `unknown`，不要当作确定失败重发。同一个发送意图应复用 `operationId`。默认发送记录保存在内存，跨实例或进程恢复需要调用方提供相应的 `SendOperationStore`。
+发送结果统一用必填 `status` 判别：`sent` 必有正式 `messageId`，只表示本次原生业务确认成功，不表示对端收到或已读；`failed` 必有实际 `error`，原生业务错误保留 `nativeCode` 和 `receipt`；`unknown` 表示可能已经提交但证据不足，不能重发。外层 IPC `code: 0`、正 ID 或历史存在记录均不能单独判成功，617 即使有正 ID 也仍是失败。
+
+每次调用都返回稳定 `operationId`，省略输入时 SDK 为该意图生成一次。同一 ID 不能更换内容、目标、类型、提及或引用；重复调用只返回或查询原结果，不再次提交，包括明确前置失败。需要另一次发送时必须显式建立新意图。`getSendStatus()` 不发送消息；没有本次业务证据时保持 `unknown`。默认记录保存在内存，跨实例或进程接入复用调用方提供的 `SendOperationStore`；未新增数据库、迁移或兼容结果别名。
 
 还支持图片、文件、富文本、引用回复、卡片、语音和撤回；完整方法见 [IKK9Driver](src/types/index.ts)。图片和文件路径属于运行 Driver 的机器，跨机器接入时由调用方传输实际文件。
 

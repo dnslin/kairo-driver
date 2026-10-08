@@ -14,8 +14,20 @@ type FakeIpcListener = (_event: unknown, payload: unknown) => void;
 export class FakeIpcRenderer {
   public readonly sent: FakeIpcRequest[] = [];
   private readonly listeners = new Map<string, FakeIpcListener[]>();
+  private readonly persistentListeners = new Map<string, FakeIpcListener[]>();
 
   constructor(private readonly responder: FakeIpcResponder) {}
+
+  public on(channel: string, listener: FakeIpcListener): void {
+    const listeners = this.persistentListeners.get(channel) ?? [];
+    listeners.push(listener);
+    this.persistentListeners.set(channel, listeners);
+  }
+
+  public emit(channel: string, payload: unknown): void {
+    for (const listener of this.persistentListeners.get(channel) ?? [])
+      listener(undefined, payload);
+  }
 
   public once(channel: string, listener: FakeIpcListener): void {
     const listeners = this.listeners.get(channel) ?? [];
@@ -28,6 +40,12 @@ export class FakeIpcRenderer {
   }
 
   public removeListener(channel: string, listener: FakeIpcListener): void {
+    const persistent = this.persistentListeners.get(channel);
+    if (persistent)
+      this.persistentListeners.set(
+        channel,
+        persistent.filter(candidate => candidate !== listener)
+      );
     const listeners = this.listeners.get(channel);
     if (!listeners) return;
 
@@ -40,7 +58,10 @@ export class FakeIpcRenderer {
   }
 
   public listenerCount(channel: string): number {
-    return this.listeners.get(channel)?.length ?? 0;
+    return (
+      (this.listeners.get(channel)?.length ?? 0) +
+      (this.persistentListeners.get(channel)?.length ?? 0)
+    );
   }
 
   public send(channel: string, request: FakeIpcRequest): void {

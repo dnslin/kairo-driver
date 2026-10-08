@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CdpClient } from '../src/cdp/client.js';
 import { runSpikeCardTest } from '../examples/spike-card-test.js';
 import {
@@ -52,6 +52,9 @@ function createSpikeHarness(
           msgIdx: sent.length,
           sessionID: targetSession.id,
         });
+        ipc.emit('0-1001-sendMsgCallback', {
+          args: { msgID: message['id'], code: 0, data: confirmed.at(-1) },
+        });
       }
       return { code: 0 };
     }
@@ -102,6 +105,7 @@ const confirmedEnvironment: NodeJS.ProcessEnv = {
   KK9_MEDIA_CONFIRM: '1000:0-1001:测试员工',
 };
 
+afterEach(() => vi.useRealTimers());
 describe('卡片 Spike 安全门禁与落库确认', () => {
   it('未指定目标时在连接之前停止，不使用默认员工会话', async () => {
     const harness = createSpikeHarness([targetSession], 'persisted');
@@ -171,19 +175,21 @@ describe('卡片 Spike 安全门禁与落库确认', () => {
   });
 
   it('sendMessageNew 返回 ack 0 但历史为空时必须为 unknown 且每类只发送一次', async () => {
+    vi.useFakeTimers();
     const harness = createSpikeHarness([targetSession], 'empty');
 
-    const summary = await runSpikeCardTest({
+    const pending = runSpikeCardTest({
       cdp: harness.cdp,
       env: confirmedEnvironment,
       logger: harness.logger,
       delay: async () => {},
     });
+    await vi.runAllTimersAsync();
+    const summary = await pending;
 
     expect(summary.exitCode).toBe(1);
     expect(summary.results).toHaveLength(4);
     expect(summary.results.every(result => result.status === 'unknown')).toBe(true);
-    expect(summary.results.every(result => result.success === false)).toBe(true);
     expect(summary.results.every(result => result.messageId === undefined)).toBe(true);
     expect(harness.inserted).toHaveLength(4);
     expect(harness.sent.map(message => message['contentType'])).toEqual([10, 17, 8, 14]);
@@ -191,7 +197,7 @@ describe('卡片 Spike 安全门禁与落库确认', () => {
     expect(harness.cancelled).toHaveLength(0);
   });
 
-  it('四类消息真正落库后才报告 delivered，并通过正式 ID 撤回', async () => {
+  it('四类消息业务确认后报告sent，并通过正式ID撤回', async () => {
     const harness = createSpikeHarness([targetSession], 'persisted');
 
     const summary = await runSpikeCardTest({
@@ -202,12 +208,7 @@ describe('卡片 Spike 安全门禁与落库确认', () => {
     });
 
     expect(summary.exitCode).toBe(0);
-    expect(summary.results.map(result => result.status)).toEqual([
-      'delivered',
-      'delivered',
-      'delivered',
-      'delivered',
-    ]);
+    expect(summary.results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent']);
     expect(summary.results.map(result => result.contentType)).toEqual([10, 17, 8, 14]);
     expect(summary.results.every(result => /^[1-9]\d*$/.test(result.messageId || ''))).toBe(true);
     expect(harness.sent.map(message => message['contentType'])).toEqual([10, 17, 8, 14]);

@@ -64,7 +64,7 @@ export type KK9MessageOrigin = 'external' | 'operator' | 'bot_echo' | 'system' |
 export type MessageDirection = 'inbound' | 'outbound' | 'unknown';
 
 /** 发送操作最终状态；unknown 不等同于确定失败。 */
-export type SendStatus = 'delivered' | 'failed' | 'unknown';
+export type SendStatus = 'sent' | 'failed' | 'unknown';
 
 /**
  * 文本样式属性
@@ -371,22 +371,31 @@ export interface EventBridgeConfig {
   knownBotSentMessageKeys?: Set<string>;
 }
 
-/**
- * 发送操作结果与快捷撤回方法
- */
-export interface SendResult {
-  success: boolean;
-  /** 稳定发送意图 ID；旧调用方可以不提供。 */
-  operationId?: string;
-  /** 发送操作最终状态；旧底层实现迁移期间可以不提供。 */
-  status?: SendStatus;
+/** 本次原生业务回执的必要元数据；不包含聊天正文。 */
+export interface NativeSendReceipt {
+  draftId: string;
+  sessionId: string;
+  code: number;
+  businessCode?: number;
   messageId?: string;
+  msgIdx?: number;
+}
+
+/** 发送状态只有一个判别字段；sent不表示对端收到或已读。 */
+export type SendOutcome = {
   recall?: () => Promise<boolean>;
-  error?: string;
-  /** 标识失败是否可以证明发生在 KK 发送动作触发之前 (pre-trigger failure) */
   isPreTrigger?: boolean;
   verifyLatencyMs?: number;
-}
+  nativeCode?: number;
+  receipt?: NativeSendReceipt;
+} & (
+  | { status: 'sent'; messageId: string; error?: never }
+  | { status: 'failed'; error: string; messageId?: never }
+  | { status: 'unknown'; error?: string; messageId?: never }
+);
+
+/** 每个发送意图始终具有稳定operationId；省略输入时SDK生成一次。 */
+export type SendResult = SendOutcome & { operationId: string };
 
 /**
  * 消息撤回事件元数据
@@ -411,9 +420,9 @@ export interface PreSendCheckResult {
 }
 
 export interface SendOptions {
-  /** 原生会话 ID。 */
+  /** 必须提供原生会话ID；缺省返回failed，不使用当前窗口或会话名称。 */
   targetSessionId?: string;
-  /** 稳定发送意图 ID；同一 ID 的安全重试必须复用。 */
+  /** 稳定发送意图ID；重复调用仅查询或返回原结果，不再次提交。 */
   operationId?: string;
   verifyTimeoutMs?: number;
   /** 引用/回复目标 */
@@ -423,8 +432,9 @@ export interface SendOptions {
 }
 
 export interface SendFileOptions {
+  /** 必须提供原生会话ID；缺省返回failed，不使用当前窗口或会话名称。 */
   targetSessionId?: string;
-  /** 稳定发送意图 ID；同一 ID 的安全重试必须复用。 */
+  /** 稳定发送意图ID；重复调用仅查询或返回原结果，不再次提交。 */
   operationId?: string;
   verifyTimeoutMs?: number;
 }

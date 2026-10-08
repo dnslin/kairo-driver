@@ -49,7 +49,7 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     );
   });
 
-  it('claim 首次记录 unknown，update 后可查询最终 delivered', async () => {
+  it('claim 首次记录 unknown，update 后可查询最终 sent', async () => {
     const store = new InMemorySendOperationStore();
     const fingerprint = createSendOperationFingerprint({
       targetSessionId: 'session-1',
@@ -61,22 +61,22 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     expect(claim.claimed).toBe(true);
     expect(claim.operation.status).toBe('unknown');
 
-    const delivered = await store.update('op-1', {
-      status: 'delivered',
+    const sent = await store.update('op-1', {
+      status: 'sent',
       messageId: 'native-1',
       isPreTrigger: false,
     });
 
-    expect(delivered).toMatchObject({
+    expect(sent).toMatchObject({
       operationId: 'op-1',
       fingerprint,
-      status: 'delivered',
+      status: 'sent',
       messageId: 'native-1',
     });
-    expect(await store.get('op-1')).toEqual(delivered);
+    expect(await store.get('op-1')).toEqual(sent);
   });
 
-  it('同一 operationId 同内容重放只发送一次并复用 delivered', async () => {
+  it('同一 operationId 同内容重放只发送一次并复用 sent', async () => {
     const store = new InMemorySendOperationStore();
     const driver = new FakeKK9Driver(store);
     driver.setSendBehavior({ mode: 'success', messageId: 'native-1' });
@@ -92,8 +92,7 @@ describe('发送操作 Store port 与 FakeDriver', () => {
 
     expect(first).toMatchObject({
       operationId: 'op-1',
-      status: 'delivered',
-      success: true,
+      status: 'sent',
       messageId: 'native-1',
     });
     expect(replay).toEqual(first);
@@ -115,8 +114,7 @@ describe('发送操作 Store port 与 FakeDriver', () => {
 
     expect(first).toMatchObject({
       operationId: 'op-file',
-      status: 'delivered',
-      success: true,
+      status: 'sent',
       messageId: 'native-file',
     });
     expect(replay).toEqual(first);
@@ -230,14 +228,13 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     expect(first).toMatchObject({
       operationId: 'op-1',
       status: 'unknown',
-      success: false,
       isPreTrigger: false,
     });
     expect(replay).toEqual(first);
     expect(driver.recordedCalls).toHaveLength(1);
   });
 
-  it('确定的前置失败允许同一 operationId 安全重试并转为 delivered', async () => {
+  it('确定前置失败同一意图重放失败，新意图才允许发送', async () => {
     const driver = new FakeKK9Driver();
     driver.setSendBehavior({
       mode: 'sequence',
@@ -259,15 +256,18 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     expect(failed).toMatchObject({
       operationId: 'op-1',
       status: 'failed',
-      success: false,
       isPreTrigger: true,
     });
     expect(retried).toMatchObject({
       operationId: 'op-1',
-      status: 'delivered',
-      success: true,
-      messageId: 'native-2',
+      status: 'failed',
+      isPreTrigger: true,
     });
+    const next = await driver.sendText('回答内容', {
+      targetSessionId: 'session-1',
+      operationId: 'op-next',
+    });
+    expect(next).toMatchObject({ status: 'sent', messageId: 'native-2' });
     expect(driver.recordedCalls).toHaveLength(2);
   });
 
@@ -289,7 +289,7 @@ describe('发送操作 Store port 与 FakeDriver', () => {
       handler: async () => {
         markStarted();
         await released;
-        return { success: true, messageId: 'native-concurrent' };
+        return { status: 'sent', messageId: 'native-concurrent' };
       },
     });
 
@@ -309,31 +309,25 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     expect(concurrent).toMatchObject({
       operationId: 'op-concurrent',
       status: 'unknown',
-      success: false,
     });
     expect(first).toMatchObject({
       operationId: 'op-concurrent',
-      status: 'delivered',
-      success: true,
+      status: 'sent',
       messageId: 'native-concurrent',
     });
     expect(firstDriver.recordedCalls).toHaveLength(1);
     expect(secondDriver.recordedCalls).toHaveLength(0);
   });
 
-  it('没有 operationId 时保留旧发送路径并使用默认内存 Store', async () => {
+  it('没有operationId仍登记独立意图并可按返回ID查询', async () => {
     const driver = new FakeKK9Driver();
     driver.setSendBehavior({ mode: 'success', messageId: 'legacy-1' });
 
-    const result = await driver.sendText('旧调用方内容');
+    const result = await driver.sendText('自动意图内容', { targetSessionId: 'session-1' });
 
-    expect(result).toEqual({
-      success: true,
-      messageId: 'legacy-1',
-      status: 'delivered',
-      isPreTrigger: false,
-      verifyLatencyMs: 15,
-    });
+    expect(result).toMatchObject({ messageId: 'legacy-1', status: 'sent', isPreTrigger: false });
+    expect(result.operationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await driver.getSendStatus(result.operationId)).toEqual(result);
     expect(driver.recordedCalls).toHaveLength(1);
   });
 
@@ -371,7 +365,7 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     for (const send of sends) {
       const first = await send();
       const replay = await send();
-      expect(first).toMatchObject({ status: 'delivered', messageId: 'native-media' });
+      expect(first).toMatchObject({ status: 'sent', messageId: 'native-media' });
       expect(replay).toEqual(first);
     }
     expect(driver.recordedCalls.map(call => call.type)).toEqual([
