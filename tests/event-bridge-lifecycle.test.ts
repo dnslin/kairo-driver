@@ -175,7 +175,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
           direction: message.direction,
         }))
       ).toEqual([
-        { id: confirmed.id, sessionId: '0-91002', content: '原生确认正文', direction: 'outbound' },
+        { id: confirmed.id, sessionId: '716791', content: '原生确认正文', direction: 'outbound' },
       ]);
       expect(beforeReturn).toEqual([true]);
     } finally {
@@ -375,7 +375,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     await bridge.disconnect();
   });
 
-  it.each([0, 1])('原生IPC会话类型%d使用typeID而非数据库行ID，保留正文与入站身份', async type => {
+  it.each([0, 1])('原生IPC会话类型%d使用原生会话ID而非用户UID，保留正文与入站身份', async type => {
     const page = createPage();
     const { bridge } = page.createBridge('原生载荷', '连接', '91001');
     const received: KK9Message[] = [];
@@ -405,7 +405,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({
       id: '136018959',
-      sessionId: `${type}-91002`,
+      sessionId: '716791',
       sessionType: type === 0 ? 'private' : 'group',
       content: 'T26-开始',
       senderId: '91002',
@@ -441,11 +441,11 @@ describe('EventBridge 渲染资源所有权关闭', () => {
         {},
         { args: { ...envelope, message: [{ id: '待撤回', sender: 91002, content: '测试问题' }] } }
       );
-      expect(messages[0]?.sessionId).toBe('0-91002');
+      expect(messages[0]?.sessionId).toBe('716791');
       page.ipc.emit('message', {}, { args: { ...envelope, ...data } });
       page.bus.emit('receive-message', { ...envelope, ...data });
       page.bus.emit('CancelMessage', { ...envelope, msgID: '待撤回' });
-      page.bus.emit('CancelMessage', { msgID: '待撤回', sessionId: '0-91002' });
+      page.bus.emit('CancelMessage', { msgID: '待撤回', sessionID: 716791 });
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
       ).toEqual([{ messageId: messages[0]?.id, sessionId: messages[0]?.sessionId }]);
@@ -454,7 +454,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     }
   });
 
-  it.each(['msg', 'revokeMsg'])('会话%s通道的公开范围不被消息内数据库编号覆盖', async channel => {
+  it.each(['msg', 'revokeMsg'])('会话%s通道使用消息内原生编号而非界面事件名', async channel => {
     const page = createPage('0-91002');
     const { bridge } = page.createBridge('会话撤回', '连接');
     const recalls: KK9RecalledEvent[] = [];
@@ -465,7 +465,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
       page.bus.emit(`0-91002-${channel}`, channel === 'msg' ? [payload] : payload);
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
-      ).toEqual([{ messageId: '待撤回', sessionId: '0-91002' }]);
+      ).toEqual([{ messageId: '待撤回', sessionId: '716791' }]);
     } finally {
       await bridge.disconnect();
     }
@@ -482,7 +482,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
       page.chat.addRevokeMsg({ sessionID: 716791, msgID: '待撤回' });
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
-      ).toEqual([{ messageId: '待撤回', sessionId: '0-91002' }]);
+      ).toEqual([{ messageId: '待撤回', sessionId: '716791' }]);
       expect(page.originalRevoke).toHaveBeenCalledOnce();
     } finally {
       await bridge.disconnect();
@@ -514,20 +514,20 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     }
   });
 
-  it('撤回消息内数据库编号不能覆盖外层显式公开编号', () => {
+  it('撤回消息内原生编号优先于外层界面标识', () => {
     const events = extractRecalledEventsFromPayload({
       sessionId: '0-91002',
       message: [{ sessionID: 716791, content: { event: 'CancelMessage', msgID: '待撤回' } }],
     });
-    expect(events.map(event => event.sessionId)).toEqual(['0-91002']);
+    expect(events.map(event => event.sessionId)).toEqual(['716791']);
   });
 
-  it('撤回消息内数据库编号不能覆盖调用方已提供的会话范围', () => {
+  it('撤回消息内原生编号优先于调用方界面范围', () => {
     const events = extractRecalledEventsFromPayload(
       { message: [{ sessionID: 716791, event: 'CancelMessage', msgID: '待撤回' }] },
       { id: '0-91002' }
     );
-    expect(events.map(event => event.sessionId)).toEqual(['0-91002']);
+    expect(events.map(event => event.sessionId)).toEqual(['716791']);
   });
 
   it('无外层范围的撤回数组保留各条会话，相同消息ID不跨会话误去重', async () => {
@@ -550,7 +550,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
       ).toEqual([
-        { messageId: '相同编号', sessionId: '0-91002' },
+        { messageId: '相同编号', sessionId: '716791' },
         { messageId: '相同编号', sessionId: '1-91004' },
       ]);
     } finally {

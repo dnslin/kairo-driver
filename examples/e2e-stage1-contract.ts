@@ -109,9 +109,8 @@ function readTestConfig(): TestConfig {
   const employeeUid = requiredEnv('KK9_STAGE1_EMPLOYEE_UID');
   const sessionId = requiredEnv('KK9_STAGE1_SESSION_ID');
   const sessionName = requiredEnv('KK9_STAGE1_SESSION_NAME');
-  const expectedSessionId = `0-${employeeUid}`;
-  if (sessionId !== expectedSessionId) {
-    throw new Error(`KK9_STAGE1_SESSION_ID 必须等于 ${expectedSessionId}`);
+  if (!/^[1-9]\d*$/.test(sessionId)) {
+    throw new Error('KK9_STAGE1_SESSION_ID 必须是原生会话 ID，不是用户 UID 或界面标识');
   }
 
   const expectedConfirmation = `${botUid}:${employeeUid}:${sessionId}`;
@@ -211,7 +210,7 @@ async function pollMessages(
   session: KK9Session,
   limit = 100
 ): Promise<KK9Message[]> {
-  const messages = await managed.driver.getRecentMessages(limit, session);
+  const messages = await managed.driver.getRecentMessages(session, limit);
   return messages;
 }
 
@@ -478,7 +477,8 @@ async function assertExactTarget(managed: ManagedDriver, config: TestConfig): Pr
     session =>
       session.id === config.sessionId &&
       session.name === config.sessionName &&
-      session.type === 'private'
+      session.type === 'private' &&
+      session.receiverId === config.employeeUid
   );
   ensure(matches.length === 1, `目标会话必须精确唯一，匹配数量=${matches.length}`);
   return matches[0]!;
@@ -491,8 +491,8 @@ async function assertEmployeeBySessionId(
 ): Promise<KK9Employee> {
   const employee = await managed.driver.getEmployeeBySession(sessionId);
   ensure(employee !== null, 'getEmployeeBySession 未返回员工档案');
-  ensure(String(employee.id) === config.employeeUid, '员工 UID 与 sessionId 后缀不一致');
-  ensure(sessionId === `0-${String(employee.id)}`, 'sessionId 不是 0-<uid> 格式');
+  ensure(String(employee.id) === config.employeeUid, '员工 UID 与授权对端不一致');
+  ensure(sessionId === config.sessionId, '原生会话 ID 与授权会话不一致');
   return employee;
 }
 
@@ -874,7 +874,7 @@ async function main(): Promise<void> {
         replay.messageId === finalUnknownMessageId,
         'unknown operation 重试返回不同 native messageId'
       );
-      const messages = await recovery.driver.getRecentMessages(100, unknownSession);
+      const messages = await recovery.driver.getRecentMessages(unknownSession, 100);
       ensure(countContentMatches(messages, unknownText) === 1, 'unknown operation 重试产生了双发');
     });
   } catch (error) {

@@ -209,7 +209,7 @@ export function determineOrigin(
   return 'unknown';
 }
 
-export type InboundNormalizationSource = 'event_bridge' | 'polling' | 'unknown';
+export type InboundNormalizationSource = 'event_bridge' | 'polling' | 'history' | 'unknown';
 
 export interface InboundNormalizationDiagnostic {
   kind: 'missing_inbound_identity';
@@ -356,7 +356,7 @@ function isCancelMessageItem(item: Record<string, unknown>): boolean {
   return false;
 }
 
-/** 普通消息和撤回共用公开会话编号；原生sessionID可能只是KK9数据库行ID。 */
+/** 消息使用原生会话 ID，界面标识不能覆盖原生身份。 */
 function resolvePublicSessionId(
   raw: Record<string, unknown>,
   fallbackId?: string,
@@ -366,6 +366,8 @@ function resolvePublicSessionId(
     raw['session'] && typeof raw['session'] === 'object'
       ? (raw['session'] as Record<string, unknown>)
       : undefined;
+  const nativeSessionId = toSafeString(raw['sessionID'] ?? session?.['id']).trim();
+  if (nativeSessionId) return nativeSessionId;
   const myUid =
     currentUserId !== undefined && currentUserId !== null
       ? toSafeString(currentUserId).trim()
@@ -484,7 +486,7 @@ export function normalizeNativeMessage(
     sessionObj['type'] === 'group' ||
     context?.session?.type === 'group';
 
-  const sessionType = isGroup ? 'group' : 'private';
+  const sessionType = context?.session?.type ?? (isGroup ? 'group' : 'private');
 
   let rawList: Array<Record<string, unknown>> = [];
   if (Array.isArray(rawObj['messages'])) {
@@ -507,7 +509,7 @@ export function normalizeNativeMessage(
   return rawList
     .filter(
       (item): item is Record<string, unknown> =>
-        !!item && typeof item === 'object' && !isCancelMessageItem(item)
+        !!item && typeof item === 'object' && (context?.source === 'history' || !isCancelMessageItem(item))
     )
     .map((item): KK9Message | null => {
       const rawSender =
@@ -714,7 +716,9 @@ export function normalizeNativeMessage(
         }
       }
 
-      const messageType = determineMessageType(item, images, fileInfo, replyTo);
+      const messageType = context?.source === 'history' && isCancelMessageItem(item)
+        ? 'system'
+        : determineMessageType(item, images, fileInfo, replyTo);
 
       const nestedRaw =
         item['raw'] && typeof item['raw'] === 'object'
@@ -739,7 +743,7 @@ export function normalizeNativeMessage(
       // 1. 会话 partner 必然是发送者 senderId。
       // 2. 如果 sessionId 缺失、或者错误地指向了机器人自身 (0-currentUserId 或 currentUserId)，
       //    必须收敛纠正为 0-senderId，确保不会在客户端寻找自身会话失败，也不会导致多用户会话串线。
-      if (sessionType === 'private' && !isMe && senderId) {
+      if (sessionType === 'private' && !isMe && senderId && !sessionObj['id'] && !rawObj['sessionID']) {
         if (
           !sessionId ||
           (currentUserId &&
@@ -807,6 +811,7 @@ export function normalizeNativeMessage(
       return {
         id: nativeMessageId,
         messageId: nativeMessageId,
+        msgIdx: typeof item['msgIdx'] === 'number' ? item['msgIdx'] : undefined,
         sessionId,
         sessionName: effectiveSessionName,
         sessionType,
@@ -819,6 +824,7 @@ export function normalizeNativeMessage(
         isMe,
         timestamp,
         messageType,
+        isRecalled: item['msgState'] === 1 || item['isRecalled'] === true,
         atMe,
         atAll,
         mentions,
@@ -881,6 +887,7 @@ export function extractRecalledEventsFromPayload(
 
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue;
+    const sessionId = toSafeString(item['sessionID']).trim() || defaultSessionId || resolvePublicSessionId(item);
     const contentObj = tryParseJson(item['content']);
     if (
       contentObj &&
@@ -896,7 +903,7 @@ export function extractRecalledEventsFromPayload(
       if (messageId) {
         events.push({
           messageId,
-          sessionId: defaultSessionId || resolvePublicSessionId(item),
+          sessionId,
           sender: toSafeString(
             item['sender'] ?? item['senderName'] ?? contentObj['sender'],
             '某人'
@@ -911,7 +918,7 @@ export function extractRecalledEventsFromPayload(
       if (messageId) {
         events.push({
           messageId,
-          sessionId: defaultSessionId || resolvePublicSessionId(item),
+          sessionId,
           sender: toSafeString(item['sender'] ?? item['senderName'], '某人'),
           time: toSafeString(item['time'] ?? item['sendTime'], new Date().toLocaleTimeString()),
           timestamp: typeof item['timestamp'] === 'number' ? item['timestamp'] : Date.now(),

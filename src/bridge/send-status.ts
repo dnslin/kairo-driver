@@ -69,8 +69,7 @@ export async function resolveActiveSendOptions<T extends SendOptions | SendFileO
         return { id: activeSession.id, sesUUID: activeSession.sesUUID };
       })()
     `);
-    const targetSessionId =
-      active?.sesUUID?.trim() || (active?.id !== undefined ? String(active.id).trim() : '');
+    const targetSessionId = active?.id !== undefined ? String(active.id).trim() : '';
     return targetSessionId ? { ...options, targetSessionId } : null;
   } catch {
     return null;

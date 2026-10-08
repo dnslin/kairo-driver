@@ -167,7 +167,7 @@ async function main(): Promise<void> {
           const queried = await driver.getSendStatus(operationId);
           assert.equal(queried.messageId, result.messageId, '状态回查应返回同一消息');
         }
-        const history = await driver.getRecentMessages(100, session);
+        const history = await driver.getRecentMessages(session, 100);
         const message = history.find(row => (row.messageId || row.id) === result.messageId);
         assert.ok(message, `${item.name} 必须能从真实历史读取`);
         assert.equal(

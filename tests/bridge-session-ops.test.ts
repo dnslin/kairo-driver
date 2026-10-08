@@ -8,99 +8,44 @@ import {
 } from './helpers/renderer-runtime.js';
 
 describe('BridgeSessionOps 纯数据会话管理测试', () => {
-  it('getSessions 应通过 IPC getConversations 解析私聊(test-employee)与群聊(test-group)会话列表与未读数', async () => {
-    const mockCdp = {
-      evaluate: vi.fn().mockImplementation((script: string) => {
-        if (script.includes('sortedSessions')) {
-          return Promise.resolve({
-            activeUuid: '0-91002',
-            activeId: 93001,
-            sortedSessions: [
-              { id: 93001, sesUUID: '0-91002', name: 'test-employee', type: 0 },
-              { id: 93002, sesUUID: '1-92001', name: 'test-group', type: 1 },
-            ],
-          });
-        }
-        if (script.includes('getConversations')) {
-          return Promise.resolve({
-            code: 0,
-            data: {
-              sessionsInfo: {
-                '93001': {
-                  id: 93001,
-                  type: 0,
-                  creater: 91006,
-                  createrName: 'test-employee',
-                  typeID: 91002,
-                  typeName: 'test-employee',
-                  maxMessageIndex: 10,
-                  userReadIndex: 8,
-                  lastMessage: JSON.stringify({ content: [{ type: 0, text: '你好，私聊测试' }] }),
-                  lastMsgTime: 1788142783,
-                  atState: 0,
-                },
-                '93002': {
-                  id: 93002,
-                  type: 1,
-                  creater: 92001,
-                  createrName: '群管理员',
-                  typeID: 92001,
-                  typeName: 'test-group',
-                  maxMessageIndex: 55,
-                  userReadIndex: 50,
-                  lastMessage: JSON.stringify({ content: [{ type: 0, text: '群聊讨论' }] }),
-                  lastMsgTime: 1788142900,
-                  atState: 2, // 未读 @ 我
-                },
-              },
-            },
-          });
-        }
-        return Promise.resolve(null);
+  function nativeOps(sessionsInfo: Record<string, unknown>, code = 0) {
+    const ipc = new FakeIpcRenderer(request => {
+      if (request.args[0] === 'getMemberDetail') return { code: 0, data: { id: 91001 } };
+      return { code, data: { sessionsInfo }, error: code ? '原生会话查询失败' : undefined };
+    });
+    const cdp = {
+      evaluate: (script: string) => runRendererScript(script, {
+        window: { ipcRenderer: ipc }, setTimeout, clearTimeout,
       }),
     } as unknown as CdpClient;
+    return new BridgeSessionOps(cdp);
+  }
 
-    const ops = new BridgeSessionOps(mockCdp);
-    const sessions = await ops.getSessions();
-
-    expect(sessions).toHaveLength(2);
-
-    // 私聊会话 test-employee
-    const privateSes = sessions.find(s => s.name === 'test-employee');
-    expect(privateSes).toBeDefined();
-    expect(privateSes?.type).toBe('private');
-    expect(privateSes?.unread).toBe(true);
-    expect(privateSes?.unreadCount).toBe(2); // 10 - 8
-    expect(privateSes?.active).toBe(true);
-    expect(privateSes?.lastMessage).toBe('你好，私聊测试');
-
-    // 群聊会话 test-group
-    const groupSes = sessions.find(s => s.name === 'test-group');
-    expect(groupSes).toBeDefined();
-    expect(groupSes?.type).toBe('group');
-    expect(groupSes?.unread).toBe(true);
-    expect(groupSes?.unreadCount).toBe(5); // 55 - 50
-    expect(groupSes?.unreadAt).toBe(true); // atState = 2
+  it('没有聊天组件也能读取原生会话身份、接收对象及未读数', async () => {
+    const sessions = await nativeOps({
+      '93001': { id: 93001, type: 0, creater: 91001, typeID: 91002, typeName: '员工甲', maxMessageIndex: 10, userReadIndex: 8 },
+      '93002': { id: 93002, type: 0, creater: 91003, typeID: 91001, typeName: '员工乙' },
+      '93003': { id: 93003, type: 1, creater: 91001, typeID: 92001, typeName: '群聊', maxMessageIndex: 12, userReadIndex: 9, atState: 2 },
+      '93004': { id: 93004, type: 2, creater: 91001, typeID: 92002, typeName: '讨论组' },
+      '93005': { id: 93005, type: 3, creater: 91001, typeID: 92003, typeName: '服务号' },
+      '93006': { id: 93006, type: 6, creater: 91001, typeID: 92004, typeName: '其他' },
+    }).getSessions();
+    expect(sessions.map(({ id, type, nativeType, receiverId }) => ({ id, type, nativeType, receiverId }))).toEqual([
+      { id: '93001', type: 'private', nativeType: 0, receiverId: '91002' },
+      { id: '93002', type: 'private', nativeType: 0, receiverId: '91003' },
+      { id: '93003', type: 'group', nativeType: 1, receiverId: '92001' },
+      { id: '93004', type: 'discussion', nativeType: 2, receiverId: '92002' },
+      { id: '93005', type: 'service', nativeType: 3, receiverId: '92003' },
+      { id: '93006', type: 'unknown', nativeType: 6, receiverId: '92004' },
+    ]);
+    expect(sessions[0]?.unreadCount).toBe(2);
+    expect(sessions[2]?.unreadAt).toBe(true);
+    expect(sessions[0]?.active).toBeUndefined();
   });
 
-  it('getCurrentSession 应从 Vue editor 提取当前活跃会话', async () => {
-    const mockCdp = {
-      evaluate: vi.fn().mockResolvedValue({
-        id: '1-92001',
-        name: 'test-group',
-        type: 'group',
-        unread: false,
-        active: true,
-      }),
-    } as unknown as CdpClient;
-
-    const ops = new BridgeSessionOps(mockCdp);
-    const current = await ops.getCurrentSession();
-
-    expect(current).not.toBeNull();
-    expect(current?.name).toBe('test-group');
-    expect(current?.type).toBe('group');
-    expect(current?.active).toBe(true);
+  it('空列表正常返回，原生失败保留错误而不是空列表', async () => {
+    await expect(nativeOps({}).getSessions()).resolves.toEqual([]);
+    await expect(nativeOps({}, 627).getSessions()).rejects.toThrow(/getConversations.*627.*原生会话查询失败/);
   });
 
   it('selectSession 应支持切换到私聊会话 test-employee 与群聊会话 test-group', async () => {

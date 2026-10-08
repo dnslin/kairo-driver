@@ -6,28 +6,17 @@ export const RENDERER_SESSION_RESOLVER_SCRIPT = `
   function resolveRendererSession(sessions, target) {
     if (!Array.isArray(sessions) || !target) return null;
     const cleanTarget = String(target).trim();
-    const targetNoPrefix = cleanTarget.replace(/^[01]-/, '');
+    if (/^-?[0-9]+$/.test(cleanTarget)) {
+      return sessions.find(session => session && String(session.id) === cleanTarget) || null;
+    }
 
     const idMatch = sessions.find(
       session => session && (
         session.sesUUID === cleanTarget ||
-        String(session.id) === cleanTarget ||
-        session.sesUUID === ('0-' + cleanTarget) ||
-        session.sesUUID === ('1-' + cleanTarget)
+        String(session.id) === cleanTarget
       )
     );
     if (idMatch) return idMatch;
-
-    if (targetNoPrefix) {
-      const typeIdMatch = sessions.find(
-        session => session && (
-          String(session.sesTypeID) === targetNoPrefix ||
-          String(session.typeID) === targetNoPrefix
-        )
-      );
-      if (typeIdMatch) return typeIdMatch;
-    }
-
     const nameMatches = sessions.filter(
       session => session && (session.typeName === cleanTarget || session.name === cleanTarget)
     );
@@ -38,20 +27,14 @@ export const RENDERER_SESSION_RESOLVER_SCRIPT = `
     if (!Array.isArray(sessions)) return null;
     if (targetId) {
       const cleanId = String(targetId).trim();
-      const targetNoPrefix = cleanId.replace(/^[01]-/, '');
       const idMatch = sessions.find(
         session => session && (
-          session.sesUUID === cleanId ||
           String(session.id) === cleanId ||
-          session.sesUUID === ('0-' + cleanId) ||
-          session.sesUUID === ('1-' + cleanId) ||
-          (targetNoPrefix && (
-            String(session.sesTypeID) === targetNoPrefix ||
-            String(session.typeID) === targetNoPrefix
-          ))
+          session.sesUUID === cleanId
         )
       );
       if (idMatch) return idMatch;
+      return null;
     }
     if (!targetName) return null;
 
@@ -62,6 +45,12 @@ export const RENDERER_SESSION_RESOLVER_SCRIPT = `
       )
     );
     return nameMatches.length === 1 ? nameMatches[0] : null;
+  }
+
+  function resolveRendererReceiver(session, currentUserId) {
+    return session.type === 0 && String(session.typeID) === String(currentUserId)
+      ? session.creater
+      : session.typeID;
   }
 `;
 

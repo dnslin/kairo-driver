@@ -33,7 +33,19 @@ pnpm diagnose listen
 
 `status` 探测 CDP，`sessions` 读取会话，`listen` 监听真实消息。`pnpm diagnose` 可查看完整命令；发送、撤回、切换等命令会实际操作客户端，需明确提供已获授权的目标。
 
-`pnpm verify` 会切换指定私聊和群聊、读取最近消息并查询员工档案，不发送消息。运行前设置：
+身份、会话和十条历史的只读 SDK 验收（参数依次为登录 UID、登录账号、原生会话 ID、对端 UID、对端账号）：
+
+```bash
+pnpm exec tsx examples/verify-native-readonly.ts <登录UID> <登录账号> <原生会话ID> <对端UID> <对端账号>
+```
+
+该脚本保留实际登录与目标核对，不发送、撤回、切换、创建会话、标记已读或插入草稿。修改后的 SDK 历史与原生消息 ID、索引逐条对照，读取前后检查已读索引不变，检查没有重放实时事件；只输出必要元数据，不输出聊天正文。原生查询无需恢复或激活聊天窗口；客户端内部可能刷新档案、头像及历史资源缓存。
+
+设备字段证据：KK9 9.0.1 的 `insertSendBefoeMsg` 直接把参数 `deviceID` 写入草稿，未自行补取；注册设备返回的 ID 写入主进程 `CORE_DATA.deviceID`。`getMemberDetail()` 不返回设备字段；尚未确认可用的只读设备 getter，也未试验缺字段草稿是否可用。不得填空值冒充已解决，后续发送切片须据此核对。
+
+已执行的 T01/T02 真机只读验收：账号0123040139（UID5761），int2024（UID3585）的原生私聊716791；SDK与jshookmcp原生对照一致，十条消息索引651–660，读取前后userReadIndex均为660。没有真实新入站、发送、撤回、群聊或媒体验收。必要元数据记录在 `tmp/kk9-t01-t02-validation.json` 和 `tmp/kk9-t02-mcp-evidence.json`。
+
+`pnpm verify` 按指定原生私聊、群聊 ID 读取最近消息并查询员工档案，不再为历史切换窗口，不发送消息。运行前设置：
 
 ```powershell
 $env:KK9_TEST_PRIVATE_ID = "<私聊会话 ID>"
@@ -65,7 +77,7 @@ pnpm e2e
 ```powershell
 $env:KK9_STAGE1_BOT_UID = "<登录 Bot UID>"
 $env:KK9_STAGE1_EMPLOYEE_UID = "<目标员工 UID>"
-$env:KK9_STAGE1_SESSION_ID = "0-<目标员工 UID>"
+$env:KK9_STAGE1_SESSION_ID = "<原生私聊会话 ID>"
 $env:KK9_STAGE1_SESSION_NAME = "<目标员工会话名>"
 $env:KK9_STAGE1_CONFIRM = "$($env:KK9_STAGE1_BOT_UID):$($env:KK9_STAGE1_EMPLOYEE_UID):$($env:KK9_STAGE1_SESSION_ID)"
 pnpm e2e:stage1

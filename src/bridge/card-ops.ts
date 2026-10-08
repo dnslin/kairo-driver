@@ -137,7 +137,7 @@ export async function sendNativeStructuredMessage(
         senderName: myName,
         senderNameEN: myName,
         senderNameTC: myName,
-        receiver: targetSes.typeID || targetSes.sesTypeID,
+        receiver: resolveRendererReceiver(targetSes, myUid),
         sendTime,
         sessionType: targetSes.type,
         sessionID: targetSes.id,

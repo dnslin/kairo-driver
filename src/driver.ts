@@ -12,7 +12,6 @@ import { OrgOps } from './dom/org-ops.js';
 import { resolveSelectors } from './dom/selectors.js';
 import { SendOps } from './dom/send-ops.js';
 import { SessionOps } from './dom/session-ops.js';
-import { MessageOps } from './dom/message-ops.js';
 
 import type {
   CdpConnectionLostEvent,
@@ -67,7 +66,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
   // 保留旧版 DOM 操作层（作为后备回退）
   private readonly domSessionOps: SessionOps;
-  private readonly domMessageOps: MessageOps;
   private readonly domSendOps: SendOps;
   private readonly domOrgOps: OrgOps;
 
@@ -107,7 +105,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
     // 初始化 DOM 操作层 (保留)
     this.domSessionOps = new SessionOps(this.cdp, this.selectors);
-    this.domMessageOps = new MessageOps(this.cdp, this.selectors);
     this.domSendOps = new SendOps(this.cdp, this.selectors);
     this.domOrgOps = new OrgOps(this.cdp);
 
@@ -132,15 +129,8 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     };
   }
 
-  public async getCurrentUserId(): Promise<string | null> {
-    const value = await this.cdp.evaluate<string>(`
-      (() => {
-        const main = document.querySelector('.main-page')?.__vue__;
-        const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-        return String(main?.userID || editor?.userID || '');
-      })()
-    `);
-    return String(value || '').trim() || null;
+  public getCurrentUserId(): Promise<string | null> {
+    return this.bridgeSessionOps.getCurrentUserId();
   }
 
   public async connect(): Promise<void> {
@@ -154,9 +144,8 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     let bridgeOwnsCleanup = false;
     try {
       await this.cdp.connect();
-      // 未显式配置时，在监听开放前从当前页面取得身份；事件和历史使用同一代身份。
-      this.currentUserId =
-        this.config.currentUserId ?? (await this.getCurrentUserId()) ?? undefined;
+      // 监听使用实际登录身份，不以配置值冒充当前账号。
+      this.currentUserId = (await this.getCurrentUserId()) ?? undefined;
       // 进入 EventBridge.connect 后由桥接层负责失败清理及错误聚合。
       bridgeOwnsCleanup = true;
       await this.eventBridge.connect(this.currentUserId);
@@ -179,15 +168,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.eventBridge.disconnect();
   }
 
-  /**
-   * 优先通过 Bridge / IPC 获取会话列表，失败时回退至 DOM 遍历
-   */
-  public async getSessions(): Promise<KK9Session[]> {
-    const sessions = await this.bridgeSessionOps.getSessions();
-    if (sessions.length > 0) {
-      return sessions;
-    }
-    return this.domSessionOps.getSessions();
+  /** 原生空列表正常返回，查询失败保留异常。 */
+  public getSessions(): Promise<KK9Session[]> {
+    return this.bridgeSessionOps.getSessions();
   }
 
   private async resolveSessionTarget(target: string): Promise<KK9Session | null> {
@@ -225,12 +208,8 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return result;
   }
 
-  public async getCurrentSession(): Promise<KK9Session | null> {
-    const session = await this.bridgeSessionOps.getCurrentSession();
-    if (session) {
-      return session;
-    }
-    return this.domSessionOps.getCurrentSession();
+  public getCurrentSession(): Promise<KK9Session | null> {
+    return this.bridgeSessionOps.getCurrentSession();
   }
 
   public async selectSession(sessionId: string): Promise<boolean> {
@@ -317,42 +296,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     };
   }
 
-  /**
-   * 优先通过 Bridge / IPC getMessages 获取会话历史，失败时回退至 DOM 提取
-   */
-  public async getRecentMessages(limit = 20, session?: KK9Session): Promise<KK9Message[]> {
-    const targetSession = session || (await this.getCurrentSession()) || undefined;
-    const bridgeResult = await this.bridgeMessageOps.getRecentMessagesResult(
-      limit,
-      targetSession,
-      this.knownBotSentMessageKeys,
-      this.currentUserId
-    );
-
-    if (bridgeResult.kind === 'ok') {
-      return bridgeResult.value;
-    }
-
-    if (targetSession) {
-      const activeSessionId = await this.domSessionOps.getActiveSessionId();
-      if (activeSessionId !== targetSession.id) {
-        log.warn(
-          {
-            targetSessionId: targetSession.id,
-            activeSessionId,
-            bridgeError: bridgeResult.error,
-          },
-          '显式目标不是当前 DOM 会话，拒绝历史消息 fallback'
-        );
-        return [];
-      }
-    }
-
-    return this.domMessageOps.getRecentMessages(
-      limit,
-      targetSession,
-      this.knownBotSentMessageKeys,
-      this.currentUserId
+  /** 指定原生会话读取历史，不重放实时事件或回退 DOM。 */
+  public getRecentMessages(session: KK9Session, limit = 20): Promise<KK9Message[]> {
+    return this.bridgeMessageOps.getRecentMessages(
+      session, limit, this.knownBotSentMessageKeys, this.currentUserId
     );
   }
 
@@ -394,7 +341,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
           await sleep(switchDelayMs);
         }
 
-        const messages = await this.getRecentMessages(maxMessages, session);
+        const messages = await this.getRecentMessages(session, maxMessages);
         for (const message of messages) {
           if (message.timestamp < options.fromTimestamp || message.timestamp > toTimestamp) {
             continue;
@@ -663,54 +610,15 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.domOrgOps.getUserProfile(userId);
   }
 
-  /**
-   * 通过私聊会话 ID 或会话实体直接获取对应员工的详细档案
-   * @param session 会话 ID 字符串（如 "0-9529"）或 KK9Session 实体
-   * @returns 员工档案；若为群聊、无效输入或查询无果则返回 null
-   */
+  /** 通过原生会话 ID 或实体查询私聊对端档案；用户 UID 请使用 getUserProfile。 */
   public async getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null> {
-    if (!session) return null;
-
-    let targetSessionId = '';
-    if (typeof session === 'object') {
-      if (session.type !== 'private') {
-        return null;
-      }
-      targetSessionId = session.id?.trim() || '';
-    } else if (typeof session === 'string') {
-      targetSessionId = session.trim();
-    }
-
-    if (!targetSessionId) return null;
-
-    // 1. 如果格式是 "0-12345" 形式的标准私聊 sesUUID
-    if (targetSessionId.startsWith('0-')) {
-      const uid = targetSessionId.slice(2).trim();
-      if (uid) {
-        return this.getUserProfile(uid);
-      }
-    }
-
-    // 2. 如果明确是群聊格式 "1-..." 或讨论组 "2-..."，直接拒止
-    if (/^[123]-/.test(targetSessionId)) {
-      return null;
-    }
-
-    // 3. 尝试通过会话名称或内部 ID 匹配会话
-    const resolved = await this.resolveSessionTarget(targetSessionId);
-    if (resolved && resolved.type === 'private' && resolved.id.startsWith('0-')) {
-      const uid = resolved.id.slice(2).trim();
-      if (uid) {
-        return this.getUserProfile(uid);
-      }
-    }
-
-    // 4. 若传入的是纯数字 UID 形式，尝试直接查询
-    if (/^\d+$/.test(targetSessionId)) {
-      return this.getUserProfile(targetSessionId);
-    }
-
-    return null;
+    if (typeof session === 'string' && !session.trim()) return null;
+    const resolved = typeof session === 'string'
+      ? (await this.getSessions()).find(item => item.id === session.trim())
+      : session;
+    return resolved?.type === 'private' && resolved.receiverId
+      ? this.getUserProfile(resolved.receiverId)
+      : null;
   }
 
   public startPolling(customPolling?: Partial<PollingConfig>): void {
@@ -798,7 +706,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   private async collectAndEmitMessages(session: KK9Session, limit: number): Promise<void> {
-    const messages = await this.getRecentMessages(limit, session);
+    const messages = await this.getRecentMessages(session, limit);
     for (const msg of messages) {
       const messageKey = createMessageIdentityKey(msg.sessionId, msg.id);
 

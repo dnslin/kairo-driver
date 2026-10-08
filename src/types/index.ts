@@ -42,7 +42,7 @@ export interface DriverHealthSnapshot {
   eventBridgeConnectionIdentity: CdpConnectionIdentity | null;
 }
 
-export type KK9SessionType = 'private' | 'group';
+export type KK9SessionType = 'private' | 'group' | 'discussion' | 'service' | 'unknown';
 
 export type KK9MessageType =
   | 'text'
@@ -106,7 +106,7 @@ export interface KK9ReplyTarget {
   /** KK9 原生消息 ID，无法取得时该消息不得进入公开入站模型 */
   messageId?: string;
 
-  /** 消息在列表中的索引 */
+  /** 原生消息索引 msgIdx，不是消息 ID 或 DOM 列表位置。 */
   msgIdx?: number;
   /** 被引用者昵称 */
   sender?: string;
@@ -214,15 +214,21 @@ export type KK9VoiceOptions =
   | { filePath: string; text?: never; voice?: never };
 
 export interface KK9Session {
+  /** 原生 sessionID 的字符串形式，不是用户 UID 或界面 sesUUID。 */
   id: string;
   name: string;
   type: KK9SessionType;
+  /** 原生会话类型；未知类型保留原数值。 */
+  nativeType: number;
+  /** 私聊为对端用户 UID，其他类型为原生 typeID。 */
+  receiverId: string;
   unread: boolean;
   unreadCount?: number;
   /** 标记是否有未读 @ 我或 @ 全体 */
   unreadAt?: boolean;
   lastMessage?: string;
   lastMessageTime?: string;
+  /** 仅窗口查询提供；原生会话列表不读取窗口状态。 */
   active?: boolean;
 }
 
@@ -231,6 +237,8 @@ export interface KK9Message {
   id: string;
   /** KK9 原生消息 ID；标准化失败时消息被丢弃 */
   messageId?: string;
+  /** 原生消息索引，不是消息 ID。 */
+  msgIdx?: number;
 
   sessionId: string;
   sessionName: string;
@@ -337,7 +345,7 @@ export interface CompensationScanOptions {
 
 export interface DriverConfig {
   cdp: CdpConfig;
-  /** 显式指定方向识别身份；省略时 KK9Driver 在连接并注入 Hook 前读取当前页面 UID。 */
+  /** 连接前的规范化身份提示；connect 始终以原生登录档案取得实际 UID。 */
   currentUserId?: string | number;
   /** 共享客户端验收可显式拒绝接管其他代次的Hook。 */
   rejectExistingBridge?: boolean;
@@ -403,6 +411,7 @@ export interface PreSendCheckResult {
 }
 
 export interface SendOptions {
+  /** 原生会话 ID。 */
   targetSessionId?: string;
   /** 稳定发送意图 ID；同一 ID 的安全重试必须复用。 */
   operationId?: string;
@@ -453,7 +462,8 @@ export interface IKK9Driver extends EventEmitter {
   markSessionRead(sessionId: string): Promise<boolean>;
 
   // 消息读取与补偿
-  getRecentMessages(limit?: number, session?: KK9Session): Promise<KK9Message[]>;
+  /** 必须指定 getSessions 返回的原生会话；历史不会派发实时事件，查询失败抛错。 */
+  getRecentMessages(session: KK9Session, limit?: number): Promise<KK9Message[]>;
   scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]>;
 
   // 消息发送与撤回

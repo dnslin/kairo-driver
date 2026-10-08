@@ -3,7 +3,6 @@ import type { BridgeOrgOps } from '../../src/bridge/org-ops.js';
 import type { BridgeSessionOps } from '../../src/bridge/session-ops.js';
 import type { CdpClient } from '../../src/cdp/client.js';
 import type { KK9Driver } from '../../src/driver.js';
-import type { MessageOps } from '../../src/dom/message-ops.js';
 import type { OrgOps } from '../../src/dom/org-ops.js';
 import type { SendOps } from '../../src/dom/send-ops.js';
 import type { SessionOps } from '../../src/dom/session-ops.js';
@@ -15,7 +14,6 @@ interface DriverTestInternalSlots {
   bridgeMessageOps: BridgeMessageOps;
   bridgeOrgOps: BridgeOrgOps;
   domSessionOps: SessionOps;
-  domMessageOps: MessageOps;
   domSendOps: SendOps;
   domOrgOps: OrgOps;
   collectAndEmitMessages(session: KK9Session, limit: number): Promise<void>;
@@ -33,8 +31,4 @@ export function getDriverTestInternals<TOverrides extends object = Record<never,
   driver: KK9Driver
 ): DriverTestInternals<TOverrides> {
   return driver as unknown as DriverTestInternals<TOverrides>;
-}
-
-export function getMessageOpsTestInternals<TCdp>(messageOps: MessageOps): { cdp: TCdp } {
-  return messageOps as unknown as { cdp: TCdp };
 }
