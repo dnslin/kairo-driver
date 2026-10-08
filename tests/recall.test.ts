@@ -78,6 +78,8 @@ describe('消息撤回双轨 API 与安全守卫测试 (Issue #67)', () => {
         id: 'session_xyz',
         name: '测试会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       };
 

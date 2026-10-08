@@ -30,6 +30,86 @@ interface RawSessionItem {
   atState?: number;
 }
 
+/** 列表查询与单会话查询使用同一套原生身份和已读状态映射。 */
+function toKK9Session(item: RawSessionItem, currentUserId: string | null): KK9Session {
+  let lastMsg = '';
+  if (item.lastMessage) {
+    try {
+      const rawMsg: unknown =
+        typeof item.lastMessage === 'string'
+          ? JSON.parse(item.lastMessage)
+          : item.lastMessage;
+      if (rawMsg && typeof rawMsg === 'object') {
+        const record = rawMsg as Record<string, unknown>;
+        if (Array.isArray(record.content)) {
+          lastMsg = record.content
+            .map((c: unknown) => {
+              if (c && typeof c === 'object') {
+                const itemObj = c as Record<string, unknown>;
+                return (
+                  (typeof itemObj.text === 'string' ? itemObj.text : '') ||
+                  (itemObj.type === 1 ? '[图片]' : '')
+                );
+              }
+              return '';
+            })
+            .filter(Boolean)
+            .join('');
+        } else if (typeof record.content === 'string') {
+          lastMsg = record.content;
+        } else if (typeof record.text === 'string') {
+          lastMsg = record.text;
+        } else {
+          lastMsg = String(item.lastMessage);
+        }
+      } else {
+        lastMsg = String(item.lastMessage);
+      }
+    } catch {
+      lastMsg = String(item.lastMessage);
+    }
+  }
+
+  let lastTime = '';
+  if (item.lastMsgTime) {
+    try {
+      const ts = item.lastMsgTime < 10000000000 ? item.lastMsgTime * 1000 : item.lastMsgTime;
+      lastTime = new Date(ts).toLocaleTimeString();
+    } catch {
+      lastTime = '';
+    }
+  }
+
+  const sessionType = item.type === 0 ? 'private' : item.type === 1 ? 'group' : item.type === 2 ? 'discussion' : item.type === 3 ? 'service' : 'unknown';
+  const receiverId = item.type === 0 && String(item.typeID) === currentUserId
+    ? String(item.creater)
+    : String(item.typeID);
+
+  // 判定未读数与未读状态
+  const maxIdx = item.maxMessageIndex ?? 0;
+  const readIdx = item.userReadIndex ?? 0;
+  const unreadCount = Math.max(0, maxIdx - readIdx);
+  const unread = unreadCount > 0;
+
+  // 判定未读 @ 状态 (atState > 1 表示有未读 @ 提醒)
+  const unreadAt = Boolean((item.atState && item.atState > 1) || lastMsg.includes('[@有人@我]') || lastMsg.includes('[@全体成员]'));
+
+  const sessionName = item.typeName || item.createrName || `会话_${String(item.id)}`;
+
+  return {
+    id: String(item.id),
+    name: sessionName,
+    type: sessionType,
+    nativeType: item.type,
+    receiverId,
+    unread,
+    unreadCount,
+    unreadAt,
+    lastMessage: lastMsg,
+    lastMessageTime: lastTime,
+  };
+}
+
 export class BridgeSessionOps {
   constructor(private readonly cdp: CdpClient) {}
 
@@ -44,96 +124,15 @@ export class BridgeSessionOps {
 
   /** 原生会话 ID 与接收对象独立于当前窗口。 */
   public async getSessions(): Promise<KK9Session[]> {
-      const currentUserId = await this.getCurrentUserId();
-      const response = await callIpcToData<RawConversationData>(this.cdp, 'getConversations');
-      if (response.code !== 0) {
-        throw new DriverError(`getConversations 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
-      }
-      if (!response.data?.sessionsInfo || typeof response.data.sessionsInfo !== 'object') {
-        throw new DriverError('getConversations 缺少 sessionsInfo', 'IPC_INVALID_RESPONSE');
-      }
-      const sessions: KK9Session[] = [];
-      for (const item of Object.values(response.data.sessionsInfo)) {
-
-        let lastMsg = '';
-        if (item.lastMessage) {
-          try {
-            const rawMsg: unknown =
-              typeof item.lastMessage === 'string'
-                ? JSON.parse(item.lastMessage)
-                : item.lastMessage;
-            if (rawMsg && typeof rawMsg === 'object') {
-              const record = rawMsg as Record<string, unknown>;
-              if (Array.isArray(record.content)) {
-                lastMsg = record.content
-                  .map((c: unknown) => {
-                    if (c && typeof c === 'object') {
-                      const itemObj = c as Record<string, unknown>;
-                      return (
-                        (typeof itemObj.text === 'string' ? itemObj.text : '') ||
-                        (itemObj.type === 1 ? '[图片]' : '')
-                      );
-                    }
-                    return '';
-                  })
-                  .filter(Boolean)
-                  .join('');
-              } else if (typeof record.content === 'string') {
-                lastMsg = record.content;
-              } else if (typeof record.text === 'string') {
-                lastMsg = record.text;
-              } else {
-                lastMsg = String(item.lastMessage);
-              }
-            } else {
-              lastMsg = String(item.lastMessage);
-            }
-          } catch {
-            lastMsg = String(item.lastMessage);
-          }
-        }
-
-        let lastTime = '';
-        if (item.lastMsgTime) {
-          try {
-            const ts = item.lastMsgTime < 10000000000 ? item.lastMsgTime * 1000 : item.lastMsgTime;
-            lastTime = new Date(ts).toLocaleTimeString();
-          } catch {
-            lastTime = '';
-          }
-        }
-
-        const sessionType = item.type === 0 ? 'private' : item.type === 1 ? 'group' : item.type === 2 ? 'discussion' : item.type === 3 ? 'service' : 'unknown';
-        const receiverId = item.type === 0 && String(item.typeID) === currentUserId
-          ? String(item.creater)
-          : String(item.typeID);
-
-        // 判定未读数与未读状态
-        const maxIdx = item.maxMessageIndex ?? 0;
-        const readIdx = item.userReadIndex ?? 0;
-        const unreadCount = Math.max(0, maxIdx - readIdx);
-        const unread = unreadCount > 0;
-
-        // 判定未读 @ 状态 (atState > 1 表示有未读 @ 提醒)
-        const unreadAt = Boolean((item.atState && item.atState > 1) || lastMsg.includes('[@有人@我]') || lastMsg.includes('[@全体成员]'));
-
-        const sessionName = item.typeName || item.createrName || `会话_${String(item.id)}`;
-
-        sessions.push({
-          id: String(item.id),
-          name: sessionName,
-          type: sessionType,
-          nativeType: item.type,
-          receiverId,
-          unread,
-          unreadCount,
-          unreadAt,
-          lastMessage: lastMsg,
-          lastMessageTime: lastTime,
-        });
-      }
-
-      return sessions;
+    const currentUserId = await this.getCurrentUserId();
+    const response = await callIpcToData<RawConversationData>(this.cdp, 'getConversations');
+    if (response.code !== 0) {
+      throw new DriverError(`getConversations 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
+    }
+    if (!response.data?.sessionsInfo || typeof response.data.sessionsInfo !== 'object') {
+      throw new DriverError('getConversations 缺少 sessionsInfo', 'IPC_INVALID_RESPONSE');
+    }
+    return Object.values(response.data.sessionsInfo).map(item => toKK9Session(item, currentUserId));
   }
 
   /**
@@ -147,8 +146,13 @@ export class BridgeSessionOps {
       })()
     `);
     if (!activeId) return null;
-    const session = (await this.getSessions()).find(item => item.id === activeId);
-    return session ? { ...session, active: true } : null;
+    const currentUserId = await this.getCurrentUserId();
+    // KK9 主进程按单个原生 ID 返回会话行，不依赖可见列表过滤。
+    const response = await callIpcToData<RawSessionItem | null>(this.cdp, 'getSessionBySessionID', [activeId]);
+    if (response.code !== 0) {
+      throw new DriverError(`getSessionBySessionID 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
+    }
+    return response.data ? { ...toKK9Session(response.data, currentUserId), active: true } : null;
   }
 
   /**

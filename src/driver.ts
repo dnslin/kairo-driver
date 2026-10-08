@@ -5,7 +5,7 @@ import { KK9EventBridge } from './bridge/event-bridge.js';
 import { BridgeSessionOps } from './bridge/session-ops.js';
 import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
-import { createMessageIdentityKey } from './bridge/converter.js';
+import { createMessageIdentityKey, extractRecalledEventsFromPayload } from './bridge/converter.js';
 import { resolveActiveSendOptions } from './bridge/send-status.js';
 
 import { OrgOps } from './dom/org-ops.js';
@@ -82,7 +82,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   ) {
     super();
     this.selectors = resolveSelectors(config.selectors);
-    this.currentUserId = config.currentUserId;
     this.cdp = new CdpClient(config.cdp, {
       startupGenerationId: config.startupGenerationId,
     });
@@ -91,7 +90,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       {
         cdp: config.cdp,
         startupGenerationId: this.startupGenerationId,
-        currentUserId: config.currentUserId,
         rejectExistingBridge: config.rejectExistingBridge,
         knownBotSentMessageKeys: this.knownBotSentMessageKeys,
       },
@@ -708,6 +706,13 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   private async collectAndEmitMessages(session: KK9Session, limit: number): Promise<void> {
     const messages = await this.getRecentMessages(session, limit);
     for (const msg of messages) {
+      // 历史撤回只供查询，不能经轮询重放为新的消息、提及或撤回事件。
+      if (
+        msg.isRecalled ||
+        (msg.messageType === 'system' && extractRecalledEventsFromPayload(msg.raw, session).length > 0)
+      ) {
+        continue;
+      }
       const messageKey = createMessageIdentityKey(msg.sessionId, msg.id);
 
       if (!this.knownMessageKeys.has(messageKey)) {

@@ -497,6 +497,44 @@ describe('KK9EventBridge 原生事件直连桥与同构事件流测试', () => {
     expect(recalledEvents[2]!.sender).toBe('王五');
   });
 
+  it.each(['C', 'D', 'C原生后缀', 'D原生后缀'])('实时%s原记录不派发新消息或错误撤回，真实系统通知只撤回正文目标', async msgFlag => {
+    const mockCdp = new MockCdpClient();
+    const bridge = new KK9EventBridge(defaultConfig, mockCdp as unknown as CdpClient);
+    const messages: KK9Message[] = [];
+    const recalls: KK9RecalledEvent[] = [];
+    bridge.on('message', message => messages.push(message));
+    bridge.on('recalled', event => recalls.push(event));
+    await bridge.connect();
+    try {
+      const session = { id: 716791, sesUUID: '0-91002', type: 0 };
+      mockCdp.triggerBinding('__kairo_native_bridge', {
+        type: 'receive-message',
+        data: { session, message: [
+          { msgID: '原消息', contentType: 4, msgFlag, content: JSON.stringify({ event: 'CancelMessage', msgID: '正文伪目标' }) },
+          { id: '撤回通知', contentType: 6, content: JSON.stringify({ event: 'CancelMessage', msgID: '原消息' }) },
+        ] },
+      });
+      mockCdp.triggerBinding('__kairo_native_bridge', {
+        type: 'receive-message',
+        data: { session, message: [
+          { id: '普通系统通知', contentType: 6, content: { event: 'MemberJoin', msgID: '无关目标' } },
+          { msgID: '普通原消息', contentType: 4, content: '正常文本' },
+          { msgID: '普通事件名正文', contentType: 4, content: { event: 'CancelMessage', msgID: '正文伪目标' } },
+        ] },
+      });
+      expect(recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId })))
+        .toEqual([{ messageId: '原消息', sessionId: '716791' }]);
+      expect(messages.map(message => ({ id: message.id, messageType: message.messageType })))
+        .toEqual([
+          { id: '普通系统通知', messageType: 'system' },
+          { id: '普通原消息', messageType: 'text' },
+          { id: '普通事件名正文', messageType: 'text' },
+        ]);
+    } finally {
+      await bridge.disconnect();
+    }
+  });
+
   it('连接重新建立时不应在当前进程自动 reattach', async () => {
     const mockCdp = new MockCdpClient();
     const bridge = new KK9EventBridge(defaultConfig, mockCdp as unknown as CdpClient);

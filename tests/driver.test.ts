@@ -85,6 +85,58 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     expect(history.map(message => message.direction)).toEqual(['inbound', 'outbound', 'unknown']);
   });
 
+  it('原生身份为空时，实时与历史均不得沿用配置 UID 判断本人', async () => {
+    const driver = new KK9Driver({
+      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
+      currentUserId: '91001',
+    });
+    const { cdp, eventBridge } = getDriverTestInternals<{ eventBridge: KK9EventBridge }>(driver);
+    vi.spyOn(cdp, 'connect').mockResolvedValue();
+    vi.spyOn(cdp, 'getStatus').mockReturnValue('connected');
+    vi.spyOn(driver, 'getCurrentUserId').mockResolvedValue(null);
+    vi.spyOn(eventBridge, 'reattach').mockResolvedValue(true);
+    const session: KK9Session = {
+      id: '93001', name: '员工', type: 'private', nativeType: 0, receiverId: '91002', unread: false,
+    };
+    const raw = [{ id: 1001, sessionID: 93001, sender: 91001, contentType: 4, content: '合成消息' }];
+    await driver.connect();
+    try {
+      expect(eventBridge.parseRawMessage(raw, session).map(message => message.direction)).toEqual(['unknown']);
+      vi.spyOn(cdp, 'evaluate').mockResolvedValueOnce({ code: 0, data: raw });
+      expect((await driver.getRecentMessages(session, 1)).map(message => message.direction)).toEqual(['unknown']);
+    } finally {
+      await driver.disconnect();
+    }
+  });
+
+  it('轮询跳过历史撤回记录与通知，普通文本和其他系统通知仍正常派发', async () => {
+    const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
+    const internals = getDriverTestInternals(driver);
+    const session: KK9Session = {
+      id: '93001', name: '员工', type: 'private', nativeType: 0, receiverId: '91002', unread: false,
+    };
+    const raw = [
+      { id: 1001, sessionID: 93001, sender: 91002, contentType: 4, msgFlag: 'C1', content: '已撤回原文本' },
+      { id: 1002, sessionID: 93001, sender: 91002, contentType: 6, content: { event: 'CancelMessage', msgID: 1001 } },
+      { id: 1003, sessionID: 93001, sender: 91002, contentType: 4, content: '正常文本' },
+      { id: 1004, sessionID: 93001, sender: 91002, contentType: 6, content: { event: 'OtherNotice', text: '普通系统通知' } },
+    ];
+    const ipc = new FakeIpcRenderer(() => ({ code: 0, data: raw }));
+    internals.cdp.evaluate = (script: string) => runRendererScript(script, {
+      window: { ipcRenderer: ipc }, setTimeout, clearTimeout,
+    });
+    const events: string[] = [];
+    driver.on('message', message => events.push(`消息:${message.id}`));
+    driver.on('at', message => events.push(`提及:${message.id}`));
+    driver.on('recalled', event => events.push(`撤回:${event.messageId}`));
+    const history = await driver.getRecentMessages(session, 10);
+    expect(history.map(message => message.id)).toEqual(['1001', '1002', '1003', '1004']);
+    expect(events).toEqual([]);
+    await internals.collectAndEmitMessages(session, 10);
+    await internals.collectAndEmitMessages(session, 10);
+    expect(events).toEqual(['消息:1003', '消息:1004']);
+  });
+
   it('startPolling 与 stopPolling 应正确切换轮询状态', () => {
     const driver = new KK9Driver({
       cdp: {
@@ -162,7 +214,7 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     });
 
     await internals.collectAndEmitMessages(
-      { id: '1-92001', name: 'test-group', type: 'group', unread: true },
+      { id: '93002', name: 'test-group', type: 'group', nativeType: 1, receiverId: '92001', unread: true },
       10
     );
 
@@ -366,8 +418,8 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     const internals = getDriverTestInternals(driver);
 
     const mockSessions: KK9Session[] = [
-      { id: '0-91002', name: 'test-employee', type: 'private', unread: false },
-      { id: '1-92001', name: 'test-group', type: 'group', unread: true, unreadCount: 3 },
+      { id: '93001', name: 'test-employee', type: 'private', nativeType: 0, receiverId: '91002', unread: false },
+      { id: '93002', name: 'test-group', type: 'group', nativeType: 1, receiverId: '92001', unread: true, unreadCount: 3 },
     ];
 
     internals.bridgeSessionOps.getSessions = vi.fn().mockResolvedValue(mockSessions);
@@ -383,7 +435,7 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
 
     const switched = await driver.selectSession('test-group');
     expect(switched).toBe(true);
-    expect(internals.bridgeSessionOps.selectSession).toHaveBeenCalledWith('1-92001');
+    expect(internals.bridgeSessionOps.selectSession).toHaveBeenCalledWith('93002');
 
     const markRes = await driver.markSessionRead('test-group');
     expect(markRes).toBe(true);

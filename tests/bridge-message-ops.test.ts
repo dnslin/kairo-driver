@@ -92,6 +92,32 @@ describe('BridgeMessageOps 纯数据消息操作测试', () => {
       expect(messages).toMatchObject([{ id: '1001', messageId: '1001', msgIdx: 9, sessionId: '93001', sessionName: '员工甲', sessionType: 'private', content: '历史正文', direction: 'inbound' }]);
     });
 
+    it.each(['C', 'D', 'C原生后缀', 'D原生后缀'])('历史保留%s已撤回原消息的正文、类型、ID和索引', async msgFlag => {
+      const data = [
+        { id: 1001, msgIdx: 9, sessionID: 93001, sender: 91002, contentType: 4, content: '原文本', msgFlag },
+        { id: 1002, msgIdx: 10, sessionID: 93001, sender: 91002, contentType: 1, content: {}, msgFlag },
+        { id: 1003, msgIdx: 11, sessionID: 93001, sender: 91002, contentType: 3, content: { filename: '原附件.txt' }, msgFlag },
+      ];
+      const messages = await historyOps(data).getRecentMessages(session, 10, undefined, 91001);
+      expect(messages).toMatchObject([
+        { id: '1001', msgIdx: 9, sessionId: '93001', content: '原文本', messageType: 'text', isRecalled: true, direction: 'inbound' },
+        { id: '1002', msgIdx: 10, messageType: 'image', isRecalled: true },
+        { id: '1003', msgIdx: 11, messageType: 'file', isRecalled: true },
+      ]);
+    });
+
+    it('历史保留普通系统通知与撤回通知自身身份，不把通知当已撤回原消息', async () => {
+      const data = [
+        { id: 1004, msgIdx: 12, sessionID: 93001, contentType: 6, content: { event: 'MemberJoin', msgID: 1001 } },
+        { id: 1005, msgIdx: 13, sessionID: 93001, contentType: 6, content: JSON.stringify({ event: 'CancelMessage', msgID: 1001 }) },
+      ];
+      const messages = await historyOps(data).getRecentMessages(session, 10);
+      expect(messages).toMatchObject([
+        { id: '1004', msgIdx: 12, sessionId: '93001', messageType: 'system', origin: 'system', direction: 'unknown', isRecalled: false },
+        { id: '1005', msgIdx: 13, sessionId: '93001', messageType: 'system', origin: 'system', direction: 'unknown', isRecalled: false },
+      ]);
+    });
+
     it('原生缺页不猜测补页，空页与失败可区分', async () => {
       const page = [{ id: 1001, msgIdx: 5, sessionID: 93001, sender: 91002, content: '前一条' }, { id: 1002, msgIdx: 9, sessionID: 93001, sender: 91002, content: '后一条' }];
       expect((await historyOps(page).getRecentMessages(session, 10)).map(message => message.msgIdx)).toEqual([5, 9]);

@@ -645,6 +645,7 @@ export class KK9EventBridge extends EventEmitter {
         if (!nativeAttached) throw new Error('原生消息接收通道不可用');
         const unbindFns = [];
         const hookedSessions = new Set();
+        const knownSessions = new Map();
         let observer = null;
         const cleanup = () => {
           active = false;
@@ -719,36 +720,41 @@ export class KK9EventBridge extends EventEmitter {
           unbindFns.push(() => bus.$off(event, handler));
         }
 
-        function forwardRecallCandidates(payload, sessionId) {
+        function forwardRecallCandidates(payload, session) {
           if (!payload) return;
-          // 只传递原始范围和候选消息，由Node侧统一识别撤回和公开会话编号。
-          // 候选必须放入message，避免普通历史消息的msgID被当作显式撤回目标。
+          // 候选放入message，普通历史记录不会被当作显式撤回目标。
           postEvent('recalled', {
-            sessionId: sessionId ?? payload.sessionId,
-            sesUUID: payload.sesUUID,
-            sessionID: payload.sessionID,
-            session: payload.session,
+            sessionID: payload.sessionID ?? session?.id,
+            session: payload.session ?? session,
             message: payload.message ?? payload.messages ?? payload,
           });
         }
 
-        function hookSession(sesUUID) {
-          if (!sesUUID || hookedSessions.has(sesUUID) || !bus || typeof bus.$on !== 'function') return;
+        function hookSession(session) {
+          const sesUUID = session?.sesUUID;
+          if (!sesUUID || !bus || typeof bus.$on !== 'function') return;
+          if (session.id !== undefined && session.id !== null && String(session.id).trim()) {
+            knownSessions.set(sesUUID, session);
+          }
+          if (hookedSessions.has(sesUUID)) return;
           hookedSessions.add(sesUUID);
-
           // 监听会话增量消息
           onBus(sesUUID + '-msg', (msgArray) => {
-            forwardRecallCandidates(msgArray, sesUUID);
+            forwardRecallCandidates(msgArray, knownSessions.get(sesUUID));
           });
 
           // 监听会话专用撤回事件
           onBus(sesUUID + '-revokeMsg', (revokePayload) => {
             if (!revokePayload) return;
             const msgId = String(revokePayload.msgID || revokePayload.msgId || revokePayload.id || '');
+            const session = revokePayload.session ?? knownSessions.get(sesUUID);
+            const sessionID = revokePayload.sessionID ?? session?.id;
+            if (sessionID === undefined || sessionID === null || !String(sessionID).trim()) return;
             postEvent('recalled', {
               ...revokePayload,
               event: 'CancelMessage',
-              sessionId: sesUUID,
+              session,
+              sessionID,
               sender: resolveSenderName(revokePayload.sender || revokePayload.senderName, msgId, sesUUID),
             });
           });
@@ -771,11 +777,11 @@ export class KK9EventBridge extends EventEmitter {
           // 1. 监听全局 receive-message
           onBus('receive-message', (payload) => {
             if (!payload) return;
-            const sesUUID = payload?.session?.sesUUID || payload?.sesUUID || payload?.sessionId ||
-              (payload?.session?.typeID == null && typeof payload?.sessionID === 'string' ? payload.sessionID : undefined);
-            if (sesUUID) hookSession(sesUUID);
+            const session = payload.session;
+            const sesUUID = session?.sesUUID || payload.sesUUID;
+            if (sesUUID) hookSession({ ...session, sesUUID, id: payload.sessionID ?? session?.id });
 
-            forwardRecallCandidates(payload);
+            forwardRecallCandidates(payload, knownSessions.get(sesUUID));
 
           });
 
@@ -784,9 +790,14 @@ export class KK9EventBridge extends EventEmitter {
             if (!payload) return;
             const msgId = String(payload.msgID || payload.msgId || payload.id || '');
             const lookupSessionId = payload.session?.sesUUID || payload.sesUUID || payload.sessionId || payload.sessionID;
+            const session = payload.session?.id != null ? payload.session : knownSessions.get(lookupSessionId);
+            const sessionID = payload.sessionID ?? session?.id;
+            if (sessionID === undefined || sessionID === null || !String(sessionID).trim()) return;
             postEvent('recalled', {
               ...payload,
               event: 'CancelMessage',
+              session,
+              sessionID,
               sender: resolveSenderName(payload.sender || payload.senderName || payload.fromUserName, msgId, lookupSessionId),
             });
           });
@@ -796,11 +807,11 @@ export class KK9EventBridge extends EventEmitter {
           const sortedSessions = editor?.sortedSessions || [];
           if (Array.isArray(sortedSessions)) {
             sortedSessions.forEach(s => {
-              if (s && s.sesUUID) hookSession(s.sesUUID);
+              if (s && s.sesUUID) hookSession(s);
             });
           }
           if (editor?.activedSes?.sesUUID) {
-            hookSession(editor.activedSes.sesUUID);
+            hookSession(editor.activedSes);
           }
         }
 
@@ -819,14 +830,18 @@ export class KK9EventBridge extends EventEmitter {
                 if (data && (data.msgID || data.msgId || data.id)) {
                   const msgId = String(data.msgID || data.msgId || data.id);
                   const lookupSessionId = vm.sesInfo?.sesUUID || vm.sessionID || '';
-                  postEvent('recalled', {
-                    ...data,
-                    event: 'CancelMessage',
-                    session: vm.sesInfo ?? data.session,
-                    sessionId: vm.sesInfo?.sesUUID ?? data.sessionId,
-                    sessionID: vm.sessionID ?? data.sessionID,
-                    sender: resolveSenderName(data.sender || vm.loginID || myUid, msgId, lookupSessionId),
-                  });
+                  const session = vm.sesInfo?.id != null ? vm.sesInfo :
+                    knownSessions.get(vm.sesInfo?.sesUUID) ?? data.session;
+                  const sessionID = data.sessionID ?? vm.sessionID ?? session?.id;
+                  if (sessionID !== undefined && sessionID !== null && String(sessionID).trim()) {
+                    postEvent('recalled', {
+                      ...data,
+                      event: 'CancelMessage',
+                      session,
+                      sessionID,
+                      sender: resolveSenderName(data.sender || vm.loginID || myUid, msgId, lookupSessionId),
+                    });
+                  }
                 }
                 return origAdd.apply(this, arguments);
               };

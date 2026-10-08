@@ -92,6 +92,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'group_999',
         name: 'test-group',
         type: 'group',
+        nativeType: 1,
+        receiverId: '92001',
         unread: true,
       });
 
@@ -152,6 +154,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'group_999',
         name: '测试群',
         type: 'group',
+        nativeType: 1,
+        receiverId: '92001',
         unread: true,
       });
 
@@ -193,6 +197,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'session-image',
         name: '图片会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       });
 
@@ -230,6 +236,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'session-reply',
         name: '回复会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       });
 
@@ -267,6 +275,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'session-file',
         name: '文件会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       });
 

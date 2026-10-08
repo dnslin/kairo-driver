@@ -67,6 +67,8 @@ const pollingSession: KK9Session = {
   id: 'session-polling-213',
   name: '隐私测试会话',
   type: 'private',
+  nativeType: 0,
+  receiverId: 'employee-213',
   unread: true,
 };
 

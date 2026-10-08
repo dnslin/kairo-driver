@@ -559,6 +559,8 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         id: 'ses_poll_all',
         name: '轮询综合会话',
         type: 'private' as const,
+        nativeType: 0,
+        receiverId: '91002',
         unread: true,
       };
       const parsedMessages = await domMessageOps.getRecentMessages(
@@ -621,8 +623,8 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
 
       const emittedMessages: KK9Message[] = [];
       driver.on('message', message => emittedMessages.push(message));
-      const sessionA = { id: 'session-a', name: '会话 A', type: 'private' as const, unread: true };
-      const sessionB = { id: 'session-b', name: '会话 B', type: 'private' as const, unread: true };
+      const sessionA = { id: 'session-a', name: '会话 A', type: 'private' as const, nativeType: 0, receiverId: '91002', unread: true };
+      const sessionB = { id: 'session-b', name: '会话 B', type: 'private' as const, nativeType: 0, receiverId: '91003', unread: true };
       const messagesA = await domMessageOps.getRecentMessages(
         10,
         sessionA,
