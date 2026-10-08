@@ -44,7 +44,7 @@ import type {
   SendOptions,
   SendResult,
 } from '../types/index.js';
-import { SendError } from '../utils/errors.js';
+import { DriverError, SendError } from '../utils/errors.js';
 import { createChildLogger } from '../utils/logger.js';
 
 const log = createChildLogger('bridge-message-ops');
@@ -144,9 +144,6 @@ function buildMentionNodes(mentions?: SendOptions['mentions']): Array<Record<str
   return nodes;
 }
 
-export type BridgeMessageReadResult =
-  | { kind: 'ok'; value: KK9Message[] }
-  | { kind: 'unavailable'; error: string };
 
 export class BridgeMessageOps {
   private readonly sendOperationStore: SendOperationStore;
@@ -224,117 +221,38 @@ export class BridgeMessageOps {
     return sendOperationRecordToResult(operation);
   }
 
-  /**
-   * 优先通过底层 IPC toData('getMessages') 读取指定会话最近消息（无需切换 UI）
-   */
+  /** 指定原生会话读取历史；空页正常返回，失败抛错，不依赖或回退聊天窗口。 */
   public async getRecentMessages(
+    session: KK9Session,
     limit = 20,
-    session?: KK9Session,
     knownBotSentMessageKeys?: Set<string>,
     currentUserId?: string | number
   ): Promise<KK9Message[]> {
-    const result = await this.getRecentMessagesResult(
-      limit,
-      session,
-      knownBotSentMessageKeys,
-      currentUserId
-    );
-    return result.kind === 'ok' ? result.value : [];
-  }
-
-  public async getRecentMessagesResult(
-    limit = 20,
-    session?: KK9Session,
-    knownBotSentMessageKeys?: Set<string>,
-    currentUserId?: string | number
-  ): Promise<BridgeMessageReadResult> {
-    try {
-      const encodedSession = encodeRendererPayload(session || null);
-      const sessionContext = await this.cdp.evaluate<{
-        sessionID: number | string;
-        maxMsgIdx: number;
-        sesUUID: string;
-        name: string;
-        type: number;
-      } | null>(`
-        (() => {
-          const targetSession = JSON.parse(decodeURIComponent(${encodedSession}));
-          const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-          ${RENDERER_SESSION_RESOLVER_SCRIPT}
-          const matched = targetSession
-            ? resolveRendererSessionIdentity(
-                editor?.sortedSessions,
-                targetSession.id,
-                targetSession.name
-              )
-            : editor?.activedSes;
-
-          if (!matched) return null;
-          return {
-            sessionID: matched.id,
-            maxMsgIdx: matched.maxMessageIndex ?? 2147483647,
-            sesUUID: matched.sesUUID || String(matched.id),
-            name: matched.typeName || matched.name || matched.createrName || '未知会话',
-            type: matched.type || 0
-          };
-        })()
-      `);
-
-      if (!sessionContext) {
-        return {
-          kind: 'unavailable',
-          error: session ? `目标会话无法唯一解析 [${session.id}]` : '当前无激活会话',
-        };
-      }
-
-      const response = await callIpcToData<unknown[]>(this.cdp, 'getMessages', [
-        {
-          sessionID: sessionContext.sessionID,
-          count: Math.max(1, limit),
-          endIdx: sessionContext.maxMsgIdx,
-          sendTime: 0,
-        },
-      ]);
-
-      if (response.code !== 0 || !Array.isArray(response.data)) {
-        return {
-          kind: 'unavailable',
-          error: response.error || response.message || 'getMessages 未返回有效数组',
-        };
-      }
-
-      const isGroup = sessionContext.type === 1 || sessionContext.type === 2;
-      const messages = normalizeNativeMessage(
-        {
-          messages: response.data,
-          session: {
-            id: sessionContext.sesUUID,
-            name: sessionContext.name,
-            type: isGroup ? 'group' : 'private',
-          },
-        },
-        {
-          currentUserId,
-          knownBotSentMessageKeys,
-          source: 'polling',
-          onDiagnostic: (diagnostic: InboundNormalizationDiagnostic) => {
-            log.warn(
-              {
-                kind: diagnostic.kind,
-                missingFields: diagnostic.missingFields,
-                sessionId: diagnostic.sessionId,
-              },
-              '丢弃缺少入站身份字段的消息'
-            );
-          },
-        }
-      );
-      return { kind: 'ok', value: messages };
-    } catch (err) {
-      const error = String(err);
-      log.warn({ err: error }, 'Bridge 获取历史消息异常');
-      return { kind: 'unavailable', error };
+    const sessionId = session?.id?.trim();
+    if (!sessionId || !/^-?[0-9]+$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId))) {
+      throw new DriverError('历史读取必须指定原生会话 ID', 'INVALID_SESSION_ID');
     }
+    const response = await callIpcToData<unknown[]>(this.cdp, 'getMessages', [{
+      sessionID: Number(sessionId), count: Math.max(1, limit), endIdx: 2147483647, sendTime: 0,
+    }]);
+    if (response.code !== 0) {
+      throw new DriverError(`getMessages 会话 ${sessionId} 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
+    }
+    if (!Array.isArray(response.data)) {
+      throw new DriverError(`getMessages 会话 ${sessionId} 未返回有效数组`, 'IPC_INVALID_RESPONSE');
+    }
+    return normalizeNativeMessage(
+      { messages: response.data, session: { id: sessionId, name: session.name, type: session.type } },
+      {
+        currentUserId,
+        session,
+        knownBotSentMessageKeys,
+        source: 'history',
+        onDiagnostic: (diagnostic: InboundNormalizationDiagnostic) => {
+          log.warn({ kind: diagnostic.kind, missingFields: diagnostic.missingFields, sessionId: diagnostic.sessionId }, '丢弃缺少原生消息身份的历史记录');
+        },
+      }
+    );
   }
 
   /**
@@ -443,7 +361,7 @@ export class BridgeMessageOps {
           senderName: myName,
           senderNameEN: myName,
           senderNameTC: myName,
-          receiver: targetSes.typeID || targetSes.sesTypeID,
+          receiver: resolveRendererReceiver(targetSes, myUid),
           sendTime: Math.floor(Date.now() / 1000),
           sessionType: targetSes.type,
           sessionID: targetSes.id,
@@ -625,7 +543,7 @@ export class BridgeMessageOps {
           senderName: myName,
           senderNameEN: myName,
           senderNameTC: myName,
-          receiver: targetSes.typeID || targetSes.sesTypeID,
+          receiver: resolveRendererReceiver(targetSes, myUid),
           sendTime: Math.floor(Date.now() / 1000),
           sessionType: targetSes.type,
           sessionID: targetSes.id,
@@ -780,7 +698,7 @@ export class BridgeMessageOps {
           senderName: myName,
           senderNameEN: myName,
           senderNameTC: myName,
-          receiver: targetSes.typeID || targetSes.sesTypeID,
+          receiver: resolveRendererReceiver(targetSes, myUid),
           sendTime: Math.floor(Date.now() / 1000),
           sessionType: targetSes.type,
           sessionID: targetSes.id,

@@ -621,8 +621,8 @@ describe('KK9Driver 五类原生媒体门面', () => {
     internals.cdp = native.cdp;
     internals.bridgeMessageOps = new BridgeMessageOps(native.cdp);
     internals.bridgeSessionOps.getSessions = vi.fn().mockResolvedValue([
-      { id: session.sesUUID, name: session.name, type: 'private', unread: false },
-      { id: other.sesUUID, name: other.name, type: 'private', unread: false },
+      { id: String(session.id), name: session.name, type: 'private', nativeType: 0, receiverId: String(session.typeID), unread: false },
+      { id: String(other.id), name: other.name, type: 'private', nativeType: 0, receiverId: String(other.typeID), unread: false },
     ]);
     vi.mocked(prepareVoice).mockImplementation(() => {
       native.runtime.editor.activedSes = other;
@@ -631,7 +631,7 @@ describe('KK9Driver 五类原生媒体门面', () => {
     const result = await driver.sendVoice({ text: '只发给开始时的当前会话' });
     expect(result.status).toBe('delivered');
     expect(native.sent[0]?.['sessionID']).toBe(session.id);
-    expect(driver.isBotSentMessageId(session.sesUUID, result.messageId!)).toBe(true);
-    expect(driver.isBotSentMessageId(other.sesUUID, result.messageId!)).toBe(false);
+    expect(driver.isBotSentMessageId(String(session.id), result.messageId!)).toBe(true);
+    expect(driver.isBotSentMessageId(String(other.id), result.messageId!)).toBe(false);
   });
 });

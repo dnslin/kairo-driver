@@ -268,7 +268,7 @@ export async function sendNativeImage(
         senderName: myName,
         senderNameEN: myName,
         senderNameTC: myName,
-        receiver: targetSes.typeID || targetSes.sesTypeID,
+        receiver: resolveRendererReceiver(targetSes, myUid),
         sendTime: Math.floor(Date.now() / 1000),
         sessionType: targetSes.type,
         sessionID: targetSes.id,

@@ -40,10 +40,6 @@ interface RawMessage extends Record<string, unknown> {
   content?: unknown;
 }
 
-interface NativeSession {
-  id: string | number;
-}
-
 const steps: StepResult[] = [];
 const recallTargets: RecallTarget[] = [];
 const recalledKeys = new Set<string>();
@@ -121,26 +117,13 @@ const driver = new KK9Driver({
 });
 const cdp = (driver as unknown as { cdp: CdpClient }).cdp;
 
-async function exactNativeSession(sessionId: string): Promise<NativeSession> {
-  const session = await cdp.evaluate<NativeSession | null>(`
-    (() => {
-      const target = ${JSON.stringify(sessionId)};
-      const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-      const sessions = Array.isArray(editor?.sortedSessions) ? editor.sortedSessions : [];
-      const found = sessions.find(item => item.sesUUID === target || String(item.id) === target);
-      return found ? { id: found.id } : null;
-    })()
-  `);
-  if (!session) throw new Error(`未找到精确 native 会话 ${sessionId}`);
-  return session;
-}
 
 async function readRawMessages(sessionId: string, count = 100): Promise<RawMessage[]> {
-  const session = await exactNativeSession(sessionId);
+  if (!/^-?[0-9]+$/.test(sessionId)) throw new Error(`必须指定原生会话 ID ${sessionId}`);
   const response = await callIpcToData<RawMessage[]>(
     cdp,
     'getMessages',
-    [{ sessionID: session.id, count, endIdx: 2147483647, sendTime: 0 }],
+    [{ sessionID: Number(sessionId), count, endIdx: 2147483647, sendTime: 0 }],
     5000
   );
   if (response.code !== 0 || !Array.isArray(response.data)) {
@@ -389,7 +372,7 @@ try {
 
   await sleep(1000);
   const privateMessages = await requiredStep('真实回读私聊历史', () =>
-    driver.getRecentMessages(100, privateSession)
+    driver.getRecentMessages(privateSession, 100)
   );
   await requiredStep('确认私聊文本落库', () => {
     if (!findMessage(privateMessages, privateTextResult.messageId)) {
@@ -412,7 +395,7 @@ try {
   });
 
   const groupMessages = await requiredStep('真实回读群聊历史', () =>
-    driver.getRecentMessages(100, groupSession)
+    driver.getRecentMessages(groupSession, 100)
   );
   await requiredStep('确认群聊文本落库且无群体提醒', () => {
     const message = findMessage(groupMessages, groupTextResult.messageId);

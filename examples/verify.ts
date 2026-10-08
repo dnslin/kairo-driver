@@ -27,22 +27,20 @@ async function main() {
     const sessions = await driver.getSessions();
     console.log(`   ✅ 成功获取 ${sessions.length} 个会话\n`);
 
-    // 3. 私聊目标验证
-    console.log(`3. 私聊切换与消息读取 (目标: ${privateTarget})...`);
-    const pSwitched = await driver.selectSession(privateTarget);
-    console.log(`   私聊会话切换: ${pSwitched ? '✅ 成功' : '⚠️ 未命中'}`);
-    const pMsgs = await driver.getRecentMessages(3);
+    const privateSession = sessions.find(session => session.id === privateTarget && session.type === 'private');
+    const groupSession = sessions.find(session => session.id === groupTarget && session.type === 'group');
+    if (!privateSession || !groupSession) throw new Error('授权私聊或群聊的原生会话 ID 不匹配');
+
+    console.log(`3. 指定私聊原生历史读取 (目标: ${privateTarget})...`);
+    const pMsgs = await driver.getRecentMessages(privateSession, 3);
     console.log(`   检索到 ${pMsgs.length} 条私聊消息`);
-    pMsgs.forEach(m => console.log(`   - [${m.isMe ? '我' : m.sender}] ${m.time}: ${m.content.slice(0, 30)}`));
+    pMsgs.forEach(message => console.log(JSON.stringify({ id: message.id, sessionId: message.sessionId, msgIdx: message.msgIdx })));
     console.log();
 
-    // 4. 群聊目标验证
-    console.log(`4. 群聊切换与消息读取 (目标: ${groupTarget})...`);
-    const gSwitched = await driver.selectSession(groupTarget);
-    console.log(`   群聊会话切换: ${gSwitched ? '✅ 成功' : '⚠️ 未命中'}`);
-    const gMsgs = await driver.getRecentMessages(3);
+    console.log(`4. 指定群聊原生历史读取 (目标: ${groupTarget})...`);
+    const gMsgs = await driver.getRecentMessages(groupSession, 3);
     console.log(`   检索到 ${gMsgs.length} 条群聊消息`);
-    gMsgs.forEach(m => console.log(`   - [${m.sender}] ${m.time}: ${m.content.slice(0, 30)}`));
+    gMsgs.forEach(message => console.log(JSON.stringify({ id: message.id, sessionId: message.sessionId, msgIdx: message.msgIdx })));
     console.log();
 
     // 5. 组织架构查询

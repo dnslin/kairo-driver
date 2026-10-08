@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
-import type { KK9Employee, KK9Session } from '../src/types/index.js';
+import type { KK9Employee, KK9Message, KK9Session } from '../src/types/index.js';
 
 describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
   let driver: FakeKK9Driver;
@@ -192,8 +192,8 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
 
   it('会话管理与组织架构模拟数据装载', async () => {
     const mockSessions: KK9Session[] = [
-      { id: '0-91002', name: 'test-employee', type: 'private', unread: false },
-      { id: '1-92001', name: 'test-group', type: 'group', unread: true, unreadCount: 1 },
+      { id: '93001', name: 'test-employee', type: 'private', nativeType: 0, receiverId: '91001', unread: false },
+      { id: '93002', name: 'test-group', type: 'group', nativeType: 1, receiverId: '92001', unread: true, unreadCount: 1 },
     ];
     driver.setSessions(mockSessions);
 
@@ -225,10 +225,24 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     const user = await driver.getUserProfile(91001);
     expect(user?.name).toBe('测试员工');
 
-    const fromSesId = await driver.getEmployeeBySession('0-91001');
+    const fromSesId = await driver.getEmployeeBySession('93001');
     expect(fromSesId?.loginName).toBe('TEST-EMP-001');
 
-    const fromGroup = await driver.getEmployeeBySession('1-92001');
+    const fromGroup = await driver.getEmployeeBySession('93002');
     expect(fromGroup).toBeNull();
+  });
+  it('历史按原生会话隔离且不重放实时事件，不以当前窗口选择目标', async () => {
+    const first: KK9Session = { id: '93001', name: '甲', type: 'private', nativeType: 0, receiverId: '91002', unread: false };
+    const second: KK9Session = { ...first, id: '93002', name: '乙', receiverId: '91003' };
+    const message: KK9Message = { id: '1001', messageId: '1001', msgIdx: 5, sessionId: first.id, sessionName: first.name, sessionType: first.type, sender: '甲', content: '甲的历史', time: '12:00', isMe: false, direction: 'inbound', timestamp: 100 };
+    driver.setSessions([first, second]);
+    driver.setMessages([message, { ...message, id: '1002', sessionId: second.id, content: '乙的历史' }]);
+    await driver.selectSession(second.id);
+    const events: unknown[] = [];
+    driver.on('message', item => events.push(item));
+    const history = await driver.getRecentMessages(first, 1);
+    expect(history.map(item => ({ id: item.id, sessionId: item.sessionId, content: item.content }))).toEqual([{ id: '1001', sessionId: '93001', content: '甲的历史' }]);
+    expect(events).toEqual([]);
+    await expect(driver.getRecentMessages({ ...first, id: '93003' }, 1)).resolves.toEqual([]);
   });
 });

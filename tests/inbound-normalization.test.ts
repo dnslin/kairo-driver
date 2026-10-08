@@ -11,7 +11,9 @@ import { KK9EventBridge } from '../src/bridge/event-bridge.js';
 import type { CdpClient } from '../src/cdp/client.js';
 import { KK9Driver } from '../src/driver.js';
 import type { ConnectionStatus, KK9Message } from '../src/types/index.js';
-import { getDriverTestInternals, getMessageOpsTestInternals } from './helpers/driver-internals.js';
+import { getDriverTestInternals } from './helpers/driver-internals.js';
+import { MessageOps } from '../src/dom/message-ops.js';
+import { DEFAULT_SELECTORS } from '../src/dom/selectors.js';
 
 class MockCdpClient extends EventEmitter {
   private status: ConnectionStatus = 'connected';
@@ -495,13 +497,10 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         currentUserId,
       });
       const internals = getDriverTestInternals<{ cdp: MockCdpClient }>(driver);
-      const messageOpsInternals = getMessageOpsTestInternals<MockCdpClient>(
-        internals.domMessageOps
-      );
+      const domMessageOps = new MessageOps(mockCdp as unknown as CdpClient, DEFAULT_SELECTORS);
 
       // 将 driver 内部的 cdpClient 替换为 MockCdpClient 进行底层 evaluate 拦截
       internals.cdp = mockCdp;
-      messageOpsInternals.cdp = mockCdp;
       // 登记已发送的 Bot 消息身份键
       driver.recordBotSentMessageId('ses_poll_all', 'poll_bot_echo_1');
 
@@ -560,16 +559,18 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         id: 'ses_poll_all',
         name: '轮询综合会话',
         type: 'private' as const,
+        nativeType: 0,
+        receiverId: '91002',
         unread: true,
       };
-      const parsedMessages = await internals.domMessageOps.getRecentMessages(
+      const parsedMessages = await domMessageOps.getRecentMessages(
         10,
         pollingSession,
         new Set(['ses_poll_all:poll_bot_echo_1']),
         currentUserId
       );
       Object.assign(internals.bridgeMessageOps, {
-        getRecentMessagesResult: vi.fn().mockResolvedValue({ kind: 'ok', value: parsedMessages }),
+        getRecentMessages: vi.fn().mockResolvedValue(parsedMessages),
       });
 
       await internals.collectAndEmitMessages(pollingSession, 10);
@@ -601,12 +602,9 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         currentUserId,
       });
       const internals = getDriverTestInternals<{ cdp: MockCdpClient }>(driver);
-      const messageOpsInternals = getMessageOpsTestInternals<MockCdpClient>(
-        internals.domMessageOps
-      );
+      const domMessageOps = new MessageOps(mockCdp as unknown as CdpClient, DEFAULT_SELECTORS);
 
       internals.cdp = mockCdp;
-      messageOpsInternals.cdp = mockCdp;
 
       mockCdp.evaluateMock.mockImplementation((script: string) =>
         script.includes('extractContent')
@@ -625,25 +623,25 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
 
       const emittedMessages: KK9Message[] = [];
       driver.on('message', message => emittedMessages.push(message));
-      const sessionA = { id: 'session-a', name: '会话 A', type: 'private' as const, unread: true };
-      const sessionB = { id: 'session-b', name: '会话 B', type: 'private' as const, unread: true };
-      const messagesA = await internals.domMessageOps.getRecentMessages(
+      const sessionA = { id: 'session-a', name: '会话 A', type: 'private' as const, nativeType: 0, receiverId: '91002', unread: true };
+      const sessionB = { id: 'session-b', name: '会话 B', type: 'private' as const, nativeType: 0, receiverId: '91003', unread: true };
+      const messagesA = await domMessageOps.getRecentMessages(
         10,
         sessionA,
         undefined,
         currentUserId
       );
-      const messagesB = await internals.domMessageOps.getRecentMessages(
+      const messagesB = await domMessageOps.getRecentMessages(
         10,
         sessionB,
         undefined,
         currentUserId
       );
       Object.assign(internals.bridgeMessageOps, {
-        getRecentMessagesResult: vi
+        getRecentMessages: vi
           .fn()
-          .mockResolvedValueOnce({ kind: 'ok', value: messagesA })
-          .mockResolvedValueOnce({ kind: 'ok', value: messagesB }),
+          .mockResolvedValueOnce(messagesA)
+          .mockResolvedValueOnce(messagesB),
       });
 
       await internals.collectAndEmitMessages(sessionA, 10);

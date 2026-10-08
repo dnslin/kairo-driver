@@ -80,14 +80,9 @@ export declare interface FakeKK9Driver {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging, no-redeclare
 export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private currentUserId: string | null = null;
-  private currentSession: KK9Session | null = {
-    id: 'session_init',
-    name: '初始化会话',
-    type: 'private',
-    unread: false,
-    unreadCount: 0,
-  };
+  private currentSession: KK9Session | null = null;
   private sessions: KK9Session[] = [];
+  private messages: KK9Message[] = [];
   private employees: KK9Employee[] = [];
   private currentBehavior: FakeSendBehavior = { mode: 'success' };
   private behaviorSequence: FakeSendBehavior[] = [];
@@ -144,6 +139,10 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   public setSessions(sessions: KK9Session[]): void {
     this.sessions = sessions;
   }
+  public setMessages(messages: KK9Message[]): void {
+    this.messages = messages;
+  }
+
 
   public setEmployees(employees: KK9Employee[]): void {
     this.employees = employees;
@@ -153,8 +152,8 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     return Promise.resolve(this.sessions);
   }
 
-  public getRecentMessages(_limit?: number, _session?: KK9Session): Promise<KK9Message[]> {
-    return Promise.resolve([]);
+  public getRecentMessages(session: KK9Session, limit = 20): Promise<KK9Message[]> {
+    return Promise.resolve(this.messages.filter(message => message.sessionId === session.id).slice(-Math.max(1, limit)));
   }
 
   public scanCompensationWindow(_options: CompensationScanOptions): Promise<KK9Message[]> {
@@ -185,27 +184,13 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   public async selectSession(sessionId: string): Promise<boolean> {
     this.selectSessionCallsCount++;
-    if (this.selectSessionHandler) {
-      const ok = await this.selectSessionHandler(sessionId);
-      if (ok) {
-        this.currentSession = {
-          id: sessionId,
-          name: `会话_${sessionId}`,
-          type: 'private',
-          unread: false,
-          unreadCount: 0,
-        };
-      }
-      return ok;
-    }
-    this.currentSession = {
-      id: sessionId,
-      name: `会话_${sessionId}`,
-      type: 'private',
-      unread: false,
-      unreadCount: 0,
-    };
-    return true;
+    const exact = this.sessions.find(session => session.id === sessionId);
+    const names = this.sessions.filter(session => session.name === sessionId);
+    const session = exact ?? (names.length === 1 ? names[0] : undefined);
+    if (!session) return false;
+    const ok = this.selectSessionHandler ? await this.selectSessionHandler(session.id) : true;
+    if (ok) this.currentSession = { ...session, active: true };
+    return ok;
   }
 
   public getCurrentSession(): Promise<KK9Session | null> {
@@ -302,39 +287,12 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null> {
-    if (!session) return null;
-
-    let targetSessionId = '';
-    if (typeof session === 'object') {
-      if (session.type !== 'private') {
-        return null;
-      }
-      targetSessionId = session.id?.trim() || '';
-    } else if (typeof session === 'string') {
-      targetSessionId = session.trim();
-    }
-
-    if (!targetSessionId) return null;
-
-    if (targetSessionId.startsWith('0-')) {
-      const uid = targetSessionId.slice(2).trim();
-      return this.getUserProfile(uid);
-    }
-
-    if (/^[123]-/.test(targetSessionId)) {
-      return null;
-    }
-
-    const matched = this.sessions.find(s => s.id === targetSessionId || s.name === targetSessionId);
-    if (matched && matched.type === 'private' && matched.id.startsWith('0-')) {
-      return this.getUserProfile(matched.id.slice(2).trim());
-    }
-
-    if (/^\d+$/.test(targetSessionId)) {
-      return this.getUserProfile(targetSessionId);
-    }
-
-    return null;
+    const resolved = typeof session === 'string'
+      ? this.sessions.find(item => item.id === session.trim())
+      : session;
+    return resolved?.type === 'private' && resolved.receiverId
+      ? this.getUserProfile(resolved.receiverId)
+      : null;
   }
 
   public startPolling(_customPolling?: Partial<PollingConfig>): void {}

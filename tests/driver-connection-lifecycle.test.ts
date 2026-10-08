@@ -152,6 +152,7 @@ describe('KK9Driver 连接失败资源所有权', () => {
     const cleanupError = new Error('Hook失败后的底层关闭失败');
     vi.spyOn(cdp, 'connect').mockResolvedValue();
     vi.spyOn(cdp, 'getStatus').mockReturnValue('connected');
+    vi.spyOn(driver, 'getCurrentUserId').mockResolvedValue('91001');
     vi.spyOn(cdp, 'sendCommand').mockResolvedValue({});
     vi.spyOn(cdp, 'evaluate').mockRejectedValueOnce(hookError).mockResolvedValue({ owned: true });
     vi.spyOn(cdp, 'disconnect').mockRejectedValue(cleanupError);

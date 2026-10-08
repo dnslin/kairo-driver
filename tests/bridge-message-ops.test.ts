@@ -70,126 +70,66 @@ describe('BridgeMessageOps 纯数据消息操作测试', () => {
     });
   });
 
-  describe('getRecentMessages 消息历史拉取', () => {
-    it('应在私聊会话 test-employee 中通过 IPC getMessages 提取并标准化历史消息', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockImplementation((script: string) => {
-          if (script.includes('targetSession')) {
-            return Promise.resolve({
-              sessionID: 93001,
-              maxMsgIdx: 10,
-              sesUUID: '0-91002',
-              name: 'test-employee',
-              type: 0,
-            });
-          }
-          if (script.includes('getMessages')) {
-            return Promise.resolve({
-              code: 0,
-              data: [
-                {
-                  id: 1001,
-                  msgIdx: 9,
-                  sender: 91006,
-                  senderName: 'test-employee',
-                  contentType: 4,
-                  content: { content: [{ type: 0, text: '私聊问题咨询' }] },
-                  sendTime: 1788142780,
-                },
-                {
-                  id: 1002,
-                  msgIdx: 10,
-                  sender: 91001,
-                  senderName: '我',
-                  isFromSelf: true,
-                  contentType: 4,
-                  content: { content: [{ type: 0, text: '收到，正在核实' }] },
-                  sendTime: 1788142800,
-                },
-              ],
-            });
-          }
-          return Promise.resolve(null);
-        }),
-      } as unknown as CdpClient;
+  describe('指定原生会话读取历史', () => {
+    const session = { id: '93001', name: '员工甲', type: 'private' as const, nativeType: 0, receiverId: '91002', unread: false };
+    function historyOps(data: unknown, code = 0, activeWindow = false) {
+      const ipc = new FakeIpcRenderer(request => {
+        const query = request.args[1] as { sessionID: number; count: number; endIdx: number };
+        if (request.args[0] !== 'getMessages') throw new Error('历史只能调用 getMessages');
+        return query.sessionID === 93001 && query.count === 10 && query.endIdx === 2147483647
+          ? { code, data, error: code ? '原生历史查询失败' : undefined }
+          : { code: 0, data: [{ id: 9999, sessionID: 93002, sender: 91003, content: '其他会话' }] };
+      });
+      const context = activeWindow
+        ? createRendererRuntime({ ipc, sessions: [{ id: 93002, sesUUID: '0-91003', type: 0 }] }).context
+        : { window: { ipcRenderer: ipc }, setTimeout, clearTimeout };
+      return new BridgeMessageOps({ evaluate: (script: string) => runRendererScript(script, context) } as unknown as CdpClient);
+    }
 
-      const ops = new BridgeMessageOps(mockCdp);
-      const messages = await ops.getRecentMessages(
-        10,
-        {
-          id: '0-91002',
-          name: 'test-employee',
-          type: 'private',
-          unread: false,
-        },
-        undefined,
-        91001
-      );
-
-      expect(messages).toHaveLength(2);
-      expect(messages[0]?.sender).toBe('test-employee');
-      expect(messages[0]?.content).toBe('私聊问题咨询');
-      expect(messages[0]?.sessionName).toBe('test-employee');
-      expect(messages[0]?.sessionType).toBe('private');
-
-      expect(messages[1]?.isMe).toBe(true);
-      expect(messages[1]?.content).toBe('收到，正在核实');
+    it.each([false, true])('聊天组件存在=%s，仍按明确原生会话读取且区分消息 ID 与索引', async activeWindow => {
+      const data = [{ id: 1001, msgIdx: 9, sessionID: 93001, sender: 91002, senderName: '员工甲', contentType: 4, content: { content: [{ type: 0, text: '历史正文' }] }, sendTime: 1788142780 }];
+      const messages = await historyOps(data, 0, activeWindow).getRecentMessages(session, 10, undefined, 91001);
+      expect(messages).toMatchObject([{ id: '1001', messageId: '1001', msgIdx: 9, sessionId: '93001', sessionName: '员工甲', sessionType: 'private', content: '历史正文', direction: 'inbound' }]);
     });
 
-    it('应在群聊会话 test-group 中提取包含 @提及 与 图片附件的消息', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockImplementation((script: string) => {
-          if (script.includes('targetSession')) {
-            return Promise.resolve({
-              sessionID: 93002,
-              maxMsgIdx: 55,
-              sesUUID: '1-92001',
-              name: 'test-group',
-              type: 1,
-            });
-          }
-          if (script.includes('getMessages')) {
-            return Promise.resolve({
-              code: 0,
-              data: [
-                {
-                  id: 2001,
-                  msgIdx: 55,
-                  sender: 91004,
-                  senderName: '张三',
-                  atState: 2,
-                  atMemberIDList: [91001],
-                  contentType: 4,
-                  content: {
-                    content: [
-                      { type: 2, replyMemberID: 91001, replyMemberName: '测试用户' },
-                      { type: 0, text: '请查看当前附件图片' },
-                      { type: 1, filepath: 'C:\\cache\\img1.png', mimetype: 'image/png' },
-                    ],
-                  },
-                  sendTime: 1788143000,
-                },
-              ],
-            });
-          }
-          return Promise.resolve(null);
-        }),
-      } as unknown as CdpClient;
+    it.each(['C', 'D', 'C原生后缀', 'D原生后缀'])('历史保留%s已撤回原消息的正文、类型、ID和索引', async msgFlag => {
+      const data = [
+        { id: 1001, msgIdx: 9, sessionID: 93001, sender: 91002, contentType: 4, content: '原文本', msgFlag },
+        { id: 1002, msgIdx: 10, sessionID: 93001, sender: 91002, contentType: 1, content: {}, msgFlag },
+        { id: 1003, msgIdx: 11, sessionID: 93001, sender: 91002, contentType: 3, content: { filename: '原附件.txt' }, msgFlag },
+      ];
+      const messages = await historyOps(data).getRecentMessages(session, 10, undefined, 91001);
+      expect(messages).toMatchObject([
+        { id: '1001', msgIdx: 9, sessionId: '93001', content: '原文本', messageType: 'text', isRecalled: true, direction: 'inbound' },
+        { id: '1002', msgIdx: 10, messageType: 'image', isRecalled: true },
+        { id: '1003', msgIdx: 11, messageType: 'file', isRecalled: true },
+      ]);
+    });
 
-      const ops = new BridgeMessageOps(mockCdp);
-      const messages = await ops.getRecentMessages(
-        10,
-        { id: '1-92001', name: 'test-group', type: 'group', unread: false },
-        undefined,
-        91001
-      );
+    it('历史保留普通系统通知与撤回通知自身身份，不把通知当已撤回原消息', async () => {
+      const data = [
+        { id: 1004, msgIdx: 12, sessionID: 93001, contentType: 6, content: { event: 'MemberJoin', msgID: 1001 } },
+        { id: 1005, msgIdx: 13, sessionID: 93001, contentType: 6, content: JSON.stringify({ event: 'CancelMessage', msgID: 1001 }) },
+      ];
+      const messages = await historyOps(data).getRecentMessages(session, 10);
+      expect(messages).toMatchObject([
+        { id: '1004', msgIdx: 12, sessionId: '93001', messageType: 'system', origin: 'system', direction: 'unknown', isRecalled: false },
+        { id: '1005', msgIdx: 13, sessionId: '93001', messageType: 'system', origin: 'system', direction: 'unknown', isRecalled: false },
+      ]);
+    });
 
-      expect(messages).toHaveLength(1);
-      expect(messages[0]?.sender).toBe('张三');
-      expect(messages[0]?.sessionType).toBe('group');
-      expect(messages[0]?.atMe).toBe(true);
-      expect(messages[0]?.images).toHaveLength(1);
-      expect(messages[0]?.images?.[0]?.filePath).toBe('C:\\cache\\img1.png');
+    it('原生缺页不猜测补页，空页与失败可区分', async () => {
+      const page = [{ id: 1001, msgIdx: 5, sessionID: 93001, sender: 91002, content: '前一条' }, { id: 1002, msgIdx: 9, sessionID: 93001, sender: 91002, content: '后一条' }];
+      expect((await historyOps(page).getRecentMessages(session, 10)).map(message => message.msgIdx)).toEqual([5, 9]);
+      await expect(historyOps([]).getRecentMessages(session, 10)).resolves.toEqual([]);
+      await expect(historyOps([], 627).getRecentMessages(session, 10)).rejects.toThrow(/getMessages.*93001.*627.*原生历史查询失败/);
+      await expect(historyOps(null).getRecentMessages(session, 10)).rejects.toThrow(/getMessages.*数组/);
+    });
+
+    it('缺少明确会话或传入界面标识时拒绝，不改读当前窗口', async () => {
+      const ops = historyOps([]);
+      await expect(ops.getRecentMessages(undefined as unknown as typeof session, 10)).rejects.toThrow(/会话/);
+      await expect(ops.getRecentMessages({ ...session, id: '0-91002' }, 10)).rejects.toThrow(/原生会话/);
     });
   });
 
@@ -1039,6 +979,22 @@ describe('BridgeMessageOps 纯数据消息操作测试', () => {
   });
 
   describe('目标会话身份优先级', () => {
+    it.each([
+      { creater: 91001, typeID: 91002 },
+      { creater: 91002, typeID: 91001 },
+    ])('原生会话按 ID 路由，对端创建方向 $creater 不误发当前账号或同号 UID', async endpoints => {
+      const ipc = createSuccessfulIpc();
+      const sessions = [
+        { id: 999, sesUUID: '0-93001', type: 0, creater: 91001, typeID: 93001, typeName: '同号 UID' },
+        { id: 93001, sesUUID: '0-91002', type: 0, ...endpoints, typeName: '授权对端' },
+      ];
+      const runtime = createRendererRuntime({ ipc, sessions });
+      const cdp = { evaluate: (script: string) => runRendererScript(script, runtime.context) } as unknown as CdpClient;
+      const result = await new BridgeMessageOps(cdp).sendText('发送路由回归', { targetSessionId: '93001' });
+      expect(result.success).toBe(true);
+      expect(ipc.sent.find(request => request.args[0] === 'sendMessageNew')?.args[1]).toMatchObject({ sessionID: 93001, receiver: 91002, sender: 91001 });
+    });
+
     const targetSessionId = '1-92001';
     const createShadowedSessions = () => [
       { id: 7, sesUUID: 'shadow', typeName: targetSessionId, name: targetSessionId, type: 1 },
@@ -1584,7 +1540,7 @@ describe('BridgeMessageOps 纯数据消息操作测试', () => {
       });
       expect(await store.get('op-insert-lost')).toMatchObject({
         status: 'unknown',
-        fingerprint: { targetSessionId: session.sesUUID },
+        fingerprint: { targetSessionId: String(session.id) },
       });
 
       const status = await new BridgeMessageOps(mockCdp, store).getSendStatus('op-insert-lost');

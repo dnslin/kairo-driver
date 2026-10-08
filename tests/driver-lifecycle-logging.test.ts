@@ -113,7 +113,7 @@ describe('Driver日志真实行为回归', () => {
       runRendererScript(script, runtime.context)
     );
     vi.spyOn(driver, 'getSessions').mockResolvedValue([
-      { id: session.sesUUID, name: '会话', type: 'private', unread: false },
+      { id: String(session.id), name: '会话', type: 'private', nativeType: 0, receiverId: '91002', unread: false },
     ]);
 
     const result = await driver.sendUrlCard({
@@ -123,7 +123,7 @@ describe('Driver日志真实行为回归', () => {
     });
     expect(result).toMatchObject({ success: true, status: 'delivered', messageId: '135700000' });
     expect(nativeSendCount).toBe(1);
-    expect(driver.isBotSentMessageId(session.sesUUID, '135700000')).toBe(true);
+    expect(driver.isBotSentMessageId(String(session.id), '135700000')).toBe(true);
     expect(typeof result.recall).toBe('function');
     expect(warnings).toEqual([
       ['[KairoDriver] 会话摘要更新失败'],
@@ -134,7 +134,7 @@ describe('Driver日志真实行为回归', () => {
         level: 'info',
         status: 'delivered',
         messageId: '135700000',
-        sessionId: session.sesUUID,
+        sessionId: String(session.id),
         runId: config.startupGenerationId,
       }),
     ]);

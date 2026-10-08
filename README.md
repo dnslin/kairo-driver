@@ -2,7 +2,7 @@
 
 面向 KK9 桌面客户端的 TypeScript Driver，通过本机 CDP 连接客户端，提供消息收发、会话管理和组织架构查询。
 
-从 [Kairo](https://github.com/dnslin/kairo) 的 `packages/driver` 独立而来，保留包名 `@kairo/driver` 和现有 API。它是客户端 SDK，需要已登录的 KK9；不包含 Bot 服务、模型调用、知识库或 AstrBot 适配器。
+从 [Kairo](https://github.com/dnslin/kairo) 的 `packages/driver` 独立而来，保留包名 `@kairo/driver`。它是客户端 SDK，需要已登录的 KK9；不包含 Bot 服务、模型调用、知识库或 AstrBot 适配器。
 
 ## 安装与检查
 
@@ -57,6 +57,28 @@ process.once('SIGINT', () => {
 ```
 
 消息事件包含 `inbound`、`outbound` 和 `unknown` 方向。接入 Bot 时只把确认的入站消息交给上层，避免响应自己发出的消息。消息类型、提及、引用及附件字段见 [类型定义](src/types/index.ts)。
+
+## 原生身份与会话
+
+`getCurrentUserId()` 使用无参数原生 `getMemberDetail()` 取得实际登录 UID；`connect()` 也使用该身份，不以配置值代替登录账号。`getSessions()` 使用原生 `getConversations()`，不读取聊天窗口。空会话返回 `[]`，查询失败抛出保留方法、错误码与诊断的 `DriverError`，不会回退 DOM。
+
+会话 `id` 是原生 `sessionID` 的字符串形式；`receiverId` 是私聊对端 UID，其他类型为原生 `typeID`；`nativeType` 保留原生类型数字。`type` 区分 `private`、`group`、`discussion`、`service` 和 `unknown`。原生会话列表不提供窗口 `active` 状态。
+
+例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。发送、撤回和窗口操作使用 `getSessions()` 返回的 `id`。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。窗口接口暂保留，不能把窗口状态当作原生查询的数据来源。
+
+## 指定会话读取历史
+
+`getRecentMessages(session, limit = 20)` 必须传入 `getSessions()` 返回的会话实体，直接把其原生 `id` 传给 `getMessages`，不默认当前聊天，不按名称猜测目标，也不回退可见消息气泡。
+
+```ts
+const session = (await driver.getSessions()).find(item => item.id === nativeSessionId);
+if (!session) throw new Error('未找到指定原生会话');
+const history = await driver.getRecentMessages(session, 10);
+```
+
+`id` / `messageId` 是原生消息 ID，`msgIdx` 是原生消息索引，两者不能互换。历史保留原生撤回状态和系统记录，不派发 `message`、`at` 或 `recalled` 实时事件。空页返回 `[]`，原生失败或无效回包抛错；SDK 不猜测补页或自动重试。原生客户端内部可能补取历史并更新本地缓存；读取不会切换会话或标记已读。
+
+这里只切换主动历史读取；现有自动轮询和补偿扫描的窗口操作尚未在本轮移除，不应将它们用于只读验收。
 
 ## 发送消息
 

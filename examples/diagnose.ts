@@ -107,12 +107,9 @@ async function main() {
       const target = requiredArgument(args[1], '目标会话');
       await driver.connect();
       console.log(`正在后台读取会话 [${target}] 最近 ${count} 条消息 (无需切换UI)...\n`);
-      const msgs = await driver.getRecentMessages(count, {
-        id: target,
-        name: target,
-        type: 'private',
-        unread: false,
-      });
+      const session = (await driver.getSessions()).find(item => item.id === target);
+      if (!session) throw new Error(`未找到原生会话 ID ${target}`);
+      const msgs = await driver.getRecentMessages(session, count);
       msgs.forEach((m, i) => {
         const who = m.isMe ? '我 (发送)' : `${m.sender} (接收)`;
         console.log(`[${i + 1}] ${m.time} | ${who} [${m.origin || 'unknown'}]`);

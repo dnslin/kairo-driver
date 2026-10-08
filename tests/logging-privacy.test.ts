@@ -67,6 +67,8 @@ const pollingSession: KK9Session = {
   id: 'session-polling-213',
   name: '隐私测试会话',
   type: 'private',
+  nativeType: 0,
+  receiverId: 'employee-213',
   unread: true,
 };
 
@@ -158,9 +160,7 @@ describe('Issue #213 日志隐私回归测试', () => {
       sessionId: pollingSession.id,
       messageType: 'file',
     });
-    internals.bridgeMessageOps.getRecentMessagesResult = vi
-      .fn()
-      .mockResolvedValue({ kind: 'ok', value: [message] });
+    internals.bridgeMessageOps.getRecentMessages = vi.fn().mockResolvedValue([message]);
 
     await internals.collectAndEmitMessages(pollingSession, 1);
 
@@ -220,10 +220,9 @@ describe('Issue #213 日志隐私回归测试', () => {
       },
     });
     const driverInternals = getDriverTestInternals(driver);
-    driverInternals.bridgeMessageOps.getRecentMessagesResult = vi.fn().mockResolvedValue({
-      kind: 'ok',
-      value: [createMessage(sensitiveContent, { id: 'debug-polling-message-213' })],
-    });
+    driverInternals.bridgeMessageOps.getRecentMessages = vi.fn().mockResolvedValue([
+      createMessage(sensitiveContent, { id: 'debug-polling-message-213' }),
+    ]);
     await driverInternals.collectAndEmitMessages(pollingSession, 1);
 
     cdp.triggerBinding('__kairo_native_bridge', {

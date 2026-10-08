@@ -15,20 +15,20 @@ import { createRendererRuntime, runRendererScript } from './helpers/renderer-run
 const bindingName = '__kairo_native_bridge';
 const cdpConfig = { url: 'http://127.0.0.1:1', pageMatch: '离线生命周期' };
 
-function createPage(sessionId = '会话') {
+function createPage(sessionId = '会话', nativeSessionId: string | number = sessionId) {
   const bus = new EventEmitter();
   const rendererBus = { $on: bus.on.bind(bus), $off: bus.off.bind(bus) };
   const runtime = createRendererRuntime({
     main: { $bus: rendererBus },
-    sessions: [{ id: sessionId, sesUUID: sessionId }],
+    sessions: [{ id: nativeSessionId, sesUUID: sessionId }],
   });
   const windowObject = runtime.context['window'] as Record<string, unknown>;
   const ipc = new EventEmitter();
   windowObject['ipcRenderer'] = ipc;
-  const originalRevoke = vi.fn();
+  const originalRevoke = vi.fn(() => '原撤回方法结果');
   const chat: {
-    addRevokeMsg: (data: unknown) => void;
-    sesInfo: { sesUUID?: string; id?: number; type?: number; typeID?: number };
+    addRevokeMsg: (data: unknown) => unknown;
+    sesInfo: { sesUUID?: string; id?: string | number; type?: number; typeID?: number };
     __kairo_revoke_active?: boolean;
   } = {
     addRevokeMsg: originalRevoke,
@@ -175,7 +175,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
           direction: message.direction,
         }))
       ).toEqual([
-        { id: confirmed.id, sessionId: '0-91002', content: '原生确认正文', direction: 'outbound' },
+        { id: confirmed.id, sessionId: '716791', content: '原生确认正文', direction: 'outbound' },
       ]);
       expect(beforeReturn).toEqual([true]);
     } finally {
@@ -375,7 +375,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     await bridge.disconnect();
   });
 
-  it.each([0, 1])('原生IPC会话类型%d使用typeID而非数据库行ID，保留正文与入站身份', async type => {
+  it.each([0, 1])('原生IPC会话类型%d使用原生会话ID而非用户UID，保留正文与入站身份', async type => {
     const page = createPage();
     const { bridge } = page.createBridge('原生载荷', '连接', '91001');
     const received: KK9Message[] = [];
@@ -405,7 +405,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({
       id: '136018959',
-      sessionId: `${type}-91002`,
+      sessionId: '716791',
       sessionType: type === 0 ? 'private' : 'group',
       content: 'T26-开始',
       senderId: '91002',
@@ -419,7 +419,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     {
       name: '正文内事件',
       data: {
-        message: [{ sessionID: 716791, content: { event: 'CancelMessage', msgID: '待撤回' } }],
+        message: [{ sessionID: 716791, contentType: 6, content: { event: 'CancelMessage', msgID: '待撤回' } }],
       },
     },
     {
@@ -441,11 +441,11 @@ describe('EventBridge 渲染资源所有权关闭', () => {
         {},
         { args: { ...envelope, message: [{ id: '待撤回', sender: 91002, content: '测试问题' }] } }
       );
-      expect(messages[0]?.sessionId).toBe('0-91002');
+      expect(messages[0]?.sessionId).toBe('716791');
       page.ipc.emit('message', {}, { args: { ...envelope, ...data } });
       page.bus.emit('receive-message', { ...envelope, ...data });
       page.bus.emit('CancelMessage', { ...envelope, msgID: '待撤回' });
-      page.bus.emit('CancelMessage', { msgID: '待撤回', sessionId: '0-91002' });
+      page.bus.emit('CancelMessage', { msgID: '待撤回', sessionID: 716791 });
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
       ).toEqual([{ messageId: messages[0]?.id, sessionId: messages[0]?.sessionId }]);
@@ -454,7 +454,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     }
   });
 
-  it.each(['msg', 'revokeMsg'])('会话%s通道的公开范围不被消息内数据库编号覆盖', async channel => {
+  it.each(['msg', 'revokeMsg'])('会话%s通道使用消息内原生编号而非界面事件名', async channel => {
     const page = createPage('0-91002');
     const { bridge } = page.createBridge('会话撤回', '连接');
     const recalls: KK9RecalledEvent[] = [];
@@ -465,10 +465,83 @@ describe('EventBridge 渲染资源所有权关闭', () => {
       page.bus.emit(`0-91002-${channel}`, channel === 'msg' ? [payload] : payload);
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
-      ).toEqual([{ messageId: '待撤回', sessionId: '0-91002' }]);
+      ).toEqual([{ messageId: '待撤回', sessionId: '716791' }]);
     } finally {
       await bridge.disconnect();
     }
+  });
+
+  it.each(['预挂已知会话', '动态新增会话', '补齐已监听会话'])('%s的本机撤回仅有msgID/msgIdx时沿用已知原生身份，与组件和原生通知只派发一次', async source => {
+    const dynamic = source !== '预挂已知会话';
+    const page = createPage(dynamic ? '已有界面会话' : '0-91002', dynamic ? 800001 : 716791);
+    if (source === '补齐已监听会话') {
+      page.runtime.editor.sortedSessions.push({ id: '', sesUUID: '0-91002' });
+    }
+    page.chat.sesInfo = { sesUUID: '0-91002' };
+    const { bridge } = page.createBridge('本机撤回', '连接');
+    const recalls: KK9RecalledEvent[] = [];
+    bridge.on('recalled', event => recalls.push(event));
+    await bridge.connect();
+    try {
+      if (dynamic) {
+        const session = { id: 716791, sesUUID: '0-91002', type: 0, typeID: 91002 };
+        page.runtime.editor.sortedSessions.push(session);
+        page.bus.emit('receive-message', { session, message: [] });
+      }
+      expect(page.bus.listenerCount('0-91002-revokeMsg')).toBe(1);
+      const localNotice = { msgID: 136018959, msgIdx: 651 };
+      page.bus.emit('0-91002-revokeMsg', localNotice);
+      page.bus.emit('CancelMessage', { ...localNotice, sesUUID: '0-91002' });
+      expect(page.chat.addRevokeMsg(localNotice)).toBe('原撤回方法结果');
+      page.ipc.emit('message', {}, { args: {
+        sessionID: 716791,
+        message: [{ id: 136018960, contentType: 6, content: { event: 'CancelMessage', msgID: 136018959 } }],
+      } });
+      expect(recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId })))
+        .toEqual([{ messageId: '136018959', sessionId: '716791' }]);
+      expect(page.originalRevoke).toHaveBeenCalledOnce();
+      expect(page.originalRevoke).toHaveBeenCalledWith(localNotice);
+    } finally {
+      await bridge.disconnect();
+    }
+    expect(page.bus.listenerCount('0-91002-revokeMsg')).toBe(0);
+    expect(page.chat.addRevokeMsg).toBe(page.originalRevoke);
+    expect(page.ipc.listenerCount('message')).toBe(0);
+  });
+
+  it('仅有界面会话标识的本机与组件撤回不合成原生身份', async () => {
+    const page = createPage('0-91002', '');
+    const { bridge } = page.createBridge('身份缺失', '连接');
+    const recalls: KK9RecalledEvent[] = [];
+    bridge.on('recalled', event => recalls.push(event));
+    await bridge.connect();
+    try {
+      const notice = { msgID: 136018959, msgIdx: 651 };
+      page.bus.emit('0-91002-revokeMsg', notice);
+      page.bus.emit('CancelMessage', { ...notice, sesUUID: '0-91002' });
+      expect(page.chat.addRevokeMsg(notice)).toBe('原撤回方法结果');
+      expect(recalls).toEqual([]);
+      expect(page.originalRevoke).toHaveBeenCalledOnce();
+      expect(page.originalRevoke).toHaveBeenCalledWith(notice);
+    } finally {
+      await bridge.disconnect();
+    }
+  });
+
+  it('单条历史撤回通知只提取正文目标，不使用通知自身ID或普通原记录的msgID', () => {
+    const session = { id: '716791' };
+    expect(extractRecalledEventsFromPayload({
+      id: 136018960, contentType: 6, content: JSON.stringify({ event: 'CancelMessage', msgID: 136018959 }),
+    }, session)).toMatchObject([{ messageId: '136018959', sessionId: '716791' }]);
+    for (const msgFlag of ['C', 'D', 'C后缀', 'D后缀']) {
+      expect(extractRecalledEventsFromPayload({
+        msgID: 136018959, contentType: 4, msgFlag, content: { event: 'CancelMessage', msgID: '错误目标' },
+      }, session)).toEqual([]);
+    }
+    expect(extractRecalledEventsFromPayload({ msgID: 136018959, contentType: 4, content: '普通正文' }, session)).toEqual([]);
+    expect(extractRecalledEventsFromPayload({ msgID: 136018959, contentType: 4, content: { event: 'CancelMessage', msgID: '正文伪目标' } }, session)).toEqual([]);
+    expect(extractRecalledEventsFromPayload({ id: 136018960, contentType: 6, content: { event: 'MemberJoin', msgID: 136018959 } }, session)).toEqual([]);
+    expect(extractRecalledEventsFromPayload({ id: 136018960, contentType: 6, content: { event: 'CancelMessage' } }, session)).toEqual([]);
   });
 
   it('聊天组件保留原生会话范围供统一解析，仍调用原撤回方法', async () => {
@@ -482,7 +555,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
       page.chat.addRevokeMsg({ sessionID: 716791, msgID: '待撤回' });
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
-      ).toEqual([{ messageId: '待撤回', sessionId: '0-91002' }]);
+      ).toEqual([{ messageId: '待撤回', sessionId: '716791' }]);
       expect(page.originalRevoke).toHaveBeenCalledOnce();
     } finally {
       await bridge.disconnect();
@@ -514,20 +587,20 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     }
   });
 
-  it('撤回消息内数据库编号不能覆盖外层显式公开编号', () => {
+  it('撤回消息内原生编号优先于外层界面标识', () => {
     const events = extractRecalledEventsFromPayload({
       sessionId: '0-91002',
-      message: [{ sessionID: 716791, content: { event: 'CancelMessage', msgID: '待撤回' } }],
+      message: [{ sessionID: 716791, contentType: 6, content: { event: 'CancelMessage', msgID: '待撤回' } }],
     });
-    expect(events.map(event => event.sessionId)).toEqual(['0-91002']);
+    expect(events.map(event => event.sessionId)).toEqual(['716791']);
   });
 
-  it('撤回消息内数据库编号不能覆盖调用方已提供的会话范围', () => {
+  it('撤回消息内原生编号优先于调用方界面范围', () => {
     const events = extractRecalledEventsFromPayload(
       { message: [{ sessionID: 716791, event: 'CancelMessage', msgID: '待撤回' }] },
       { id: '0-91002' }
     );
-    expect(events.map(event => event.sessionId)).toEqual(['0-91002']);
+    expect(events.map(event => event.sessionId)).toEqual(['716791']);
   });
 
   it('无外层范围的撤回数组保留各条会话，相同消息ID不跨会话误去重', async () => {
@@ -550,7 +623,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
       expect(
         recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
       ).toEqual([
-        { messageId: '相同编号', sessionId: '0-91002' },
+        { messageId: '相同编号', sessionId: '716791' },
         { messageId: '相同编号', sessionId: '1-91004' },
       ]);
     } finally {

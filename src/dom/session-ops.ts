@@ -15,7 +15,7 @@ export class SessionOps {
   /**
    * 获取所有会话（优先通过 Vue 实例穿透虚拟滚动，降级为 DOM 遍历）
    */
-  public async getSessions(): Promise<KK9Session[]> {
+  public async getSessions(): Promise<Array<Omit<KK9Session, 'nativeType' | 'receiverId'>>> {
     const script = `
       (() => {
         ${VUE_SCROLLER_HELPERS_SCRIPT}
@@ -170,7 +170,7 @@ export class SessionOps {
   /**
    * 获取当前处于激活状态的会话
    */
-  public async getCurrentSession(): Promise<KK9Session | null> {
+  public async getCurrentSession(): Promise<Omit<KK9Session, 'nativeType' | 'receiverId'> | null> {
     const script = `
       (() => {
         const el = document.querySelector('.chat-item.chat-selected') ||

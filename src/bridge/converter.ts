@@ -112,6 +112,7 @@ function determineMessageType(
     return raw['messageType'] as KK9MessageType;
   }
   const nativeContentType = Number(raw['contentType']);
+  if (nativeContentType === 6) return 'system';
   if (nativeContentType === 2) return 'voice';
   if (nativeContentType === 8) return 'app-message';
   if (nativeContentType === 10) return 'url-card';
@@ -209,7 +210,7 @@ export function determineOrigin(
   return 'unknown';
 }
 
-export type InboundNormalizationSource = 'event_bridge' | 'polling' | 'unknown';
+export type InboundNormalizationSource = 'event_bridge' | 'polling' | 'history' | 'unknown';
 
 export interface InboundNormalizationDiagnostic {
   kind: 'missing_inbound_identity';
@@ -337,26 +338,29 @@ function determineDirection(
   return 'unknown';
 }
 
-function isCancelMessageItem(item: Record<string, unknown>): boolean {
-  if (
-    item['event'] === 'CancelMessage' ||
-    item['type'] === 'CancelMessage' ||
-    item['msgFlag'] === 'C' ||
-    item['msgFlag'] === 'D'
-  ) {
-    return true;
-  }
-  const contentObj = tryParseJson(item['content']);
-  if (
-    contentObj &&
-    (contentObj['event'] === 'CancelMessage' || contentObj['type'] === 'CancelMessage')
-  ) {
-    return true;
-  }
-  return false;
+function isRecalledMessageItem(item: Record<string, unknown>): boolean {
+  const msgFlag = toSafeString(item['msgFlag']);
+  return (
+    msgFlag.startsWith('C') ||
+    msgFlag.startsWith('D') ||
+    item['msgState'] === 1 ||
+    item['isRecalled'] === true
+  );
 }
 
-/** 普通消息和撤回共用公开会话编号；原生sessionID可能只是KK9数据库行ID。 */
+function isCancelMessageItem(item: Record<string, unknown>): boolean {
+  if (item['event'] === 'CancelMessage' || item['type'] === 'CancelMessage') {
+    return true;
+  }
+  if (Number(item['contentType']) !== 6) return false;
+  const contentObj = tryParseJson(item['content']);
+  return Boolean(
+    contentObj &&
+    (contentObj['event'] === 'CancelMessage' || contentObj['type'] === 'CancelMessage')
+  );
+}
+
+/** 消息使用原生会话 ID，界面标识不能覆盖原生身份。 */
 function resolvePublicSessionId(
   raw: Record<string, unknown>,
   fallbackId?: string,
@@ -366,6 +370,8 @@ function resolvePublicSessionId(
     raw['session'] && typeof raw['session'] === 'object'
       ? (raw['session'] as Record<string, unknown>)
       : undefined;
+  const nativeSessionId = toSafeString(raw['sessionID'] ?? session?.['id']).trim();
+  if (nativeSessionId) return nativeSessionId;
   const myUid =
     currentUserId !== undefined && currentUserId !== null
       ? toSafeString(currentUserId).trim()
@@ -484,7 +490,7 @@ export function normalizeNativeMessage(
     sessionObj['type'] === 'group' ||
     context?.session?.type === 'group';
 
-  const sessionType = isGroup ? 'group' : 'private';
+  const sessionType = context?.session?.type ?? (isGroup ? 'group' : 'private');
 
   let rawList: Array<Record<string, unknown>> = [];
   if (Array.isArray(rawObj['messages'])) {
@@ -507,7 +513,8 @@ export function normalizeNativeMessage(
   return rawList
     .filter(
       (item): item is Record<string, unknown> =>
-        !!item && typeof item === 'object' && !isCancelMessageItem(item)
+        !!item && typeof item === 'object' &&
+        (context?.source === 'history' || (!isRecalledMessageItem(item) && !isCancelMessageItem(item)))
     )
     .map((item): KK9Message | null => {
       const rawSender =
@@ -714,7 +721,9 @@ export function normalizeNativeMessage(
         }
       }
 
-      const messageType = determineMessageType(item, images, fileInfo, replyTo);
+      const messageType = isCancelMessageItem(item)
+        ? 'system'
+        : determineMessageType(item, images, fileInfo, replyTo);
 
       const nestedRaw =
         item['raw'] && typeof item['raw'] === 'object'
@@ -739,7 +748,7 @@ export function normalizeNativeMessage(
       // 1. 会话 partner 必然是发送者 senderId。
       // 2. 如果 sessionId 缺失、或者错误地指向了机器人自身 (0-currentUserId 或 currentUserId)，
       //    必须收敛纠正为 0-senderId，确保不会在客户端寻找自身会话失败，也不会导致多用户会话串线。
-      if (sessionType === 'private' && !isMe && senderId) {
+      if (sessionType === 'private' && !isMe && senderId && !sessionObj['id'] && !rawObj['sessionID']) {
         if (
           !sessionId ||
           (currentUserId &&
@@ -807,6 +816,7 @@ export function normalizeNativeMessage(
       return {
         id: nativeMessageId,
         messageId: nativeMessageId,
+        msgIdx: typeof item['msgIdx'] === 'number' ? item['msgIdx'] : undefined,
         sessionId,
         sessionName: effectiveSessionName,
         sessionType,
@@ -819,6 +829,7 @@ export function normalizeNativeMessage(
         isMe,
         timestamp,
         messageType,
+        isRecalled: isRecalledMessageItem(item),
         atMe,
         atAll,
         mentions,
@@ -841,89 +852,67 @@ export function extractRecalledEventsFromPayload(
 
   const rawObj = payload as Record<string, unknown>;
   const events: KK9RecalledEvent[] = [];
-
   const defaultSessionId = resolvePublicSessionId(rawObj, sessionContext?.id);
 
-  if (
-    rawObj['messageId'] ||
-    rawObj['msgID'] ||
-    rawObj['event'] === 'CancelMessage' ||
-    rawObj['type'] === 'CancelMessage' ||
-    rawObj['type'] === 'recalled' ||
-    rawObj['type'] === 'revokeMsg'
-  ) {
-    const rawId = rawObj['messageId'] ?? rawObj['msgID'] ?? rawObj['msgId'] ?? rawObj['id'];
-    const messageId = toSafeString(rawId, '');
-    if (messageId) {
-      events.push({
-        messageId,
-        sessionId: defaultSessionId,
-        sender: toSafeString(
-          rawObj['sender'] ?? rawObj['senderName'] ?? rawObj['fromUserName'],
-          '某人'
-        ),
-        time: toSafeString(rawObj['time'], new Date().toLocaleTimeString()),
-        timestamp: typeof rawObj['timestamp'] === 'number' ? rawObj['timestamp'] : Date.now(),
-      });
-    }
-  }
-
-  let rawList: Array<Record<string, unknown>> = [];
+  let rawList: Array<Record<string, unknown>>;
   if (Array.isArray(rawObj['messages'])) {
     rawList = rawObj['messages'] as Array<Record<string, unknown>>;
   } else if (Array.isArray(rawObj['message'])) {
     rawList = rawObj['message'] as Array<Record<string, unknown>>;
   } else if (rawObj['message'] && typeof rawObj['message'] === 'object') {
     rawList = [rawObj['message'] as Record<string, unknown>];
+  } else if (Array.isArray(rawObj['data'])) {
+    rawList = rawObj['data'] as Array<Record<string, unknown>>;
+  } else if (rawObj['data'] && typeof rawObj['data'] === 'object') {
+    rawList = [rawObj['data'] as Record<string, unknown>];
   } else if (Array.isArray(payload)) {
     rawList = payload as Array<Record<string, unknown>>;
+  } else {
+    rawList = [rawObj];
   }
 
   for (const item of rawList) {
-    if (!item || typeof item !== 'object') continue;
-    const contentObj = tryParseJson(item['content']);
-    if (
+    if (!item || typeof item !== 'object' || isRecalledMessageItem(item)) continue;
+    const contentObj = Number(item['contentType']) === 6 ? tryParseJson(item['content']) : null;
+    const contentIsCancel =
       contentObj &&
-      (contentObj['event'] === 'CancelMessage' || contentObj['type'] === 'CancelMessage')
-    ) {
-      const rawId =
-        contentObj['msgID'] ??
-        contentObj['msgId'] ??
-        contentObj['id'] ??
-        item['msgID'] ??
-        item['id'];
-      const messageId = toSafeString(rawId, '');
-      if (messageId) {
-        events.push({
-          messageId,
-          sessionId: defaultSessionId || resolvePublicSessionId(item),
-          sender: toSafeString(
-            item['sender'] ?? item['senderName'] ?? contentObj['sender'],
-            '某人'
-          ),
-          time: toSafeString(item['time'] ?? item['sendTime'], new Date().toLocaleTimeString()),
-          timestamp: typeof item['timestamp'] === 'number' ? item['timestamp'] : Date.now(),
-        });
-      }
-    } else if (item['event'] === 'CancelMessage' || item['type'] === 'CancelMessage') {
-      const rawId = item['msgID'] ?? item['msgId'] ?? item['id'];
-      const messageId = toSafeString(rawId, '');
-      if (messageId) {
-        events.push({
-          messageId,
-          sessionId: defaultSessionId || resolvePublicSessionId(item),
-          sender: toSafeString(item['sender'] ?? item['senderName'], '某人'),
-          time: toSafeString(item['time'] ?? item['sendTime'], new Date().toLocaleTimeString()),
-          timestamp: typeof item['timestamp'] === 'number' ? item['timestamp'] : Date.now(),
-        });
-      }
-    }
+      (contentObj['event'] === 'CancelMessage' || contentObj['type'] === 'CancelMessage');
+    const explicitRecall =
+      item['event'] === 'CancelMessage' || item['type'] === 'CancelMessage' ||
+      item['type'] === 'recalled' || item['type'] === 'revokeMsg';
+    if (!contentIsCancel && !explicitRecall) continue;
+
+    // 系统通知自身 ID 不是撤回目标，目标缺失时不能回退到通知记录。
+    const target = contentIsCancel && contentObj ? contentObj : item;
+    const messageId = toSafeString(
+      target['msgID'] ?? target['msgId'] ?? target['messageId'] ?? target['id']
+    ).trim();
+    if (!messageId) continue;
+    const itemSession =
+      item['session'] && typeof item['session'] === 'object'
+        ? (item['session'] as Record<string, unknown>)
+        : undefined;
+    const sessionId =
+      toSafeString(item['sessionID'] ?? itemSession?.['id']).trim() ||
+      defaultSessionId || resolvePublicSessionId(item);
+    events.push({
+      messageId,
+      sessionId,
+      sender: toSafeString(
+        item['sender'] ?? item['senderName'] ?? item['fromUserName'] ?? contentObj?.['sender'],
+        '某人'
+      ),
+      time: toSafeString(item['time'] ?? item['sendTime'], new Date().toLocaleTimeString()),
+      timestamp: typeof item['timestamp'] === 'number' ? item['timestamp'] : Date.now(),
+    });
   }
 
   return events;
 }
 
 export function normalizeRecalledEvent(payload: unknown): KK9RecalledEvent | null {
-  const events = extractRecalledEventsFromPayload(payload);
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = payload as Record<string, unknown>;
+  const events = extractRecalledEventsFromPayload({ ...raw, event: 'CancelMessage' });
   return events[0] ?? null;
 }

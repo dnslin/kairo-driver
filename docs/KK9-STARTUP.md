@@ -33,7 +33,19 @@ pnpm diagnose listen
 
 `status` 探测 CDP，`sessions` 读取会话，`listen` 监听真实消息。`pnpm diagnose` 可查看完整命令；发送、撤回、切换等命令会实际操作客户端，需明确提供已获授权的目标。
 
-`pnpm verify` 会切换指定私聊和群聊、读取最近消息并查询员工档案，不发送消息。运行前设置：
+身份、会话和十条历史的只读 SDK 验收（参数依次为登录 UID、登录账号、原生会话 ID、对端 UID、对端账号）：
+
+```bash
+pnpm exec tsx examples/verify-native-readonly.ts <登录UID> <登录账号> <原生会话ID> <对端UID> <对端账号>
+```
+
+该脚本保留实际登录与目标核对，不发送、撤回、切换、创建会话、标记已读或插入草稿。修改后的 SDK 历史与原生消息 ID、索引逐条对照，读取前后检查已读索引不变，检查没有重放实时事件；只输出必要元数据，不输出聊天正文。原生查询无需恢复或激活聊天窗口；客户端内部可能刷新档案、头像及历史资源缓存。
+
+设备字段证据：KK9 9.0.1 的 `insertSendBefoeMsg` 直接把参数 `deviceID` 写入草稿，未自行补取；注册设备返回的 ID 写入主进程 `CORE_DATA.deviceID`。`getMemberDetail()` 不返回设备字段；尚未确认可用的只读设备 getter，也未试验缺字段草稿是否可用。不得填空值冒充已解决，后续发送切片须据此核对。
+
+前序 T01/T02 真机只读验收：账号0123040139（UID5761），int2024（UID3585）的原生私聊716791；SDK与jshookmcp原生对照一致，十条消息索引651–660，读取前后userReadIndex均为660。该轮没有真实新入站、发送、撤回、群聊或媒体验收。必要元数据记录在 `tmp/kk9-t01-t02-validation.json` 和 `tmp/kk9-t02-mcp-evidence.json`。
+
+`pnpm verify` 按指定原生私聊、群聊 ID 读取最近消息并查询员工档案，不再为历史切换窗口，不发送消息。运行前设置：
 
 ```powershell
 $env:KK9_TEST_PRIVATE_ID = "<私聊会话 ID>"
@@ -41,6 +53,19 @@ $env:KK9_TEST_GROUP_ID = "<群聊会话 ID>"
 $env:KK9_TEST_USER_ID = "<员工 UID>"
 pnpm verify
 ```
+
+## 六项修正专项回归
+
+`examples/verify-native-regressions.ts` 核对登录身份与既有私聊，再检查原生历史、当前会话、真实发送回显、撤回事件去重、历史撤回状态和轮询隔离。运行前取得目标私聊授权，并保留与 `e2e:stage1` 相同的确认门禁：
+
+```powershell
+$env:KK9_STAGE1_CONFIRM = "<登录UID>:<对端UID>:<原生会话ID>"
+pnpm exec tsx examples/verify-native-regressions.ts <登录UID> <登录账号> <原生会话ID> <对端UID> <对端账号>
+```
+
+脚本先验证历史读取不改变已读索引、不重放事件；随后必要时切换到授权目标，发送一条唯一标记的测试文本并撤回，只清理本轮本人消息，不重发未知结果。两次真实轮询采集均等待完成，不启用自动切换或调度计时器；退出时清理 Driver Hook。必要元数据和失败上下文保存到 `tmp/pr1-fix-live-evidence.json`，不输出聊天正文。空身份、可见列表缺席和 C/D 后缀等边界由自动回归覆盖，不在真机伪造登录或数据库状态。
+
+本轮六项修正验收：`pnpm check` 的30个测试文件、394条测试通过，针对性9个文件、223条测试通过。授权账号与目标仍为5761 → int2024（3585），原生私聊716791；两次运行分别发送并撤回消息137431259、137432159，每次只派发一条正确范围的撤回事件。原记录仍为text且isRecalled为true，撤回通知保持自身ID，历史读取无重放且已读索引不变，两次等待完成的真实轮询采集均不重放撤回。两条测试消息均已撤回；最终退出无运行异常诊断。首次计时轮询运行的退出诊断保留于 `tmp/pr1-fix-live-timer-evidence.json`，最终结果见 `tmp/pr1-fix-live-evidence.json`。本轮没有员工新入站、群聊或媒体验收。
 
 ## 私聊与群聊回归
 
@@ -65,7 +90,7 @@ pnpm e2e
 ```powershell
 $env:KK9_STAGE1_BOT_UID = "<登录 Bot UID>"
 $env:KK9_STAGE1_EMPLOYEE_UID = "<目标员工 UID>"
-$env:KK9_STAGE1_SESSION_ID = "0-<目标员工 UID>"
+$env:KK9_STAGE1_SESSION_ID = "<原生私聊会话 ID>"
 $env:KK9_STAGE1_SESSION_NAME = "<目标员工会话名>"
 $env:KK9_STAGE1_CONFIRM = "$($env:KK9_STAGE1_BOT_UID):$($env:KK9_STAGE1_EMPLOYEE_UID):$($env:KK9_STAGE1_SESSION_ID)"
 pnpm e2e:stage1

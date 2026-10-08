@@ -5,6 +5,27 @@ import type { CdpClient } from '../src/cdp/client.js';
 import { MessageOps, readImageAsBase64, saveImageToFile } from '../src/dom/message-ops.js';
 import { DEFAULT_SELECTORS } from '../src/dom/selectors.js';
 import type { KK9ImageInfo } from '../src/types/index.js';
+import { BridgeMessageOps } from '../src/bridge/message-ops.js';
+import { FakeIpcRenderer, runRendererScript } from './helpers/renderer-runtime.js';
+
+describe('原生历史会话与消息身份边界', () => {
+  it('原生会话 ID 恰好等于当前 UID 时不能纠正成对端界面标识', async () => {
+    const ipc = new FakeIpcRenderer(() => ({ code: 0, data: [{ id: 1001, msgIdx: 88, sessionID: 91001, sender: 91002, content: '历史记录' }] }));
+    const cdp = { evaluate: (script: string) => runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout }) } as unknown as CdpClient;
+    const messages = await new BridgeMessageOps(cdp).getRecentMessages(
+      { id: '91001', name: '同号会话', type: 'private', nativeType: 0, receiverId: '91002', unread: false }, 1, undefined, 91001
+    );
+    expect(messages).toMatchObject([{ id: '1001', msgIdx: 88, sessionId: '91001', direction: 'inbound' }]);
+  });
+
+  it('只有消息索引而没有原生消息 ID 时不得把索引作为消息身份', async () => {
+    const ipc = new FakeIpcRenderer(() => ({ code: 0, data: [{ msgIdx: 88, sessionID: 93001, sender: 91002, content: '缺少原生消息 ID' }] }));
+    const cdp = { evaluate: (script: string) => runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout }) } as unknown as CdpClient;
+    await expect(new BridgeMessageOps(cdp).getRecentMessages(
+      { id: '93001', name: '员工甲', type: 'private', nativeType: 0, receiverId: '91002', unread: false }, 1
+    )).resolves.toEqual([]);
+  });
+});
 
 describe('MessageOps 消息解析测试', () => {
   describe('readImageAsBase64 and saveImageToFile', () => {
@@ -71,6 +92,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'group_999',
         name: 'test-group',
         type: 'group',
+        nativeType: 1,
+        receiverId: '92001',
         unread: true,
       });
 
@@ -131,6 +154,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'group_999',
         name: '测试群',
         type: 'group',
+        nativeType: 1,
+        receiverId: '92001',
         unread: true,
       });
 
@@ -172,6 +197,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'session-image',
         name: '图片会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       });
 
@@ -209,6 +236,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'session-reply',
         name: '回复会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       });
 
@@ -246,6 +275,8 @@ describe('MessageOps 消息解析测试', () => {
         id: 'session-file',
         name: '文件会话',
         type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
         unread: false,
       });
 
