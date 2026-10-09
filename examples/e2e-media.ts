@@ -156,14 +156,14 @@ async function main(): Promise<void> {
         console.log(JSON.stringify({ name: item.name, ...result }));
         assert.equal(
           result.status,
-          'delivered',
+          'sent',
           `${item.name}: ${result.error || '未确认送达，禁止自动重发'}`
         );
         assert.match(result.messageId || '', /^[1-9]\d*$/, '必须返回服务端正式消息 ID');
         if (operationId !== undefined) {
           const repeated = await item.send(options);
           assert.equal(repeated.messageId, result.messageId, '相同 operationId 不应产生新消息');
-          assert.equal(repeated.status, 'delivered');
+          assert.equal(repeated.status, 'sent');
           const queried = await driver.getSendStatus(operationId);
           assert.equal(queried.messageId, result.messageId, '状态回查应返回同一消息');
         }

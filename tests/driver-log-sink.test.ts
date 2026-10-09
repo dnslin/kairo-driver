@@ -101,7 +101,7 @@ describe('Driver 进程级日志接收函数', () => {
       logger.info({ event: 'Driver连接状态', status: 'up', runId: 'run-1', startupGenerationId: '旧标识' });
       logger.warn({ event: 'Driver连接状态', status: 'down', startupGenerationId: 'run-2' });
       logger.debug({ event: 'Driver运行状态', status: 'received', messageId: 'inbound-1' });
-      logger.info({ event: 'Driver发送结果', status: 'delivered', messageId: 'outbound-1' });
+      logger.info({ event: 'Driver发送结果', status: 'sent', messageId: 'outbound-1' });
       logger.warn({ event: 'Driver发送结果', status: 'unknown', errorType: 'send_unknown' });
       logger.error({ event: 'Driver发送结果', status: 'unknown' }, 'send_unknown 发送结果未知');
       logger.error({ event: 'Driver运行异常', errorType: 'driver' });
@@ -118,7 +118,7 @@ describe('Driver 进程级日志接收函数', () => {
         errorType: 'driver',
       },
       { level: 'info', event: 'Driver运行状态', status: 'received', messageId: 'inbound-1' },
-      { level: 'info', event: 'Driver发送结果', status: 'delivered', messageId: 'outbound-1' },
+      { level: 'info', event: 'Driver发送结果', status: 'sent', messageId: 'outbound-1' },
       { level: 'warn', event: 'Driver发送结果', status: 'unknown', errorType: 'send_unknown' },
       { level: 'error', event: 'Driver发送结果', status: 'unknown', errorType: 'driver' },
       { level: 'error', event: 'Driver运行异常', errorType: 'driver' },

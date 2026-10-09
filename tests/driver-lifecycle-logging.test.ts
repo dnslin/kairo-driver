@@ -13,6 +13,7 @@ import {
   runRendererScript,
   type RendererMessage,
 } from './helpers/renderer-runtime.js';
+import { createNativeSendRuntime } from './helpers/native-send-runtime.js';
 
 const config = {
   cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线测试' },
@@ -25,67 +26,73 @@ afterEach(() => {
 });
 
 describe('Driver日志真实行为回归', () => {
-  it('实际DOM发送只记录最终unknown或触发前failed，业务异常正文不进入日志', async () => {
+  it('原生超时、响应丢失和前置拒绝分别记录最终状态，不输出正文', async () => {
+    vi.useFakeTimers();
     const entries: DriverLogEntry[] = [];
     setDriverLogSink(entry => entries.push(entry));
+    const native = createNativeSendRuntime({ callback: false });
     const driver = new KK9Driver(config);
     const { cdp } = getDriverTestInternals(driver);
-    const runtime = createRendererRuntime();
-    const sent: unknown[] = [];
-    Object.assign(runtime.editor, { sendMessage: (payload: unknown) => sent.push(payload) });
+    vi.spyOn(cdp, 'getStatus').mockReturnValue('connected');
     vi.spyOn(cdp, 'evaluate').mockImplementation(script =>
-      runRendererScript(script, runtime.context)
+      runRendererScript(script, native.context)
     );
-    const activate = vi.spyOn(cdp, 'bringToFront').mockResolvedValue(undefined);
-
-    const unknown = await driver.sendText('测试秘密消息正文');
-    expect(unknown).toMatchObject({ success: false, status: 'unknown', isPreTrigger: false });
-    expect(sent).toHaveLength(1);
-    expect(JSON.stringify(sent)).toContain('测试秘密消息正文');
-
-    Object.assign(runtime.editor, {
-      sendMessage: () => {
-        throw new Error('测试秘密响应丢失');
-      },
-    });
-    const lost = await driver.sendText('第二条测试秘密正文');
-    expect(lost).toMatchObject({ status: 'unknown', isPreTrigger: false });
-    expect(lost.error).toContain('测试秘密响应丢失');
-
-    activate.mockRejectedValue(new Error('测试秘密窗口错误'));
-    const failed = await driver.sendText('第三条测试秘密正文');
-    expect(failed).toMatchObject({ status: 'failed', isPreTrigger: true });
-    expect(failed.error).toContain('测试秘密窗口错误');
-    expect(entries.filter(entry => entry.event === 'Driver发送结果')).toEqual([
-      expect.objectContaining({
-        level: 'warn',
-        status: 'unknown',
-        errorType: 'send_unknown',
-        runId: config.startupGenerationId,
-      }),
-      expect.objectContaining({
-        level: 'warn',
-        status: 'unknown',
-        errorType: 'send_unknown',
-        runId: config.startupGenerationId,
-      }),
-      expect.objectContaining({
-        level: 'warn',
+    try {
+      const work = driver.sendText('测试秘密消息正文', {
+        targetSessionId: '93001',
+        verifyTimeoutMs: 50,
+      });
+      await vi.runAllTimersAsync();
+      expect(await work).toMatchObject({ status: 'unknown', isPreTrigger: false });
+      vi.mocked(cdp.evaluate).mockRejectedValueOnce(new Error('测试秘密响应丢失'));
+      expect(
+        await driver.sendText('第二条测试秘密正文', { targetSessionId: '93001' })
+      ).toMatchObject({ status: 'unknown', isPreTrigger: false });
+      expect(await driver.sendText('第三条测试秘密正文')).toMatchObject({
         status: 'failed',
-        errorType: 'driver',
-        runId: config.startupGenerationId,
-      }),
-    ]);
-    expect(JSON.stringify(entries)).not.toContain('测试秘密');
+        isPreTrigger: true,
+      });
+      expect(
+        entries
+          .filter(entry => entry.event === 'Driver发送结果')
+          .map(entry => ({
+            level: entry.level,
+            status: entry.status,
+            errorType: entry.errorType,
+            runId: entry.runId,
+          }))
+      ).toEqual([
+        {
+          level: 'warn',
+          status: 'unknown',
+          errorType: 'send_unknown',
+          runId: config.startupGenerationId,
+        },
+        {
+          level: 'warn',
+          status: 'unknown',
+          errorType: 'send_unknown',
+          runId: config.startupGenerationId,
+        },
+        { level: 'warn', status: 'failed', errorType: 'driver', runId: config.startupGenerationId },
+      ]);
+      expect(native.records).toHaveLength(1);
+      expect(JSON.stringify(entries)).not.toContain('测试秘密');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('原生确认后更新渲染界面失败仍delivered，诊断不输出错误对象', async () => {
+  it('业务确认后媒体显示失败仍sent，诊断不输出错误对象', async () => {
     const entries: DriverLogEntry[] = [];
     setDriverLogSink(entry => entries.push(entry));
     const session = { id: 93001, sesUUID: '0-91002', typeName: '会话', type: 0, typeID: 91002 };
     const confirmed: RendererMessage[] = [];
     let nativeSendCount = 0;
     const ipc = new FakeIpcRenderer(request => {
+      if (request.args[0] === 'getMemberDetail')
+        return { code: 0, data: { id: 91001, name: '我' } };
+      if (request.args[0] === 'getSessionBySessionID') return { code: 0, data: session };
       if (request.args[0] === 'insertSendBefoeMsg') {
         const message = request.args[1] as Record<string, unknown>;
         confirmed.push({ ...message, id: 135700000, msgIdx: 100, sessionID: session.id });
@@ -93,6 +100,10 @@ describe('Driver日志真实行为回归', () => {
       }
       if (request.args[0] === 'sendMessageNew') {
         nativeSendCount += 1;
+        const message = request.args[1] as Record<string, unknown>;
+        ipc.emit('0-91002-sendMsgCallback', {
+          args: { msgID: message['id'], code: 0, data: confirmed[0] },
+        });
         return { code: 0 };
       }
       if (request.args[0] === 'getMessages') return { code: 0, data: confirmed };
@@ -109,19 +120,30 @@ describe('Driver日志真实行为回归', () => {
     runtime.context['console'] = { warn: (...args: unknown[]) => warnings.push(args) };
     const driver = new KK9Driver(config);
     const { cdp } = getDriverTestInternals(driver);
+    vi.spyOn(cdp, 'getStatus').mockReturnValue('connected');
     vi.spyOn(cdp, 'evaluate').mockImplementation(script =>
       runRendererScript(script, runtime.context)
     );
     vi.spyOn(driver, 'getSessions').mockResolvedValue([
-      { id: String(session.id), name: '会话', type: 'private', nativeType: 0, receiverId: '91002', unread: false },
+      {
+        id: String(session.id),
+        name: '会话',
+        type: 'private',
+        nativeType: 0,
+        receiverId: '91002',
+        unread: false,
+      },
     ]);
 
-    const result = await driver.sendUrlCard({
-      title: '测试秘密标题',
-      summary: '测试秘密摘要',
-      linkUrl: 'https://example.invalid/测试秘密',
-    });
-    expect(result).toMatchObject({ success: true, status: 'delivered', messageId: '135700000' });
+    const result = await driver.sendUrlCard(
+      {
+        title: '测试秘密标题',
+        summary: '测试秘密摘要',
+        linkUrl: 'https://example.invalid/测试秘密',
+      },
+      { targetSessionId: String(session.id) }
+    );
+    expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
     expect(nativeSendCount).toBe(1);
     expect(driver.isBotSentMessageId(String(session.id), '135700000')).toBe(true);
     expect(typeof result.recall).toBe('function');
@@ -132,15 +154,14 @@ describe('Driver日志真实行为回归', () => {
     expect(entries.filter(entry => entry.event === 'Driver发送结果')).toEqual([
       expect.objectContaining({
         level: 'info',
-        status: 'delivered',
+        status: 'sent',
         messageId: '135700000',
         sessionId: String(session.id),
         runId: config.startupGenerationId,
       }),
     ]);
-    const rejected = await driver.sendText('测试秘密正文', { targetSessionId: '测试秘密目标' });
+    const rejected = await driver.sendText('测试秘密正文');
     expect(rejected).toMatchObject({ status: 'failed', isPreTrigger: true });
-    expect(rejected.error).toContain('测试秘密目标');
     expect(entries.filter(entry => entry.event === 'Driver发送结果').at(-1)).toMatchObject({
       status: 'failed',
       errorType: 'driver',

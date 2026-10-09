@@ -144,7 +144,7 @@ describe('KK9Driver 结构化健康事实合同', () => {
     driver.on('health', event => events.push(event));
 
     const result = await driver.sendText('offline probe');
-    expect(result.success).toBe(false);
+    expect(result.status).toBe('failed');
     expect(result.isPreTrigger).toBe(true);
     expect(events).toHaveLength(0);
   });

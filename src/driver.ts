@@ -6,11 +6,9 @@ import { BridgeSessionOps } from './bridge/session-ops.js';
 import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
 import { createMessageIdentityKey, extractRecalledEventsFromPayload } from './bridge/converter.js';
-import { resolveActiveSendOptions } from './bridge/send-status.js';
 
 import { OrgOps } from './dom/org-ops.js';
 import { resolveSelectors } from './dom/selectors.js';
-import { SendOps } from './dom/send-ops.js';
 import { SessionOps } from './dom/session-ops.js';
 
 import type {
@@ -57,6 +55,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   private readonly eventBridge: KK9EventBridge;
   private readonly startupGenerationId: string;
   private invalidated = false;
+  private disconnectPromise?: Promise<void>;
   private readonly selectors: SelectorsConfig;
 
   // Bridge 优先操作服务
@@ -66,7 +65,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
   // 保留旧版 DOM 操作层（作为后备回退）
   private readonly domSessionOps: SessionOps;
-  private readonly domSendOps: SendOps;
   private readonly domOrgOps: OrgOps;
 
   private isPolling = false;
@@ -103,7 +101,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
     // 初始化 DOM 操作层 (保留)
     this.domSessionOps = new SessionOps(this.cdp, this.selectors);
-    this.domSendOps = new SendOps(this.cdp, this.selectors);
     this.domOrgOps = new OrgOps(this.cdp);
 
     this.wireCdpEvents();
@@ -161,9 +158,17 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public disconnect(): Promise<void> {
+    if (this.disconnectPromise) return this.disconnectPromise;
     this.invalidated = true;
     this.stopPolling();
-    return this.eventBridge.disconnect();
+    this.disconnectPromise = (async (): Promise<void> => {
+      try {
+        await this.bridgeMessageOps.cancelPendingSends();
+      } finally {
+        await this.eventBridge.disconnect();
+      }
+    })();
+    return this.disconnectPromise;
   }
 
   /** 原生空列表正常返回，查询失败保留异常。 */
@@ -181,29 +186,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
     const nameMatches = sessions.filter(session => session.name === normalizedTarget);
     return nameMatches.length === 1 ? nameMatches[0]! : null;
-  }
-
-  private async resolveTargetOptions<T extends SendOptions>(options: T): Promise<T | null> {
-    if (!options.targetSessionId) return options;
-    const targetSession = await this.resolveSessionTarget(options.targetSessionId);
-    return targetSession ? { ...options, targetSessionId: targetSession.id } : null;
-  }
-
-  private async resolveNativeTargetOptions(options: SendOptions): Promise<SendOptions | null> {
-    // TTS 可能耗时数秒；发送与撤回必须绑定调用开始时的会话，而不是完成时的窗口。
-    const boundOptions = await resolveActiveSendOptions(this.cdp, options);
-    return boundOptions ? this.resolveTargetOptions(boundOptions) : null;
-  }
-
-  private unresolvedTargetResult(target: string): SendResult {
-    const result: SendResult = {
-      success: false,
-      status: 'failed',
-      error: `目标会话无法唯一解析 [${target}]`,
-      isPreTrigger: true,
-    };
-    this.recordSendResult(result);
-    return result;
   }
 
   public getCurrentSession(): Promise<KK9Session | null> {
@@ -250,13 +232,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   private recordSendResult(result: SendResult, sessionId?: string): void {
-    const status =
-      result.status ??
-      (result.success && result.messageId
-        ? 'delivered'
-        : result.isPreTrigger === true
-          ? 'failed'
-          : 'unknown');
+    const status = result.status;
     const fields = {
       event: 'Driver发送结果',
       status,
@@ -264,10 +240,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       sessionId,
       startupGenerationId: this.startupGenerationId,
       durationMs: result.verifyLatencyMs,
-      errorType:
-        status === 'delivered' ? undefined : status === 'unknown' ? 'send_unknown' : 'driver',
+      errorType: status === 'sent' ? undefined : status === 'unknown' ? 'send_unknown' : 'driver',
     };
-    if (status === 'delivered') {
+    if (status === 'sent') {
       log.info(fields);
     } else {
       log.warn(fields);
@@ -275,7 +250,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   private rememberBotSentMessage(result: SendResult, targetSessionId?: string): void {
-    if (!result.success || !result.messageId) return;
+    if (result.status !== 'sent') return;
     const sessionId = targetSessionId?.trim();
     if (!sessionId) return;
     this.recordBotSentMessageId(sessionId, result.messageId);
@@ -284,7 +259,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   private attachNativeRecall(result: SendResult, targetSessionId?: string): SendResult {
     this.rememberBotSentMessage(result, targetSessionId);
     this.recordSendResult(result, targetSessionId);
-    if (!result.success || !result.messageId) return result;
+    if (result.status !== 'sent') return result;
 
     const messageId = result.messageId;
     const sessionId = targetSessionId?.trim();
@@ -297,7 +272,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   /** 指定原生会话读取历史，不重放实时事件或回退 DOM。 */
   public getRecentMessages(session: KK9Session, limit = 20): Promise<KK9Message[]> {
     return this.bridgeMessageOps.getRecentMessages(
-      session, limit, this.knownBotSentMessageKeys, this.currentUserId
+      session,
+      limit,
+      this.knownBotSentMessageKeys,
+      this.currentUserId
     );
   }
 
@@ -369,24 +347,11 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    * 发送纯文本消息
    */
   public async sendText(text: string, options: SendOptions = {}): Promise<SendResult> {
-    const resolvedOptions = await this.resolveTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-
-    const res = await this.bridgeMessageOps.sendText(text, resolvedOptions);
-    if (
-      !res.success &&
-      res.isPreTrigger &&
-      !resolvedOptions.targetSessionId &&
-      !resolvedOptions.operationId
-    ) {
-      const domRes = await this.domSendOps.sendText(text, resolvedOptions);
-      this.rememberBotSentMessage(domRes, resolvedOptions.targetSessionId);
-      this.recordSendResult(domRes, resolvedOptions.targetSessionId);
-      return domRes;
-    }
-    this.rememberBotSentMessage(res, resolvedOptions.targetSessionId);
-    this.recordSendResult(res, resolvedOptions.targetSessionId);
-    return res;
+    const targetSessionId = options.targetSessionId;
+    return this.attachNativeRecall(
+      await this.bridgeMessageOps.sendText(text, options),
+      targetSessionId
+    );
   }
 
   /**
@@ -396,24 +361,11 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     content: FormattedText,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const resolvedOptions = await this.resolveTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-
-    const res = await this.bridgeMessageOps.sendRichText(content, resolvedOptions);
-    if (
-      !res.success &&
-      res.isPreTrigger &&
-      !resolvedOptions.targetSessionId &&
-      !resolvedOptions.operationId
-    ) {
-      const domRes = await this.domSendOps.sendRichText(content, resolvedOptions);
-      this.rememberBotSentMessage(domRes, resolvedOptions.targetSessionId);
-      this.recordSendResult(domRes, resolvedOptions.targetSessionId);
-      return domRes;
-    }
-    this.rememberBotSentMessage(res, resolvedOptions.targetSessionId);
-    this.recordSendResult(res, resolvedOptions.targetSessionId);
-    return res;
+    const targetSessionId = options.targetSessionId;
+    return this.attachNativeRecall(
+      await this.bridgeMessageOps.sendRichText(content, options),
+      targetSessionId
+    );
   }
 
   /**
@@ -424,48 +376,22 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     content: FormattedText,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const resolvedOptions = await this.resolveTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-
-    const res = await this.bridgeMessageOps.sendReply(replyTo, content, resolvedOptions);
-    if (
-      !res.success &&
-      res.isPreTrigger &&
-      !resolvedOptions.targetSessionId &&
-      !resolvedOptions.operationId
-    ) {
-      const domRes = await this.domSendOps.sendReply(replyTo, content, resolvedOptions);
-      this.rememberBotSentMessage(domRes, resolvedOptions.targetSessionId);
-      this.recordSendResult(domRes, resolvedOptions.targetSessionId);
-      return domRes;
-    }
-    this.rememberBotSentMessage(res, resolvedOptions.targetSessionId);
-    this.recordSendResult(res, resolvedOptions.targetSessionId);
-    return res;
+    const targetSessionId = options.targetSessionId;
+    return this.attachNativeRecall(
+      await this.bridgeMessageOps.sendReply(replyTo, content, options),
+      targetSessionId
+    );
   }
 
   /**
    * 发送文件
    */
   public async sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
-    const resolvedOptions = await this.resolveTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-
-    const res = await this.bridgeMessageOps.sendFile(filePath, resolvedOptions);
-    if (
-      !res.success &&
-      res.isPreTrigger &&
-      !resolvedOptions.targetSessionId &&
-      !resolvedOptions.operationId
-    ) {
-      const domRes = await this.domSendOps.sendFile(filePath, resolvedOptions);
-      this.rememberBotSentMessage(domRes, resolvedOptions.targetSessionId);
-      this.recordSendResult(domRes, resolvedOptions.targetSessionId);
-      return domRes;
-    }
-    this.rememberBotSentMessage(res, resolvedOptions.targetSessionId);
-    this.recordSendResult(res, resolvedOptions.targetSessionId);
-    return res;
+    const targetSessionId = options.targetSessionId;
+    return this.attachNativeRecall(
+      await this.bridgeMessageOps.sendFile(filePath, options),
+      targetSessionId
+    );
   }
   /**
    * 只查询发送操作状态，不触发新的发送动作
@@ -478,24 +404,11 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    * 发送本地图片
    */
   public async sendImage(imagePath: string, options: SendOptions = {}): Promise<SendResult> {
-    const resolvedOptions = await this.resolveTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-
-    const res = await this.bridgeMessageOps.sendImage(imagePath, resolvedOptions);
-    if (
-      !res.success &&
-      res.isPreTrigger &&
-      !resolvedOptions.targetSessionId &&
-      !resolvedOptions.operationId
-    ) {
-      const domRes = await this.domSendOps.sendImage(imagePath, resolvedOptions);
-      this.rememberBotSentMessage(domRes, resolvedOptions.targetSessionId);
-      this.recordSendResult(domRes, resolvedOptions.targetSessionId);
-      return domRes;
-    }
-    this.rememberBotSentMessage(res, resolvedOptions.targetSessionId);
-    this.recordSendResult(res, resolvedOptions.targetSessionId);
-    return res;
+    const targetSessionId = options.targetSessionId;
+    return this.attachNativeRecall(
+      await this.bridgeMessageOps.sendImage(imagePath, options),
+      targetSessionId
+    );
   }
 
   /** 发送链接图文卡片。 */
@@ -503,10 +416,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     card: KK9UrlCardOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const resolvedOptions = await this.resolveNativeTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-    const result = await this.bridgeMessageOps.sendUrlCard(card, resolvedOptions);
-    return this.attachNativeRecall(result, resolvedOptions.targetSessionId);
+    const targetSessionId = options.targetSessionId;
+    const result = await this.bridgeMessageOps.sendUrlCard(card, options);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 发送业务任务或通知卡片。 */
@@ -514,10 +426,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     message: KK9BizMsgOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const resolvedOptions = await this.resolveNativeTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-    const result = await this.bridgeMessageOps.sendBizMessage(message, resolvedOptions);
-    return this.attachNativeRecall(result, resolvedOptions.targetSessionId);
+    const targetSessionId = options.targetSessionId;
+    const result = await this.bridgeMessageOps.sendBizMessage(message, options);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 发送工作台微应用通知卡片。 */
@@ -525,10 +436,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     message: KK9AppMsgOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const resolvedOptions = await this.resolveNativeTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-    const result = await this.bridgeMessageOps.sendAppMessage(message, resolvedOptions);
-    return this.attachNativeRecall(result, resolvedOptions.targetSessionId);
+    const targetSessionId = options.targetSessionId;
+    const result = await this.bridgeMessageOps.sendAppMessage(message, options);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 发送合并聊天记录卡片。 */
@@ -536,18 +446,16 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     record: KK9ChatRecordOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const resolvedOptions = await this.resolveNativeTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-    const result = await this.bridgeMessageOps.sendChatRecord(record, resolvedOptions);
-    return this.attachNativeRecall(result, resolvedOptions.targetSessionId);
+    const targetSessionId = options.targetSessionId;
+    const result = await this.bridgeMessageOps.sendChatRecord(record, options);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 准备并发送原生语音消息。 */
   public async sendVoice(voice: KK9VoiceOptions, options: SendOptions = {}): Promise<SendResult> {
-    const resolvedOptions = await this.resolveNativeTargetOptions(options);
-    if (!resolvedOptions) return this.unresolvedTargetResult(options.targetSessionId || '');
-    const result = await this.bridgeMessageOps.sendVoice(voice, resolvedOptions);
-    return this.attachNativeRecall(result, resolvedOptions.targetSessionId);
+    const targetSessionId = options.targetSessionId;
+    const result = await this.bridgeMessageOps.sendVoice(voice, options);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /**
@@ -611,9 +519,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   /** 通过原生会话 ID 或实体查询私聊对端档案；用户 UID 请使用 getUserProfile。 */
   public async getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null> {
     if (typeof session === 'string' && !session.trim()) return null;
-    const resolved = typeof session === 'string'
-      ? (await this.getSessions()).find(item => item.id === session.trim())
-      : session;
+    const resolved =
+      typeof session === 'string'
+        ? (await this.getSessions()).find(item => item.id === session.trim())
+        : session;
     return resolved?.type === 'private' && resolved.receiverId
       ? this.getUserProfile(resolved.receiverId)
       : null;
@@ -709,7 +618,8 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       // 历史撤回只供查询，不能经轮询重放为新的消息、提及或撤回事件。
       if (
         msg.isRecalled ||
-        (msg.messageType === 'system' && extractRecalledEventsFromPayload(msg.raw, session).length > 0)
+        (msg.messageType === 'system' &&
+          extractRecalledEventsFromPayload(msg.raw, session).length > 0)
       ) {
         continue;
       }

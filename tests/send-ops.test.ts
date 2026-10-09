@@ -1,13 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CdpClient } from '../src/cdp/client.js';
 import { DEFAULT_SELECTORS } from '../src/dom/selectors.js';
 import { SendOps } from '../src/dom/send-ops.js';
+import { BridgeMessageOps } from '../src/bridge/message-ops.js';
 import { runRendererScript } from './helpers/renderer-runtime.js';
+import { createNativeSendRuntime } from './helpers/native-send-runtime.js';
 
-describe('SendOps 消息发送、富文本、引用与文件发送测试', () => {
+// 尚未切换的UI预检保留；已替代的输入框/按钮发送断言改为实际原生行为。
+describe('未切换的窗口预检', () => {
   describe('checkPreSendState 会话身份校验', () => {
     const runCheck = async (
       target: string,
@@ -18,9 +21,7 @@ describe('SendOps 消息发送、富文本、引用与文件发送测试', () =>
       const activeItem = {
         querySelector: () => ({ textContent: activeTitle }),
         getAttribute: (name: string) =>
-          name === 'data-sesuuid' || name === 'data-session-id' || name === 'id'
-            ? activeId
-            : null,
+          name === 'data-sesuuid' || name === 'data-session-id' || name === 'id' ? activeId : null,
       };
       const document = {
         querySelector(selector: string): unknown {
@@ -67,300 +68,101 @@ describe('SendOps 消息发送、富文本、引用与文件发送测试', () =>
       expect(result.canSend).toBe(true);
     });
   });
+});
 
-  describe('sendText', () => {
-    it('sendText 空内容应直接拦截返回错误', async () => {
-      const mockCdp = { evaluate: vi.fn() } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendText('   ');
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('不能为空');
-      expect(mockCdp.evaluate).not.toHaveBeenCalled();
+describe('原生发送保留的内容准备与失败边界', () => {
+  afterEach(() => vi.useRealTimers());
+  it.each(['text', 'rich-text', 'reply'])('空%s内容不触发草稿', async kind => {
+    const native = createNativeSendRuntime();
+    const ops = new BridgeMessageOps(native.cdp);
+    const options = { targetSessionId: '93001' };
+    const result =
+      kind === 'text'
+        ? await ops.sendText(' ', options)
+        : kind === 'rich-text'
+          ? await ops.sendRichText('', options)
+          : await ops.sendReply('10', ' ', options);
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(result.error).toContain('不能为空');
+    expect(native.drafts).toEqual([]);
+  });
+  it('富文本与群提及内容准备保持可用，业务回执确认正式ID', async () => {
+    const native = createNativeSendRuntime();
+    const result = await new BridgeMessageOps(native.cdp).sendRichText(
+      [{ text: '提醒', style: { bold: true } }, { text: '完成' }],
+      { targetSessionId: '93002', mentions: ['all'] }
+    );
+    expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
+    expect(native.records[0]?.['content']).toMatchObject({
+      content: [
+        { type: 2, replyMemberType: 1, replyMemberName: '全体成员' },
+        { type: 0, text: ' ' },
+        { type: 0, text: '提醒完成' },
+      ],
     });
-
-    it('sendText 在前置校验未通过时应中止发送', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockResolvedValue({
-          canSend: false,
-          reason: 'session_switched',
-        }),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendText('你好', { targetSessionId: 'expected_id' });
-
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('发送前检查未通过');
+  });
+  it('引用只按指定会话正式消息ID查找，未找到不会退成普通文本', async () => {
+    const native = createNativeSendRuntime();
+    const ops = new BridgeMessageOps(native.cdp);
+    const failed = await ops.sendReply('999', '回复', { targetSessionId: '93001' });
+    expect(failed).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(native.drafts).toEqual([]);
+    native.records.push({
+      id: 999,
+      msgIdx: 8,
+      sessionID: 93001,
+      sender: 91002,
+      senderName: '员工甲',
+      contentType: 4,
+      content: { content: [{ type: 0, text: '原消息' }] },
     });
-
-    it('sendText 在前置校验脚本执行异常时应 Fail-Closed 拦截并标记 isPreTrigger = true', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockRejectedValue(new Error('CDP evaluate connection lost')),
-        bringToFront: vi.fn(),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendText('你好', { targetSessionId: 'expected_id' });
-
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('发送前检查未通过');
-      expect(res.error).toContain('Fail-Closed');
-      expect(mockCdp.bringToFront).not.toHaveBeenCalled();
+    const result = await ops.sendText('回复', { targetSessionId: '93001', replyTo: '999' });
+    expect(result.status).toBe('sent');
+    expect(native.records[1]?.['content']).toMatchObject({
+      type: 'Reply',
+      replyedMsgId: 999,
+      replyedMsgIndex: 8,
+      replyedID: 91002,
+      replyContent: { content: [{ type: 0, text: '回复' }] },
     });
-
-    it('sendText 携带 replyTo 时应调用 sendReply 并完成发送', async () => {
-      const mockCdp = {
-        evaluate: vi
-          .fn()
-          .mockResolvedValueOnce({ success: true, method: 'vue_native_reply' }) // native reply send
-          .mockResolvedValueOnce(true), // verifyTextSent
-        bringToFront: vi.fn().mockResolvedValue(undefined),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendText('好的，收到', {
-        replyTo: { messageId: 'msg-1001', sender: '张三', content: '开会通知' },
+  });
+  it.each(['不存在', '目录'])('文件%s在提交前明确失败', async kind => {
+    const native = createNativeSendRuntime();
+    const result = await new BridgeMessageOps(native.cdp).sendFile(
+      kind === '目录' ? '.' : '不存在的原生测试文件.txt',
+      { targetSessionId: '93001' }
+    );
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(native.drafts).toEqual([]);
+  });
+  it.each([0, -9])('文件业务码%s独立于外层code0分类', async code => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kairo-t03-file-'));
+    const file = path.join(directory, '附件.txt');
+    fs.writeFileSync(file, '文件协议回归');
+    try {
+      const native = createNativeSendRuntime({ code });
+      const result = await new BridgeMessageOps(native.cdp).sendFile(file, {
+        targetSessionId: '93001',
       });
-
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(false);
-      expect(res.messageId).toBeUndefined();
-      expect(mockCdp.bringToFront).toHaveBeenCalled();
-    });
-  });
-
-  describe('sendRichText', () => {
-    it('空富文本内容应直接拦截', async () => {
-      const mockCdp = { evaluate: vi.fn() } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendRichText('');
-      expect(res.success).toBe(false);
-      expect(res.error).toContain('不能为空');
-    });
-
-    it('支持发送 FormattedText 片段并触发富文本发送', async () => {
-      const mockCdp = {
-        evaluate: vi
-          .fn()
-          .mockResolvedValueOnce({ success: true, method: 'vue_native_pictext' }) // native pictext
-          .mockResolvedValueOnce(true), // verifyTextSent
-        bringToFront: vi.fn().mockResolvedValue(undefined),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendRichText([
-        { text: '系统提醒: ', style: { bold: true } },
-        { text: '任务已完成', style: { color: '#52c41a' } },
-      ]);
-
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(false);
-      expect(res.messageId).toBeUndefined();
-      expect(mockCdp.bringToFront).toHaveBeenCalled();
-    });
-    it('发送动作触发后 CDP 响应丢失进入 unknown 且不回读 DOM', async () => {
-      const evaluate = vi.fn().mockRejectedValue(new Error('response lost'));
-      const mockCdp = {
-        evaluate,
-        bringToFront: vi.fn().mockResolvedValue(undefined),
-      } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendRichText('发送后连接断开');
-
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(false);
-      expect(res.messageId).toBeUndefined();
-      expect(evaluate).toHaveBeenCalledOnce();
-    });
-    it('DOM 触发发送后未收到 native 回执时返回未知', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockResolvedValue({ success: true, method: 'vue_native_pictext' }),
-        bringToFront: vi.fn().mockResolvedValue(undefined),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendRichText('等待 native 回执');
-
-      expect(res).toMatchObject({
-        success: false,
-        status: 'unknown',
-        isPreTrigger: false,
+      expect(result.status).toBe(code === 0 ? 'sent' : 'failed');
+      expect(native.drafts[0]?.['content']).toMatchObject({
+        type: 'File',
+        filename: '附件.txt',
+        filepath: file,
+        size: String(fs.statSync(file).size),
       });
-      expect(res.messageId).toBeUndefined();
-    });
-
+      if (code !== 0) expect(result.nativeCode).toBe(code);
+    } finally {
+      fs.rmSync(directory, { recursive: true });
+    }
   });
-
-  describe('sendReply', () => {
-    it('sendReply 应透传 replyTo 并调用 native reply', async () => {
-      const mockCdp = {
-        evaluate: vi
-          .fn()
-          .mockResolvedValueOnce({ success: true, method: 'vue_native_reply' }) // native reply
-          .mockResolvedValueOnce(true), // verify
-        bringToFront: vi.fn().mockResolvedValue(undefined),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendReply('原消息内容', '这是我的回复');
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(false);
-      expect(res.messageId).toBeUndefined();
+  it('发送前已失联是failed，不能读取窗口或触发原生草稿', async () => {
+    const native = createNativeSendRuntime();
+    native.disconnect();
+    const result = await new BridgeMessageOps(native.cdp).sendText('未触发', {
+      targetSessionId: '93001',
     });
-  });
-
-  describe('sendFile', () => {
-    it('不存在的文件应返回错误', async () => {
-      const mockCdp = { evaluate: vi.fn() } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendFile('./non_existent_file_12345.txt');
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('文件不存在');
-    });
-
-    it('目录路径应拒绝发送', async () => {
-      const mockCdp = { evaluate: vi.fn() } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendFile('.');
-      expect(res.success).toBe(false);
-      expect(res.error).toContain('不能发送目录');
-    });
-
-    it('合法存在的文件应执行原生文件发送与回读确认', async () => {
-      const tempFilePath = path.resolve('tmp_test_file.txt');
-      fs.writeFileSync(tempFilePath, '测试文件内容');
-
-      try {
-        const mockCdp = {
-          evaluate: vi
-            .fn()
-            .mockResolvedValueOnce({ success: true, method: 'vue_native_file_send' })
-            .mockResolvedValueOnce(true), // verifyFileSent
-          bringToFront: vi.fn().mockResolvedValue(undefined),
-        } as unknown as CdpClient;
-
-        const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-        const res = await ops.sendFile(tempFilePath);
-        expect(res.success).toBe(false);
-        expect(res.isPreTrigger).toBe(false);
-        expect(res.messageId).toBeUndefined();
-      } finally {
-        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      }
-    });
-    it('文件发送后回读超时未确认文件卡片时应返回失败', async () => {
-      const tempFilePath = path.resolve('tmp_timeout_file.txt');
-      fs.writeFileSync(tempFilePath, '测试超时内容');
-
-      try {
-        const mockCdp = {
-          evaluate: vi
-            .fn()
-            .mockResolvedValueOnce({ success: true, method: 'vue_native_file_send' })
-            .mockResolvedValueOnce(false), // verifyFileSent times out
-          bringToFront: vi.fn().mockResolvedValue(undefined),
-        } as unknown as CdpClient;
-
-        const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-        const res = await ops.sendFile(tempFilePath, { verifyTimeoutMs: 50 });
-        expect(res.success).toBe(false);
-        expect(res.isPreTrigger).toBe(false);
-        expect(res.messageId).toBeUndefined();
-        expect(res.error).toContain('权威 native ack');
-      } finally {
-        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      }
-    });
-  });
-
-  describe('sendImage', () => {
-    it('sendImage 不存在的文件应返回错误', async () => {
-      const mockCdp = { evaluate: vi.fn() } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendImage('./non_existent_image_12345.png');
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('文件不存在');
-    });
-    it('operation-aware 图片无法保证稳定关联时明确拒绝且不触发 DOM', async () => {
-      const mockCdp = {
-        evaluate: vi.fn(),
-        bringToFront: vi.fn(),
-      } as unknown as CdpClient;
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-
-      const res = await ops.sendImage('image.png', { operationId: 'op-dom-image' });
-
-      expect(res).toMatchObject({
-        success: false,
-        operationId: 'op-dom-image',
-        status: 'failed',
-        isPreTrigger: true,
-      });
-      expect(res.error).toContain('稳定 native 关联键');
-      expect(mockCdp.evaluate).not.toHaveBeenCalled();
-      expect(mockCdp.bringToFront).not.toHaveBeenCalled();
-    });
-  });
-  describe('bringToFront 激活窗口失败 (pre-trigger) 测试', () => {
-    const rejectingCdp = {
-      bringToFront: vi
-        .fn()
-        .mockRejectedValue(new Error('CDP Target.bringToFront connection closed')),
-      evaluate: vi.fn(),
-    } as unknown as CdpClient;
-
-    it('sendRichText 在 bringToFront 失败时应返回 isPreTrigger: true', async () => {
-      const ops = new SendOps(rejectingCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendRichText('测试富文本');
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('激活窗口失败');
-    });
-    it('sendReply 在 bringToFront 失败时应返回 isPreTrigger: true', async () => {
-      const ops = new SendOps(rejectingCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendReply('msg_123', '回复内容');
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(true);
-      expect(res.error).toContain('激活回复窗口失败');
-    });
-
-    it('sendFile 在 bringToFront 失败时应返回 isPreTrigger: true', async () => {
-      const tempFilePath = path.join(os.tmpdir(), `kairo_test_btf_${Date.now()}.txt`);
-      fs.writeFileSync(tempFilePath, '测试内容');
-      try {
-        const ops = new SendOps(rejectingCdp, DEFAULT_SELECTORS);
-        const res = await ops.sendFile(tempFilePath);
-        expect(res.success).toBe(false);
-        expect(res.isPreTrigger).toBe(true);
-        expect(res.error).toContain('激活文件发送窗口失败');
-      } finally {
-        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-      }
-    });
-
-    it('sendImage 在 bringToFront 失败时应返回 isPreTrigger: true', async () => {
-      const tempImgPath = path.join(os.tmpdir(), `kairo_test_btf_${Date.now()}.png`);
-      fs.writeFileSync(tempImgPath, 'fake_png_data');
-      try {
-        const ops = new SendOps(rejectingCdp, DEFAULT_SELECTORS);
-        const res = await ops.sendImage(tempImgPath);
-        expect(res.success).toBe(false);
-        expect(res.isPreTrigger).toBe(true);
-        expect(res.error).toContain('激活图片发送窗口失败');
-      } finally {
-        if (fs.existsSync(tempImgPath)) fs.unlinkSync(tempImgPath);
-      }
-    });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(native.ipc.sent).toEqual([]);
   });
 });

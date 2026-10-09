@@ -1,11 +1,11 @@
 import type { CdpClient } from '../cdp/client.js';
-import type { SendOptions, SendResult } from '../types/index.js';
+import type { SendOptions, SendOutcome } from '../types/index.js';
 import { createNativeMessageKey, isCdpUnavailableBeforeSend } from './send-status.js';
 import {
   CONFIRM_SENT_MESSAGE_SCRIPT,
   encodeRendererPayload,
   RENDERER_IPC_HELPERS_SCRIPT,
-  RENDERER_SESSION_RESOLVER_SCRIPT,
+  NATIVE_SEND_CONTEXT_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
 
@@ -16,14 +16,13 @@ type NativeStructuredMessage =
   | { kind: 'chat-record'; contentType: 15; content: unknown }
   | { kind: 'biz-message'; contentType: 17; content: unknown };
 
-function unsupportedOptionsResult(options: SendOptions): SendResult | null {
+function unsupportedOptionsResult(options: SendOptions): SendOutcome | null {
   const unsupported: string[] = [];
   if (options.replyTo !== undefined) unsupported.push('replyTo');
   if (options.mentions !== undefined) unsupported.push('mentions');
   if (unsupported.length === 0) return null;
 
   return {
-    success: false,
     status: 'failed',
     error: `原生卡片与语音消息不支持参数: ${unsupported.join(', ')}`,
     isPreTrigger: true,
@@ -39,7 +38,7 @@ export async function sendNativeStructuredMessage(
   message: NativeStructuredMessage,
   options: SendOptions,
   nativeKey?: string
-): Promise<SendResult> {
+): Promise<SendOutcome> {
   const unsupported = unsupportedOptionsResult(options);
   if (unsupported) return unsupported;
 
@@ -50,6 +49,7 @@ export async function sendNativeStructuredMessage(
     msgFlag: nativeKey ?? createNativeMessageKey(message.kind),
     contentType: message.contentType,
     content: message.content,
+    timeout: options.verifyTimeoutMs ?? 8000,
   };
   const encoded = encodeRendererPayload(payloadData);
 
@@ -57,39 +57,20 @@ export async function sendNativeStructuredMessage(
     (async () => {
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
-      const app = document.querySelector('#app')?.__vue__;
-      const main = document.querySelector('.main-page')?.__vue__;
-      const editor = document.querySelector('.chat-editor, .message-editor')?.__vue__;
-      const bus = main?.$bus || app?.$bus || window.vueBus;
-      const store = app?.$store || window.$store;
-      ${RENDERER_SESSION_RESOLVER_SCRIPT}
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      const callIpc = callKairoIpc;
+      ${NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
-      const target = data.target;
-
-      let targetSes = editor?.activedSes;
-      if (target) {
-        if (!Array.isArray(editor?.sortedSessions)) {
-          return { success: false, error: '当前会话列表不可用', isPreTrigger: true };
-        }
-        const found = resolveRendererSession(editor.sortedSessions, target);
-        if (!found) {
-          return { success: false, error: '未找到目标会话 [' + target + ']', isPreTrigger: true };
-        }
-        targetSes = found;
-      }
-      if (!targetSes) {
-        return { success: false, error: '当前无目标会话', isPreTrigger: true };
-      }
-
-      const myUid = main?.userID || editor?.userID;
-      if (!myUid) {
-        return { success: false, error: '未获取到当前登录用户身份 (userID)', isPreTrigger: true };
-      }
-      const myName = main?.userName || editor?.userName || '我';
+      const cancellation = beginNativeSend(data.msgFlag);
+      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      try {
+      let context;
+      try { context = await readNativeSendContext(data.target); }
+      catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
+      const { identity, session: targetSes, receiver } = context;
+      const myUid = identity.id;
+      const myName = identity.name;
       const sendTime = Math.floor(Date.now() / 1000);
       let messageContent = data.content;
 
@@ -137,64 +118,46 @@ export async function sendNativeStructuredMessage(
         senderName: myName,
         senderNameEN: myName,
         senderNameTC: myName,
-        receiver: resolveRendererReceiver(targetSes, myUid),
+        receiver,
         sendTime,
         sessionType: targetSes.type,
         sessionID: targetSes.id,
         atState: 1,
         atMemberIDList: [],
-        status: 1,
+        status: 'sending',
         type: 0,
-        msgFlag: data.msgFlag,
-        deviceID: main?.deviceID || editor?.deviceID || ''
+        msgFlag: data.msgFlag
       };
 
-      const submission = await submitNativeMessage(msgObj, targetSes);
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
       if (submission.failure) return submission.failure;
       const confirmedMessage = submission.confirmedMessage;
+      // 媒体显示通知保持现有能力；不参与发送成功判定，文本路径不使用它。
+      const app = document.querySelector('#app')?.__vue__;
+      const main = document.querySelector('.main-page')?.__vue__;
+      const bus = main?.$bus || app?.$bus || window.vueBus;
+      const store = app?.$store || window.$store;
+      try { store?.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: confirmedMessage }); }
+      catch { console.warn('[KairoDriver] 会话摘要更新失败'); }
+      try { bus?.$emit(targetSes.sesUUID + '-msg', [confirmedMessage]); }
+      catch { console.warn('[KairoDriver] 聊天窗口推送失败'); }
 
-      const sessionEventId = targetSes.sesUUID || String(targetSes.id);
-      try {
-        if (store) store.commit('updateSesLastMsg', { sesUUID: sessionEventId, message: confirmedMessage });
-      } catch {
-        console.warn('[KairoDriver] 会话摘要更新失败');
-      }
-      try {
-        if (bus) bus.$emit(sessionEventId + '-msg', [confirmedMessage]);
-      } catch {
-        console.warn('[KairoDriver] 聊天窗口推送失败');
-      }
-
-      return { success: true, messageId: String(confirmedMessage.id) };
+      return { status: 'sent', messageId: String(confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      } finally { cancellation.finish(); }
     })()
   `;
 
   try {
-    const result = await cdp.evaluate<{
-      success: boolean;
-      messageId?: string;
-      error?: string;
-      isPreTrigger?: boolean;
-    }>(script, options.verifyTimeoutMs ?? 15000);
-    if (!result?.success) {
-      return {
-        success: false,
-        status: result?.isPreTrigger === true ? 'failed' : 'unknown',
-        error: result?.error || '原生结构化消息发送失败',
-        isPreTrigger: result?.isPreTrigger ?? false,
-        verifyLatencyMs: Date.now() - startTime,
-      };
+    const result = await cdp.evaluate<SendOutcome>(
+      script,
+      (options.verifyTimeoutMs ?? 8000) + 12000
+    );
+    if (!result || !['sent', 'failed', 'unknown'].includes(result.status)) {
+      return { status: 'unknown', error: '原生结构化消息未返回有效结果', isPreTrigger: false };
     }
-    return {
-      success: true,
-      status: result.messageId ? 'delivered' : 'unknown',
-      messageId: result.messageId,
-      isPreTrigger: false,
-      verifyLatencyMs: Date.now() - startTime,
-    };
+    return { ...result, verifyLatencyMs: Date.now() - startTime };
   } catch (error) {
     return {
-      success: false,
       status: cdpWasUnavailable ? 'failed' : 'unknown',
       error: `原生结构化消息发送异常: ${error instanceof Error ? error.message : String(error)}`,
       isPreTrigger: cdpWasUnavailable,

@@ -117,7 +117,6 @@ const driver = new KK9Driver({
 });
 const cdp = (driver as unknown as { cdp: CdpClient }).cdp;
 
-
 async function readRawMessages(sessionId: string, count = 100): Promise<RawMessage[]> {
   if (!/^-?[0-9]+$/.test(sessionId)) throw new Error(`必须指定原生会话 ID ${sessionId}`);
   const response = await callIpcToData<RawMessage[]>(
@@ -160,7 +159,7 @@ async function trackSendResult(
     const persisted = await findRawByContent(sessionId, contentMarker);
     rememberRecall(`${label}（未知结果恢复）`, persisted ? rawId(persisted) : undefined, sessionId);
   }
-  if (!result.success || !isPositiveNativeId(result.messageId)) {
+  if (result.status !== 'sent' || !isPositiveNativeId(result.messageId)) {
     throw new Error(result.error || `${label} 未返回真实正 native ID`);
   }
   return result;
@@ -241,18 +240,13 @@ try {
     const allSessions = await driver.getSessions();
     const privateMatches = allSessions.filter(
       session =>
-        session.id === PRIVATE_ID &&
-        session.name === PRIVATE_NAME &&
-        session.type === 'private'
+        session.id === PRIVATE_ID && session.name === PRIVATE_NAME && session.type === 'private'
     );
     const groupMatches = allSessions.filter(
-      session =>
-        session.id === GROUP_ID && session.name === GROUP_NAME && session.type === 'group'
+      session => session.id === GROUP_ID && session.name === GROUP_NAME && session.type === 'group'
     );
     if (privateMatches.length !== 1 || groupMatches.length !== 1) {
-      throw new Error(
-        `目标必须精确唯一: ${JSON.stringify({ privateMatches, groupMatches })}`
-      );
+      throw new Error(`目标必须精确唯一: ${JSON.stringify({ privateMatches, groupMatches })}`);
     }
     console.log(
       `TARGETS ${JSON.stringify({
@@ -325,13 +319,11 @@ try {
       rememberRecall('误投群聊图片', rawId(message), GROUP_ID);
     }
     if (
-      !result.success ||
+      result.status !== 'sent' ||
       candidates.privateImages.length !== 1 ||
       candidates.groupImages.length !== 0
     ) {
-      throw new Error(
-        `图片目标或落库异常: ${JSON.stringify({ result, candidates })}`
-      );
+      throw new Error(`图片目标或落库异常: ${JSON.stringify({ result, candidates })}`);
     }
   });
 

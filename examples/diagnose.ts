@@ -158,7 +158,7 @@ async function main() {
       await driver.connect();
       console.log(`正在向 [${target}] 后台静默发送纯文本: "${text}" ...`);
       const res = await driver.sendText(text, { targetSessionId: target });
-      if (res.success) {
+      if (res.status === 'sent') {
         console.log(`✅ 发送成功！耗时: ${res.verifyLatencyMs || 0}ms (UI保持原状)`);
       } else {
         console.error(`❌ 发送失败: ${res.error}`);
@@ -169,11 +169,13 @@ async function main() {
 
     case 'rich': {
       const target = requiredArgument(args[0], '目标会话');
-      const md = decodeCliEscapedLineBreaks(requiredArgument(args.slice(1).join(' '), 'Markdown 内容'));
+      const md = decodeCliEscapedLineBreaks(
+        requiredArgument(args.slice(1).join(' '), 'Markdown 内容')
+      );
       await driver.connect();
       console.log(`正在向 [${target}] 后台静默发送富文本/Markdown...`);
       const res = await driver.sendRichText(md, { targetSessionId: target });
-      if (res.success) {
+      if (res.status === 'sent') {
         console.log(`✅ 富文本发送成功！耗时: ${res.verifyLatencyMs || 0}ms (UI保持原状)`);
       } else {
         console.error(`❌ 发送失败: ${res.error}`);
@@ -191,7 +193,7 @@ async function main() {
         targetSessionId: target,
         mentions: ['all'],
       });
-      if (res.success) {
+      if (res.status === 'sent') {
         console.log(`✅ @ 提及消息发送成功！(UI保持原状)`);
       } else {
         console.error(`❌ 发送失败: ${res.error}`);
@@ -212,7 +214,7 @@ async function main() {
       await driver.connect();
       console.log(`正在向 [${target}] 的消息 ${replyMsgId} 发送回复...`);
       const res = await driver.sendReply(replyMsgId, text, { targetSessionId: target });
-      if (res.success) {
+      if (res.status === 'sent') {
         console.log(`✅ 引用回复发送成功！`);
       } else {
         console.error(`❌ 发送失败: ${res.error}`);
@@ -232,7 +234,7 @@ async function main() {
       await driver.connect();
       console.log(`正在向 [${target}] 发送图片: ${imgPath} ...`);
       const res = await driver.sendImage(imgPath, { targetSessionId: target });
-      if (res.success) {
+      if (res.status === 'sent') {
         console.log(`✅ 图片发送成功！耗时: ${res.verifyLatencyMs || 0}ms`);
       } else {
         console.error(`❌ 发送图片失败: ${res.error}`);
@@ -252,7 +254,7 @@ async function main() {
       await driver.connect();
       console.log(`正在向 [${target}] 发送文件: ${filePath} ...`);
       const res = await driver.sendFile(filePath, { targetSessionId: target });
-      if (res.success) {
+      if (res.status === 'sent') {
         console.log(`✅ 文件发送成功！`);
       } else {
         console.error(`❌ 发送失败: ${res.error}`);
@@ -303,7 +305,7 @@ async function main() {
         await driver.connect();
         const result = await send();
         console.log(JSON.stringify(result, null, 2));
-        if (!result.success) process.exitCode = 1;
+        if (result.status !== 'sent') process.exitCode = 1;
       } finally {
         await driver.disconnect();
       }

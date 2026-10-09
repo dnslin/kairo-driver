@@ -8,7 +8,7 @@ export interface DriverLogEntry {
   employeeId?: string;
   runId?: string;
   durationMs?: number;
-  status?: 'up' | 'down' | 'failed' | 'unknown' | 'delivered' | 'received';
+  status?: 'up' | 'down' | 'failed' | 'unknown' | 'sent' | 'received';
   errorType?: 'driver' | 'send_unknown';
 }
 
@@ -58,7 +58,7 @@ function createLogEntry(input: unknown, numericLevel: number): DriverLogEntry {
     case 'down':
     case 'failed':
     case 'unknown':
-    case 'delivered':
+    case 'sent':
     case 'received':
       entry.status = source['status'];
   }

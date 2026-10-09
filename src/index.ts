@@ -105,6 +105,7 @@ export type {
   DriverConfig,
   EventBridgeConfig,
   SendResult,
+  NativeSendReceipt,
   KK9RecalledEvent,
   PreSendCheckResult,
   SendOptions,

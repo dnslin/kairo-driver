@@ -1,4 +1,5 @@
 import EventEmitter from 'node:events';
+import { randomUUID } from 'node:crypto';
 import type {
   CompensationScanOptions,
   ConnectionStatus,
@@ -20,16 +21,16 @@ import type {
   PreSendCheckResult,
   SendFileOptions,
   SendOptions,
+  SendOutcome,
   SendResult,
 } from './types/index.js';
 import {
   InMemorySendOperationStore,
   createSendOperationFingerprint,
   type SendOperationMessageType,
-  type SendOperationRecord,
   type SendOperationStore,
 } from './send-operation.js';
-import { sendOperationRecordToResult, sendResultToOperationUpdate } from './bridge/send-status.js';
+import { sendOperationRecordToResult } from './bridge/send-status.js';
 
 export type FakeSendPayload =
   | FormattedText
@@ -50,7 +51,7 @@ export type FakeSendBehavior =
       handler(
         payload: FakeSendPayload,
         options?: SendOptions | SendFileOptions
-      ): Promise<SendResult> | SendResult;
+      ): Promise<SendOutcome> | SendOutcome;
     }
   | { mode: 'sequence'; behaviors: FakeSendBehavior[] };
 
@@ -143,7 +144,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     this.messages = messages;
   }
 
-
   public setEmployees(employees: KK9Employee[]): void {
     this.employees = employees;
   }
@@ -153,7 +153,9 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public getRecentMessages(session: KK9Session, limit = 20): Promise<KK9Message[]> {
-    return Promise.resolve(this.messages.filter(message => message.sessionId === session.id).slice(-Math.max(1, limit)));
+    return Promise.resolve(
+      this.messages.filter(message => message.sessionId === session.id).slice(-Math.max(1, limit))
+    );
   }
 
   public scanCompensationWindow(_options: CompensationScanOptions): Promise<KK9Message[]> {
@@ -266,7 +268,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     return operation
       ? sendOperationRecordToResult(operation)
       : {
-          success: false,
           operationId: operationId.trim(),
           status: 'unknown',
           isPreTrigger: false,
@@ -287,9 +288,10 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null> {
-    const resolved = typeof session === 'string'
-      ? this.sessions.find(item => item.id === session.trim())
-      : session;
+    const resolved =
+      typeof session === 'string'
+        ? this.sessions.find(item => item.id === session.trim())
+        : session;
     return resolved?.type === 'private' && resolved.receiverId
       ? this.getUserProfile(resolved.receiverId)
       : null;
@@ -313,58 +315,47 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     options?: SendOptions | SendFileOptions,
     supportsReplyAndMentions = true
   ): Promise<SendResult> {
-    const requestedOperationId = options?.operationId;
-    let claimedOperation: SendOperationRecord | undefined;
-    if (requestedOperationId !== undefined) {
-      const replyTo = options && 'replyTo' in options ? options.replyTo : undefined;
-      const mentions = options && 'mentions' in options ? options.mentions : undefined;
-      const fingerprint = createSendOperationFingerprint({
-        targetSessionId: options?.targetSessionId,
-        messageType: operationType,
-        content: { payload, replyTo, mentions },
-      });
-      const claim = await this.sendOperationStore.claim({
-        operationId: requestedOperationId,
-        fingerprint,
-      });
-      if (!claim.claimed) return sendOperationRecordToResult(claim.operation);
-      claimedOperation = claim.operation;
-    }
-
-    this.recordedCalls.push({
-      type: callType,
-      payload,
-      options,
-      timestamp: Date.now(),
+    const operationId =
+      options?.operationId === undefined ? randomUUID() : options.operationId.trim();
+    const effectiveOptions = { ...options, operationId };
+    const replyTo = options && 'replyTo' in options ? options.replyTo : undefined;
+    const mentions = options && 'mentions' in options ? options.mentions : undefined;
+    const fingerprint = createSendOperationFingerprint({
+      targetSessionId: options?.targetSessionId,
+      messageType: operationType,
+      content: { payload, replyTo, mentions },
     });
-
-    const unsupportedOptions =
-      !supportsReplyAndMentions &&
-      options &&
-      (('replyTo' in options && options.replyTo !== undefined) ||
-        ('mentions' in options && options.mentions !== undefined));
-    const result: SendResult = unsupportedOptions
-      ? {
-          success: false,
-          status: 'failed',
-          error: '原生卡片与语音消息不支持 replyTo 或 mentions 参数',
-          isPreTrigger: true,
-        }
-      : await this.executeSendBehavior(payload, options);
-    if (!claimedOperation) return this.normalizeLegacyResult(result);
-
-    const normalized = sendResultToOperationUpdate(result);
-    const operation = await this.sendOperationStore.update(
-      claimedOperation.operationId,
-      normalized
-    );
-    return sendOperationRecordToResult(operation);
+    const claim = await this.sendOperationStore.claim({ operationId, fingerprint });
+    if (!claim.claimed) return sendOperationRecordToResult(claim.operation);
+    let outcome: SendOutcome;
+    if (!options?.targetSessionId?.trim()) {
+      outcome = { status: 'failed', error: '发送必须指定明确原生会话ID', isPreTrigger: true };
+    } else if (!supportsReplyAndMentions && (replyTo !== undefined || mentions !== undefined)) {
+      outcome = {
+        status: 'failed',
+        error: '原生卡片与语音消息不支持replyTo或mentions',
+        isPreTrigger: true,
+      };
+    } else {
+      this.recordedCalls.push({
+        type: callType,
+        payload,
+        options: effectiveOptions,
+        timestamp: Date.now(),
+      });
+      try {
+        outcome = await this.executeSendBehavior(payload, effectiveOptions);
+      } catch (error) {
+        outcome = { status: 'unknown', error: String(error), isPreTrigger: false };
+      }
+    }
+    return sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
   }
 
   private async executeSendBehavior(
     payload: FakeSendPayload,
     options?: SendOptions | SendFileOptions
-  ): Promise<SendResult> {
+  ): Promise<SendOutcome> {
     const active = this.currentBehavior;
     if (this.behaviorSequence.length > 0) {
       this.currentBehavior = this.behaviorSequence.shift()!;
@@ -373,7 +364,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     switch (active.mode) {
       case 'success':
         return {
-          success: true,
+          status: 'sent',
           messageId:
             active.messageId ?? `kk_msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           isPreTrigger: false,
@@ -382,28 +373,28 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
       case 'pre_trigger_failure':
         return {
-          success: false,
+          status: 'failed',
           error: active.error,
           isPreTrigger: true,
         };
 
       case 'post_trigger_timeout':
         return {
-          success: false,
+          status: 'unknown',
           error: active.error ?? 'CDP send timeout after trigger',
           isPreTrigger: false,
         };
 
       case 'post_trigger_disconnect':
         return {
-          success: false,
+          status: 'unknown',
           error: active.error ?? 'CDP disconnected during send verification',
           isPreTrigger: false,
         };
 
       case 'post_trigger_lost_response':
         return {
-          success: false,
+          status: 'unknown',
           error: active.error ?? 'Driver response lost after send action dispatched',
           isPreTrigger: false,
         };
@@ -413,19 +404,11 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
       default:
         return {
-          success: true,
+          status: 'sent',
           messageId: `kk_msg_def_${Date.now()}`,
           isPreTrigger: false,
         };
     }
-  }
-
-  private normalizeLegacyResult(result: SendResult): SendResult {
-    const status = result.status ?? sendResultToOperationUpdate(result).status;
-    return {
-      ...result,
-      status,
-    };
   }
 
   public emitMessage(msg: KK9Message): void {

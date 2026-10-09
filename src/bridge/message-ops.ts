@@ -1,14 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import mime from 'mime-types';
+import { randomUUID } from 'node:crypto';
 import type { CdpClient } from '../cdp/client.js';
 import { normalizeNativeMessage, type InboundNormalizationDiagnostic } from './converter.js';
 import { callIpcToData } from './rpc.js';
 import {
   encodeRendererPayload,
   CONFIRM_SENT_MESSAGE_SCRIPT,
+  NATIVE_SEND_CONTEXT_SCRIPT,
   RENDERER_IPC_HELPERS_SCRIPT,
-  RENDERER_SESSION_RESOLVER_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
 import { recallNativeMessage } from './recall-ops.js';
@@ -20,9 +21,7 @@ import {
   BridgeSendStatus,
   createNativeMessageKey,
   isCdpUnavailableBeforeSend,
-  resolveActiveSendOptions,
   sendOperationRecordToResult,
-  sendResultToOperationUpdate,
 } from './send-status.js';
 import {
   InMemorySendOperationStore,
@@ -42,15 +41,14 @@ import type {
   KK9VoiceOptions,
   SendFileOptions,
   SendOptions,
+  SendOutcome,
   SendResult,
 } from '../types/index.js';
 import { DriverError, SendError } from '../utils/errors.js';
 import { createChildLogger } from '../utils/logger.js';
 
 const log = createChildLogger('bridge-message-ops');
-
-const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
-
+const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const FIND_REPLY_TARGET_SCRIPT = `
   function normalizeReplyTargetMessage(message) {
     if (!message || typeof message !== 'object') return null;
@@ -110,7 +108,6 @@ const FIND_REPLY_TARGET_SCRIPT = `
     return null;
   }
 `;
-
 function buildMentionNodes(mentions?: SendOptions['mentions']): Array<Record<string, unknown>> {
   if (!mentions) return [];
   const list = Array.isArray(mentions) ? mentions : [mentions];
@@ -144,81 +141,103 @@ function buildMentionNodes(mentions?: SendOptions['mentions']): Array<Record<str
   return nodes;
 }
 
-
 export class BridgeMessageOps {
-  private readonly sendOperationStore: SendOperationStore;
   private readonly sendStatus: BridgeSendStatus;
-
+  private readonly inFlight = new Map<
+    AbortController,
+    { key?: string; result: Promise<SendResult> }
+  >();
+  private sendsCancelled = false;
   constructor(
     private readonly cdp: CdpClient,
-    sendOperationStore: SendOperationStore = new InMemorySendOperationStore()
+    private readonly sendOperationStore: SendOperationStore = new InMemorySendOperationStore()
   ) {
-    this.sendOperationStore = sendOperationStore;
-    this.sendStatus = new BridgeSendStatus(this.cdp, sendOperationStore);
+    this.sendStatus = new BridgeSendStatus(cdp, sendOperationStore);
   }
-
   public getSendStatus(operationId: string): Promise<SendResult> {
     return this.sendStatus.getSendStatus(operationId);
   }
-  private normalizeLegacyResult(result: SendResult): SendResult {
-    if (result.status !== undefined) return result;
-    return { ...result, status: sendResultToOperationUpdate(result).status };
+
+  public async cancelPendingSends(): Promise<void> {
+    this.sendsCancelled = true;
+    const pending = [...this.inFlight.entries()];
+    for (const [controller] of pending) controller.abort();
+    const keys = pending.flatMap(([, operation]) => (operation.key ? [operation.key] : []));
+    try {
+      if (keys.length && !isCdpUnavailableBeforeSend(this.cdp)) {
+        await this.cdp.evaluate(
+          '(() => { for (const key of ' +
+            JSON.stringify(keys) +
+            ') window.__kairo_pending_sends?.get(key)?.(); })()'
+        );
+      }
+    } finally {
+      await Promise.allSettled(pending.map(([, operation]) => operation.result));
+    }
   }
 
   private async executeOperation<T extends SendOptions | SendFileOptions>(
-    operationType: SendOperationMessageType,
+    kind: SendOperationMessageType,
     options: T,
     content: unknown,
-    action: (nativeKey: string | undefined, effectiveOptions: T) => Promise<SendResult>
+    action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>
   ): Promise<SendResult> {
-    const operationId = options.operationId;
-    if (operationId !== undefined && !operationId.trim()) {
-      throw new SendError('operationId 不能为空');
+    const controller = new AbortController();
+    if (this.sendsCancelled) controller.abort();
+    const result = this.runOperation(kind, options, content, action, controller);
+    this.inFlight.set(controller, { result });
+    try {
+      return await result;
+    } finally {
+      this.inFlight.delete(controller);
     }
-    if (operationId === undefined) {
-      return this.normalizeLegacyResult(await action(undefined, options));
-    }
+  }
 
-    const effectiveOptions = await resolveActiveSendOptions(this.cdp, options);
-    if (!effectiveOptions) {
-      return {
-        success: false,
-        operationId: operationId.trim(),
-        status: 'failed',
-        error: '无法确定 operationId 的目标会话，发送未触发',
-        isPreTrigger: true,
-      };
-    }
-
-    const replyTo = 'replyTo' in effectiveOptions ? effectiveOptions.replyTo : undefined;
-    const mentions = 'mentions' in effectiveOptions ? effectiveOptions.mentions : undefined;
+  private async runOperation<T extends SendOptions | SendFileOptions>(
+    kind: SendOperationMessageType,
+    options: T,
+    content: unknown,
+    action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>,
+    controller: AbortController
+  ): Promise<SendResult> {
+    const operationId =
+      options.operationId === undefined ? randomUUID() : options.operationId.trim();
+    if (!operationId) throw new SendError('operationId不能为空');
+    const targetSessionId = options.targetSessionId?.trim();
+    const effectiveOptions =
+      targetSessionId &&
+      /^-?[0-9]+$/.test(targetSessionId) &&
+      Number.isSafeInteger(Number(targetSessionId))
+        ? { ...options, operationId, targetSessionId }
+        : null;
     const fingerprint = createSendOperationFingerprint({
-      targetSessionId: effectiveOptions.targetSessionId,
-      messageType: operationType,
-      content: { payload: content, replyTo, mentions },
+      targetSessionId: options.targetSessionId?.trim(),
+      messageType: kind,
+      content: {
+        payload: content,
+        replyTo: 'replyTo' in options ? options.replyTo : undefined,
+        mentions: 'mentions' in options ? options.mentions : undefined,
+      },
     });
     const claim = await this.sendOperationStore.claim({ operationId, fingerprint });
     if (!claim.claimed) return this.sendStatus.resolve(claim.operation);
-
-    const nativeKey = createNativeMessageKey(operationType, claim.operation.operationId);
-    let result: SendResult;
-    try {
-      result = await action(nativeKey, effectiveOptions);
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      const operation = await this.sendOperationStore.update(operationId, {
-        status: 'unknown',
-        error,
-        isPreTrigger: false,
-      });
-      return sendOperationRecordToResult(operation);
+    let outcome: SendOutcome;
+    const key = createNativeMessageKey(kind, operationId);
+    this.inFlight.get(controller)!.key = key;
+    if (!effectiveOptions)
+      outcome = { status: 'failed', error: '发送必须指定明确原生会话ID', isPreTrigger: true };
+    else if (controller.signal.aborted)
+      outcome = { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
+    else if (isCdpUnavailableBeforeSend(this.cdp))
+      outcome = { status: 'failed', error: '发送前CDP未连接', isPreTrigger: true };
+    else {
+      try {
+        outcome = await action(key, effectiveOptions, controller.signal);
+      } catch (error) {
+        outcome = { status: 'unknown', error: String(error), isPreTrigger: false };
+      }
     }
-
-    const operation = await this.sendOperationStore.update(
-      operationId,
-      sendResultToOperationUpdate(result)
-    );
-    return sendOperationRecordToResult(operation);
+    return sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
   }
 
   /** 指定原生会话读取历史；空页正常返回，失败抛错，不依赖或回退聊天窗口。 */
@@ -232,538 +251,195 @@ export class BridgeMessageOps {
     if (!sessionId || !/^-?[0-9]+$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId))) {
       throw new DriverError('历史读取必须指定原生会话 ID', 'INVALID_SESSION_ID');
     }
-    const response = await callIpcToData<unknown[]>(this.cdp, 'getMessages', [{
-      sessionID: Number(sessionId), count: Math.max(1, limit), endIdx: 2147483647, sendTime: 0,
-    }]);
+    const response = await callIpcToData<unknown[]>(this.cdp, 'getMessages', [
+      {
+        sessionID: Number(sessionId),
+        count: Math.max(1, limit),
+        endIdx: 2147483647,
+        sendTime: 0,
+      },
+    ]);
     if (response.code !== 0) {
-      throw new DriverError(`getMessages 会话 ${sessionId} 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
+      throw new DriverError(
+        `getMessages 会话 ${sessionId} 失败 (${response.code}): ${response.error || response.message || ''}`,
+        'IPC_QUERY_FAILED'
+      );
     }
     if (!Array.isArray(response.data)) {
       throw new DriverError(`getMessages 会话 ${sessionId} 未返回有效数组`, 'IPC_INVALID_RESPONSE');
     }
     return normalizeNativeMessage(
-      { messages: response.data, session: { id: sessionId, name: session.name, type: session.type } },
+      {
+        messages: response.data,
+        session: { id: sessionId, name: session.name, type: session.type },
+      },
       {
         currentUserId,
         session,
         knownBotSentMessageKeys,
         source: 'history',
         onDiagnostic: (diagnostic: InboundNormalizationDiagnostic) => {
-          log.warn({ kind: diagnostic.kind, missingFields: diagnostic.missingFields, sessionId: diagnostic.sessionId }, '丢弃缺少原生消息身份的历史记录');
+          log.warn(
+            {
+              kind: diagnostic.kind,
+              missingFields: diagnostic.missingFields,
+              sessionId: diagnostic.sessionId,
+            },
+            '丢弃缺少原生消息身份的历史记录'
+          );
         },
       }
     );
   }
 
-  /**
-   * 发送纯文本消息
-   */
-  public async sendText(text: string, options: SendOptions = {}): Promise<SendResult> {
+  public sendText(text: string, options: SendOptions = {}): Promise<SendResult> {
     if (options.replyTo) return this.sendReply(options.replyTo, text, options);
-    return this.executeOperation('text', options, text, (nativeKey, effectiveOptions) =>
-      this.sendRichTextRaw(text, effectiveOptions, nativeKey)
+    return this.executeOperation('text', options, text, (key, bound) =>
+      this.sendRichTextRaw(text, bound, key)
     );
   }
-
-  /**
-   * 通过纯底层 IPC (insertSendBefoeMsg + sendMessageNew) 发送富文本与带 @ 提及消息
-   * 完全脱离 UI 与 DOM，零焦点干扰，支持多会话静默并发
-   */
-  public async sendRichText(
-    content: FormattedText,
-    options: SendOptions = {}
-  ): Promise<SendResult> {
+  public sendRichText(content: FormattedText, options: SendOptions = {}): Promise<SendResult> {
     if (options.replyTo) return this.sendReply(options.replyTo, content, options);
-    return this.executeOperation('rich-text', options, content, (nativeKey, effectiveOptions) =>
-      this.sendRichTextRaw(content, effectiveOptions, nativeKey)
+    return this.executeOperation('rich-text', options, content, (key, bound) =>
+      this.sendRichTextRaw(content, bound, key)
     );
   }
-
-  private async sendRichTextRaw(
+  private sendRichTextRaw(
     content: FormattedText,
     options: SendOptions,
-    nativeKey?: string
-  ): Promise<SendResult> {
+    key: string
+  ): Promise<SendOutcome> {
     const parsed = parseFormattedTextToKK(content);
-    if (!parsed.plainText.trim() && !options.mentions) {
-      return { success: false, error: '富文本内容不能为空', isPreTrigger: true };
-    }
-
-    const mentionNodes = buildMentionNodes(options.mentions);
-    const contentNodes: Array<Record<string, unknown>> = [];
-    for (const mn of mentionNodes) {
-      contentNodes.push(mn);
-      contentNodes.push({ type: 0, text: ' ' });
-    }
-    if (parsed.plainText) {
-      contentNodes.push({ type: 0, text: parsed.plainText });
-    }
-
-    const startTime = Date.now();
-    const cdpWasUnavailable = isCdpUnavailableBeforeSend(this.cdp);
-    const payloadData = {
-      target: options.targetSessionId || '',
-      msgFlag: nativeKey ?? createNativeMessageKey('text'),
-      contentNodes,
-      font: parsed.font,
-      mentionMemberIds: mentionNodes.map(m => m['replyMemberID']),
-      hasMentions: mentionNodes.length > 0,
-    };
-
-    const encoded = encodeRendererPayload(payloadData);
-
-    const script = `
-      (async () => {
-        const electron = window.require ? window.require('electron') : null;
-        const ipc = window.ipcRenderer || electron?.ipcRenderer;
-        const app = document.querySelector('#app')?.__vue__;
-        const main = document.querySelector('.main-page')?.__vue__;
-        const editor = document.querySelector('.chat-editor, .message-editor')?.__vue__;
-        const bus = main?.$bus || app?.$bus || window.vueBus;
-        const store = app?.$store || window.$store;
-        ${RENDERER_SESSION_RESOLVER_SCRIPT}
-        ${RENDERER_IPC_HELPERS_SCRIPT}
-        const callIpc = callKairoIpc;
-        ${CONFIRM_SENT_MESSAGE_SCRIPT}
-        ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
-        const data = JSON.parse(decodeURIComponent(${encoded}));
-        const target = data.target;
-
-        let targetSes = editor?.activedSes;
-        if (target) {
-          if (!Array.isArray(editor?.sortedSessions)) {
-            return { success: false, error: '当前会话列表不可用', isPreTrigger: true };
-          }
-          const found = resolveRendererSession(editor.sortedSessions, target);
-          if (!found) {
-            return { success: false, error: '未在会话列表中找到目标会话 [' + target + ']', isPreTrigger: true };
-          }
-          targetSes = found;
-        }
-
-        if (!targetSes) {
-          return { success: false, error: '未指定目标会话且当前无激活会话', isPreTrigger: true };
-        }
-
-        const myUid = main?.userID || editor?.userID;
-        if (!myUid) {
-          return { success: false, error: '未获取到当前登录用户身份 (userID)', isPreTrigger: true };
-        }
-        const myName = main?.userName || editor?.userName || '我';
-
-        const msgObj = {
-          contentType: 4, // PicText
-          content: {
-            content: data.contentNodes,
-            font: data.font
-          },
-          sender: myUid,
-          senderName: myName,
-          senderNameEN: myName,
-          senderNameTC: myName,
-          receiver: resolveRendererReceiver(targetSes, myUid),
-          sendTime: Math.floor(Date.now() / 1000),
-          sessionType: targetSes.type,
-          sessionID: targetSes.id,
-          atState: data.hasMentions ? 2 : 1,
-          atMemberIDList: data.mentionMemberIds || [],
-          status: 1,
-          type: 0,
-          msgFlag: data.msgFlag,
-          deviceID: main?.deviceID || editor?.deviceID || ''
-        };
-
-        const submission = await submitNativeMessage(msgObj, targetSes);
-        if (submission.failure) return submission.failure;
-        const confirmedMessage = submission.confirmedMessage;
-        msgObj.id = confirmedMessage.id;
-        msgObj.msgIdx = confirmedMessage.msgIdx;
-
-        try {
-          if (store) {
-            store.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: confirmedMessage });
-          }
-          if (bus) {
-            bus.$emit(targetSes.sesUUID + '-msg', [msgObj]);
-          }
-        } catch (updateErr) {}
-
-        return { success: true, messageId: String(confirmedMessage.id) };
-      })()
-    `;
-
-    try {
-      const res = await this.cdp.evaluate<{
-        success: boolean;
-        messageId?: string;
-        error?: string;
-        isPreTrigger?: boolean;
-      }>(script, 15000);
-
-      if (!res?.success) {
-        return {
-          success: false,
-          error: res?.error || '底层 IPC 发送失败',
-          isPreTrigger: res?.isPreTrigger ?? false,
-        };
-      }
-
-      return {
-        success: true,
-        messageId: res.messageId,
-        verifyLatencyMs: Date.now() - startTime,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        error: `底层 IPC 发送异常: ${err instanceof Error ? err.message : String(err)}`,
-        isPreTrigger: cdpWasUnavailable,
-        verifyLatencyMs: Date.now() - startTime,
-      };
-    }
+    const mentions = buildMentionNodes(options.mentions);
+    if (!parsed.plainText.trim() && mentions.length === 0)
+      return Promise.resolve({ status: 'failed', error: '文本内容不能为空', isPreTrigger: true });
+    const nodes = mentions.flatMap(node => [node, { type: 0, text: ' ' }]);
+    if (parsed.plainText) nodes.push({ type: 0, text: parsed.plainText });
+    return this.sendContent(
+      4,
+      { content: nodes, font: parsed.font },
+      options,
+      key,
+      mentions.map(node => node['replyMemberID'])
+    );
   }
-
-  /**
-   * 通过纯底层 IPC 发送引用/回复消息
-   */
-  public async sendReply(
+  public sendReply(
     replyTo: string | KK9ReplyTarget,
     content: FormattedText,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    const operationOptions: SendOptions = { ...options, replyTo };
-    return this.executeOperation(
-      'reply',
-      operationOptions,
-      content,
-      (nativeKey, effectiveOptions) =>
-        this.sendReplyRaw(replyTo, content, effectiveOptions, nativeKey)
-    );
+    return this.executeOperation('reply', { ...options, replyTo }, content, (key, bound) => {
+      const parsed = parseFormattedTextToKK(content);
+      if (!parsed.plainText.trim())
+        return Promise.resolve({ status: 'failed', error: '回复内容不能为空', isPreTrigger: true });
+      const mentions = buildMentionNodes(bound.mentions);
+      const nodes = mentions.flatMap(node => [node, { type: 0, text: ' ' }]);
+      nodes.push({ type: 0, text: parsed.plainText });
+      return this.sendContent(
+        13,
+        { content: nodes, font: parsed.font },
+        bound,
+        key,
+        [],
+        typeof replyTo === 'string' ? { messageId: replyTo } : replyTo
+      );
+    });
   }
-
-  private async sendReplyRaw(
-    replyTo: string | KK9ReplyTarget,
-    content: FormattedText,
-    options: SendOptions,
-    nativeKey?: string
-  ): Promise<SendResult> {
-    const parsed = parseFormattedTextToKK(content);
-    if (!parsed.plainText.trim()) {
-      return { success: false, error: '回复内容不能为空', isPreTrigger: true };
-    }
-
-    const targetObj =
-      typeof replyTo === 'string' ? { content: replyTo, messageId: replyTo } : replyTo;
-    const mentionNodes = buildMentionNodes(options.mentions);
-    const replyContentNodes: Array<Record<string, unknown>> = [];
-    for (const mn of mentionNodes) {
-      replyContentNodes.push(mn);
-      replyContentNodes.push({ type: 0, text: ' ' });
-    }
-    replyContentNodes.push({ type: 0, text: parsed.plainText });
-
-    const startTime = Date.now();
-    const cdpWasUnavailable = isCdpUnavailableBeforeSend(this.cdp);
-    const payloadData = {
-      target: options.targetSessionId || '',
-      msgFlag: nativeKey ?? createNativeMessageKey('reply'),
-      targetRef: targetObj,
-      replyContentNodes,
-      font: parsed.font,
-    };
-
-    const encoded = encodeRendererPayload(payloadData);
-
-    const script = `
-      (async () => {
-        const electron = window.require ? window.require('electron') : null;
-        const ipc = window.ipcRenderer || electron?.ipcRenderer;
-        const app = document.querySelector('#app')?.__vue__;
-        const main = document.querySelector('.main-page')?.__vue__;
-        const editor = document.querySelector('.chat-editor, .message-editor')?.__vue__;
-        const bus = main?.$bus || app?.$bus || window.vueBus;
-        const store = app?.$store || window.$store;
-        ${RENDERER_SESSION_RESOLVER_SCRIPT}
-        ${RENDERER_IPC_HELPERS_SCRIPT}
-        const callIpc = callKairoIpc;
-        ${CONFIRM_SENT_MESSAGE_SCRIPT}
-        ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
-        const data = JSON.parse(decodeURIComponent(${encoded}));
-        const target = data.target;
-
-        let targetSes = editor?.activedSes;
-        if (target) {
-          if (!Array.isArray(editor?.sortedSessions)) {
-            return { success: false, error: '当前会话列表不可用', isPreTrigger: true };
-          }
-          const found = resolveRendererSession(editor.sortedSessions, target);
-          if (!found) {
-            return { success: false, error: '未找到目标会话 [' + target + ']', isPreTrigger: true };
-          }
-          targetSes = found;
-        }
-
-        if (!targetSes) return { success: false, error: '当前无目标会话', isPreTrigger: true };
-
-        const targetRef = data.targetRef;
-        if (!targetRef?.messageId) {
-          return { success: false, error: '被回复消息缺少原生 messageId', isPreTrigger: true };
-        }
-        ${FIND_REPLY_TARGET_SCRIPT}
-        const targetMessage = await findReplyTargetMessage(targetSes.id, targetRef);
-        if (!targetMessage) {
-          return { success: false, error: '未在目标会话历史中找到被回复消息', isPreTrigger: true };
-        }
-
-        const myUid = main?.userID || editor?.userID;
-        if (!myUid) {
-          return { success: false, error: '未获取到当前登录用户身份 (userID)', isPreTrigger: true };
-        }
-        const myName = main?.userName || editor?.userName || '我';
-        const replyPayload = {
-          type: 'Reply',
-          replyedID: targetMessage.sender || 0,
-          replyedName: targetMessage.senderName || '',
-          replyedNameEN: targetMessage.senderNameEN || targetMessage.senderName || '',
-          replyedNameTC: targetMessage.senderNameTC || targetMessage.senderName || '',
-          replyedMsgId: targetMessage.id,
-          replyedMsgIndex: targetMessage.msgIdx || 0,
-          replyedContentType: targetMessage.contentType || 4,
-          replyedContent: targetMessage.content?.replyContent || targetMessage.content || '',
-          replyContent: {
-            content: data.replyContentNodes,
-            font: data.font
-          }
-        };
-
-        const msgObj = {
-          contentType: 13, // Reply
-          content: replyPayload,
-          sender: myUid,
-          senderName: myName,
-          senderNameEN: myName,
-          senderNameTC: myName,
-          receiver: resolveRendererReceiver(targetSes, myUid),
-          sendTime: Math.floor(Date.now() / 1000),
-          sessionType: targetSes.type,
-          sessionID: targetSes.id,
-          atState: 1,
-          atMemberIDList: [],
-          status: 1,
-          type: 0,
-          msgFlag: data.msgFlag,
-          deviceID: main?.deviceID || editor?.deviceID || ''
-        };
-
-        const submission = await submitNativeMessage(msgObj, targetSes);
-        if (submission.failure) return submission.failure;
-        const confirmedMessage = submission.confirmedMessage;
-        msgObj.id = confirmedMessage.id;
-        msgObj.msgIdx = confirmedMessage.msgIdx;
-
-        try {
-          if (store) {
-            store.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: confirmedMessage });
-          }
-          if (bus) {
-            bus.$emit(targetSes.sesUUID + '-msg', [msgObj]);
-          }
-        } catch (updateErr) {}
-
-        return { success: true, messageId: String(confirmedMessage.id) };
-      })()
-    `;
-
-    try {
-      const res = await this.cdp.evaluate<{
-        success: boolean;
-        messageId?: string;
-        error?: string;
-        isPreTrigger?: boolean;
-      }>(script, 15000);
-      if (!res?.success) {
-        return {
-          success: false,
-          error: res?.error || '底层回复发送失败',
-          isPreTrigger: res?.isPreTrigger ?? false,
-        };
-      }
-      return { success: true, messageId: res.messageId, verifyLatencyMs: Date.now() - startTime };
-    } catch (err) {
-      return {
-        success: false,
-        error: `发送回复异常: ${err instanceof Error ? err.message : String(err)}`,
-        isPreTrigger: cdpWasUnavailable,
-        verifyLatencyMs: Date.now() - startTime,
-      };
-    }
-  }
-
-  /**
-   * 通过纯底层 IPC 发送文件
-   */
-  public async sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
-    return this.executeOperation('file', options, filePath, (nativeKey, effectiveOptions) =>
-      this.sendFileRaw(filePath, effectiveOptions, nativeKey)
-    );
-  }
-
-  private async sendFileRaw(
-    filePath: string,
-    options: SendFileOptions,
-    nativeKey?: string
-  ): Promise<SendResult> {
-    const fullPath = path.resolve(filePath);
-    if (!fs.existsSync(fullPath)) {
-      return { success: false, error: `文件不存在: ${fullPath}`, isPreTrigger: true };
-    }
-
-    const stats = fs.statSync(fullPath);
-    if (stats.isDirectory()) {
-      return { success: false, error: `不能发送目录: ${fullPath}`, isPreTrigger: true };
-    }
-    if (stats.size > MAX_FILE_SIZE_BYTES) {
-      return {
-        success: false,
-        error: `文件大小超出限制 (100MB): ${stats.size} bytes`,
-        isPreTrigger: true,
-      };
-    }
-
-    const fileName = path.basename(fullPath);
-    const mimeType = mime.lookup(fullPath) || 'application/octet-stream';
-    const startTime = Date.now();
-    const cdpWasUnavailable = isCdpUnavailableBeforeSend(this.cdp);
-    const payloadData = {
-      target: options.targetSessionId || '',
-      msgFlag: nativeKey ?? createNativeMessageKey('file'),
-      fullPath,
-      fileName,
-      mimeType,
-      sizeStr: String(stats.size),
-    };
-
-    const encoded = encodeRendererPayload(payloadData);
-
-    const script = `
-      (async () => {
-        const electron = window.require ? window.require('electron') : null;
-        const ipc = window.ipcRenderer || electron?.ipcRenderer;
-        const app = document.querySelector('#app')?.__vue__;
-        const main = document.querySelector('.main-page')?.__vue__;
-        const editor = document.querySelector('.chat-editor, .message-editor')?.__vue__;
-        const bus = main?.$bus || app?.$bus || window.vueBus;
-        const store = app?.$store || window.$store;
-        ${RENDERER_SESSION_RESOLVER_SCRIPT}
-        ${RENDERER_IPC_HELPERS_SCRIPT}
-        const callIpc = callKairoIpc;
-        ${CONFIRM_SENT_MESSAGE_SCRIPT}
-        ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
-        const data = JSON.parse(decodeURIComponent(${encoded}));
-        const target = data.target;
-
-        let targetSes = editor?.activedSes;
-        if (target) {
-          if (!Array.isArray(editor?.sortedSessions)) {
-            return { success: false, error: '当前会话列表不可用', isPreTrigger: true };
-          }
-          const found = resolveRendererSession(editor.sortedSessions, target);
-          if (!found) {
-            return { success: false, error: '未找到目标会话 [' + target + ']', isPreTrigger: true };
-          }
-          targetSes = found;
-        }
-
-        if (!targetSes) return { success: false, error: '当前无目标会话', isPreTrigger: true };
-
-        const myUid = main?.userID || editor?.userID;
-        if (!myUid) {
-          return { success: false, error: '未获取到当前登录用户身份 (userID)', isPreTrigger: true };
-        }
-        const myName = main?.userName || editor?.userName || '我';
-
-        const filePayload = {
+  public sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
+    return this.executeOperation('file', options, filePath, async (key, bound) => {
+      const fullPath = path.resolve(filePath);
+      if (!fs.existsSync(fullPath))
+        return { status: 'failed', error: '文件不存在: ' + fullPath, isPreTrigger: true };
+      const stats = fs.statSync(fullPath);
+      if (stats.isDirectory())
+        return { status: 'failed', error: '不能发送目录: ' + fullPath, isPreTrigger: true };
+      if (stats.size > MAX_FILE_SIZE_BYTES)
+        return { status: 'failed', error: '文件大小超出限制(100MB)', isPreTrigger: true };
+      return this.sendContent(
+        3,
+        {
           type: 'File',
-          mimetype: data.mimeType,
-          filepath: data.fullPath,
-          size: data.sizeStr,
+          mimetype: mime.lookup(fullPath) || 'application/octet-stream',
+          filepath: fullPath,
+          size: String(stats.size),
           isValid: true,
-          filename: data.fileName
-        };
+          filename: path.basename(fullPath),
+        },
+        bound,
+        key
+      );
+    });
+  }
 
-        const msgObj = {
-          contentType: 3, // File
-          content: filePayload,
-          sender: myUid,
-          senderName: myName,
-          senderNameEN: myName,
-          senderNameTC: myName,
-          receiver: resolveRendererReceiver(targetSes, myUid),
-          sendTime: Math.floor(Date.now() / 1000),
-          sessionType: targetSes.type,
-          sessionID: targetSes.id,
-          atState: 1,
-          atMemberIDList: [],
-          status: 1,
-          type: 0,
-          msgFlag: data.msgFlag,
-          filepath: data.fullPath,
-          deviceID: main?.deviceID || editor?.deviceID || ''
-        };
-
-        const submission = await submitNativeMessage(msgObj, targetSes);
-        if (submission.failure) return submission.failure;
-        const confirmedMessage = submission.confirmedMessage;
-        msgObj.id = confirmedMessage.id;
-        msgObj.msgIdx = confirmedMessage.msgIdx;
-
-        try {
-          if (store) {
-            store.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: confirmedMessage });
-          }
-          if (bus) {
-            bus.$emit(targetSes.sesUUID + '-msg', [msgObj]);
-          }
-        } catch (updateErr) {}
-
-        return { success: true, messageId: String(confirmedMessage.id) };
-      })()
-    `;
-
-    try {
-      const res = await this.cdp.evaluate<{
-        success: boolean;
-        messageId?: string;
-        error?: string;
-        isPreTrigger?: boolean;
-      }>(script, 15000);
-      if (!res?.success) {
-        return {
-          success: false,
-          error: res?.error || '文件底层发送失败',
-          isPreTrigger: res?.isPreTrigger ?? false,
-        };
+  private async sendContent(
+    contentType: number,
+    content: unknown,
+    options: SendOptions | SendFileOptions,
+    key: string,
+    mentionIds: unknown[] = [],
+    replyTo?: Partial<KK9ReplyTarget>
+  ): Promise<SendOutcome> {
+    const started = Date.now();
+    const timeout = options.verifyTimeoutMs ?? 8000;
+    const encoded = encodeRendererPayload({
+      target: options.targetSessionId,
+      contentType,
+      content,
+      key,
+      mentionIds,
+      replyTo,
+      timeout,
+    });
+    const script = `(async () => {
+      const electron = window.require ? window.require('electron') : null;
+      const ipc = window.ipcRenderer || electron?.ipcRenderer;
+      ${RENDERER_IPC_HELPERS_SCRIPT}
+      ${NATIVE_SEND_CONTEXT_SCRIPT}
+      ${CONFIRM_SENT_MESSAGE_SCRIPT}
+      ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
+      const data = JSON.parse(decodeURIComponent(${encoded}));
+      const cancellation = beginNativeSend(data.key);
+      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      try {
+      let context;
+      try { context = await readNativeSendContext(data.target); }
+      catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
+      const { identity, session: targetSes, receiver } = context;
+      let messageContent = data.content;
+      if (data.contentType === 13) {
+        ${FIND_REPLY_TARGET_SCRIPT}
+        const targetMessage = await findReplyTargetMessage(targetSes.id, data.replyTo);
+        if (!targetMessage) return { status: 'failed', error: '未在指定会话找到被回复的原生消息', isPreTrigger: true };
+        messageContent = { type: 'Reply', replyedID: targetMessage.sender || 0, replyedName: targetMessage.senderName || '', replyedNameEN: targetMessage.senderNameEN || '', replyedNameTC: targetMessage.senderNameTC || '', replyedMsgId: targetMessage.id, replyedMsgIndex: targetMessage.msgIdx, replyedContentType: targetMessage.contentType, replyedContent: targetMessage.content?.replyContent || targetMessage.content, replyContent: data.content };
       }
-      return { success: true, messageId: res.messageId, verifyLatencyMs: Date.now() - startTime };
-    } catch (err) {
+      // 草稿设备列允许NULL；正式核心从CORE_DATA使用当前注册设备，不以空值冒充设备身份。
+      const msgObj = { contentType: data.contentType, content: messageContent, sender: identity.id, senderName: identity.name, senderNameEN: identity.name_en || '', senderNameTC: identity.name_tc || '', receiver, sessionType: targetSes.type, sessionID: targetSes.id,
+        sendTime: Math.floor(Date.now()/1000), status: 'sending', type: 0, atState: data.mentionIds.length ? 0 : 1, atMemberIDList: data.mentionIds, msgFlag: data.key };
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
+      if (submission.failure) return submission.failure;
+      return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      } finally { cancellation.finish(); }
+    })()`;
+    try {
+      const outcome = await this.cdp.evaluate<SendOutcome>(script, timeout + 12000);
+      if (!outcome || !['sent', 'failed', 'unknown'].includes(outcome.status))
+        return { status: 'unknown', error: '原生发送未返回有效结果', isPreTrigger: false };
+      return { ...outcome, verifyLatencyMs: Date.now() - started };
+    } catch (error) {
       return {
-        success: false,
-        error: `文件发送异常: ${err instanceof Error ? err.message : String(err)}`,
-        isPreTrigger: cdpWasUnavailable,
-        verifyLatencyMs: Date.now() - startTime,
+        status: 'unknown',
+        error: '原生发送连接异常: ' + String(error),
+        isPreTrigger: false,
+        verifyLatencyMs: Date.now() - started,
       };
     }
   }
 
-  /**
-   * 通过纯底层 IPC 发送本地图片
-   */
   public sendImage(imagePath: string, options: SendOptions = {}): Promise<SendResult> {
-    return this.executeOperation('image', options, imagePath, (nativeKey, effectiveOptions) =>
-      sendNativeImage(this.cdp, imagePath, effectiveOptions, nativeKey)
+    return this.executeOperation('image', options, imagePath, (key, bound) =>
+      sendNativeImage(this.cdp, imagePath, bound, key)
     );
   }
-
   /** 发送链接图文卡片。 */
   public sendUrlCard(card: KK9UrlCardOptions, options: SendOptions = {}): Promise<SendResult> {
     const content = {
@@ -776,8 +452,7 @@ export class BridgeMessageOps {
     };
     return this.executeOperation('url-card', options, content, (nativeKey, effectiveOptions) => {
       if (!content.title.trim() || !content.summary.trim() || !content.linkUrl.trim()) {
-        return Promise.resolve<SendResult>({
-          success: false,
+        return Promise.resolve<SendOutcome>({
           status: 'failed',
           error: 'UrlCard 的 title、summary 与 linkUrl 不能为空',
           isPreTrigger: true,
@@ -803,8 +478,7 @@ export class BridgeMessageOps {
     };
     return this.executeOperation('biz-message', options, content, (nativeKey, effectiveOptions) => {
       if (!content.title.trim() || !content.content.trim()) {
-        return Promise.resolve<SendResult>({
-          success: false,
+        return Promise.resolve<SendOutcome>({
           status: 'failed',
           error: 'BizMsg 的 title 与 content 不能为空',
           isPreTrigger: true,
@@ -829,8 +503,7 @@ export class BridgeMessageOps {
     };
     return this.executeOperation('app-message', options, content, (nativeKey, effectiveOptions) => {
       if (!content.title.trim() || !content.content.trim()) {
-        return Promise.resolve<SendResult>({
-          success: false,
+        return Promise.resolve<SendOutcome>({
           status: 'failed',
           error: 'AppMsg 的 title 与 content 不能为空',
           isPreTrigger: true,
@@ -870,8 +543,7 @@ export class BridgeMessageOps {
           item.content === undefined
       );
       if (!content.title.trim() || content.msgArray.length === 0 || invalidItem) {
-        return Promise.resolve<SendResult>({
-          success: false,
+        return Promise.resolve<SendOutcome>({
           status: 'failed',
           error: 'ChatRecord 需要非空 title 与至少一条完整消息',
           isPreTrigger: true,
@@ -885,61 +557,30 @@ export class BridgeMessageOps {
       );
     });
   }
-
-  /** 准备音频后发送原生语音气泡。 */
-  public async sendVoice(voice: KK9VoiceOptions, options: SendOptions = {}): Promise<SendResult> {
-    const input: KK9VoiceOptions = { ...voice };
-    let initialOptions = options;
-    if (options.operationId === undefined) {
-      const resolvedOptions = await resolveActiveSendOptions(this.cdp, options);
-      if (!resolvedOptions) {
+  public sendVoice(voice: KK9VoiceOptions, options: SendOptions = {}): Promise<SendResult> {
+    const input = { ...voice };
+    return this.executeOperation('voice', options, input, async (key, bound, signal) => {
+      if (bound.replyTo !== undefined || bound.mentions !== undefined)
         return {
-          success: false,
           status: 'failed',
-          error: '无法确定语音消息的目标会话，发送未触发',
+          error: '原生语音消息不支持replyTo或mentions',
           isPreTrigger: true,
         };
-      }
-      initialOptions = resolvedOptions;
-    }
-
-    return this.executeOperation(
-      'voice',
-      initialOptions,
-      input,
-      async (nativeKey, effectiveOptions) => {
-        if (effectiveOptions.replyTo !== undefined || effectiveOptions.mentions !== undefined) {
-          return {
-            success: false,
-            status: 'failed',
-            error: '原生语音消息不支持 replyTo 或 mentions',
-            isPreTrigger: true,
-          };
-        }
-        let prepared: { duration: number; data: string; filepath?: string };
-        try {
-          prepared = await prepareVoice(this.cdp, input);
-        } catch (error) {
-          return {
-            success: false,
-            status: 'failed',
-            error: `语音准备失败: ${error instanceof Error ? error.message : String(error)}`,
-            isPreTrigger: true,
-          };
-        }
+      try {
+        const prepared = await prepareVoice(this.cdp, input);
+        if (signal.aborted)
+          return { status: 'failed', error: '语音准备期间本轮发送已取消', isPreTrigger: true };
         return sendNativeStructuredMessage(
           this.cdp,
           { kind: 'voice', contentType: 2, content: prepared },
-          effectiveOptions,
-          nativeKey
+          bound,
+          key
         );
+      } catch (error) {
+        return { status: 'failed', error: '语音准备失败: ' + String(error), isPreTrigger: true };
       }
-    );
+    });
   }
-
-  /**
-   * 优先通过原生 IPC toData('cancelMessage') 撤回消息
-   */
   public recallMessage(messageId: string, sessionId?: string): Promise<boolean> {
     return recallNativeMessage(this.cdp, messageId, sessionId);
   }

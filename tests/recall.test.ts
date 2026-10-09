@@ -10,22 +10,29 @@ import {
   FakeIpcRenderer,
   runRendererScript,
 } from './helpers/renderer-runtime.js';
+import { BridgeMessageOps } from '../src/bridge/message-ops.js';
+import { createNativeSendRuntime } from './helpers/native-send-runtime.js';
 
 describe('消息撤回双轨 API 与安全守卫测试 (Issue #67)', () => {
   describe('SendResult.recall 快捷链式撤回', () => {
-    it('发送动作无权威 native ack 时不返回 messageId 或 recall()', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockResolvedValue({ success: true, method: 'vue_native_pictext' }),
-        bringToFront: vi.fn().mockResolvedValue(undefined),
-      } as unknown as CdpClient;
-
-      const ops = new SendOps(mockCdp, DEFAULT_SELECTORS);
-      const res = await ops.sendText('测试发送并准备撤回');
-
-      expect(res.success).toBe(false);
-      expect(res.isPreTrigger).toBe(false);
-      expect(res.messageId).toBeUndefined();
-      expect(res.recall).toBeUndefined();
+    it('没有本次业务回执的发送不提供快捷撤回', async () => {
+      vi.useFakeTimers();
+      try {
+        const native = createNativeSendRuntime({ callback: false });
+        const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
+        getDriverTestInternals(driver).bridgeMessageOps = new BridgeMessageOps(native.cdp);
+        const pending = driver.sendText('无回执', {
+          targetSessionId: '93001',
+          verifyTimeoutMs: 50,
+        });
+        await vi.runAllTimersAsync();
+        const result = await pending;
+        expect(result.status).toBe('unknown');
+        expect(result.messageId).toBeUndefined();
+        expect(result.recall).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -45,9 +52,9 @@ describe('消息撤回双轨 API 与安全守卫测试 (Issue #67)', () => {
         bridgeMessageOps: typeof mockSendOps;
         domSendOps: typeof mockSendOps;
       }>(driver);
-      driver.getSessions = vi.fn().mockResolvedValue([
-        { id: 'ses_test', name: '测试会话', type: 'private', unread: false },
-      ]);
+      driver.getSessions = vi
+        .fn()
+        .mockResolvedValue([{ id: 'ses_test', name: '测试会话', type: 'private', unread: false }]);
       internals.bridgeMessageOps = mockSendOps;
       internals.domSendOps = mockSendOps;
 
@@ -101,9 +108,9 @@ describe('消息撤回双轨 API 与安全守卫测试 (Issue #67)', () => {
         bridgeMessageOps: typeof bridgeOps;
         domSendOps: typeof domOps;
       }>(driver);
-      driver.getSessions = vi.fn().mockResolvedValue([
-        { id: 'session-a', name: '会话 A', type: 'private', unread: false },
-      ]);
+      driver.getSessions = vi
+        .fn()
+        .mockResolvedValue([{ id: 'session-a', name: '会话 A', type: 'private', unread: false }]);
       internals.bridgeMessageOps = bridgeOps;
       internals.domSendOps = domOps;
 

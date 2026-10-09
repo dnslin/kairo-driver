@@ -103,12 +103,13 @@ function createPage(sessionId = '会话', nativeSessionId: string | number = ses
 }
 
 const nativeSubmissionScript = `(async () => {
+  const ipc = window.ipcRenderer;
   ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
   const callIpc = window.nativeSubmitIpc;
   const waitForPersistedMessage = window.confirmNativeSend;
   if (window.beforeNativeSubmit) await window.beforeNativeSubmit();
   return submitNativeMessage({ sessionID: 716791, sender: 91001, receiver: 91002,
-    contentType: 4, content: '请求正文', msgFlag: '本次原生标识' },
+    sessionType: 0, contentType: 4, content: '请求正文', msgFlag: '本次原生标识' },
     { id: 716791, sesUUID: '0-91002', type: 0, typeID: 91002 });
 })()`;
 
@@ -121,10 +122,16 @@ function configureNativeSubmission(windowObject: Record<string, unknown>) {
     content: { content: [{ type: 0, text: '原生确认正文' }] },
     msgIdx: 10,
   };
-  windowObject['nativeSubmitIpc'] = (channel: string) =>
-    Promise.resolve(
-      channel === 'insertSendBefoeMsg' ? { code: 0, data: { id: -1, msgIdx: 9 } } : { code: 0 }
+  windowObject['nativeSubmitIpc'] = (channel: string) => {
+    if (channel === 'insertSendBefoeMsg')
+      return Promise.resolve({ code: 0, data: { id: -1, msgIdx: 9 } });
+    (windowObject['ipcRenderer'] as EventEmitter).emit(
+      '0-91002-sendMsgCallback',
+      {},
+      { args: { msgID: -1, code: 0, data: { sessionID: 716791 } } }
     );
+    return Promise.resolve({ code: 0 });
+  };
   windowObject['confirmNativeSend'] = () => Promise.resolve(confirmed);
   return confirmed;
 }
@@ -185,6 +192,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
   });
 
   it.each(['发送ack失败', '没有确认记录'])('%s不得根据请求正文伪造成功回显', async failure => {
+    vi.useFakeTimers();
     const page = createPage('0-91002');
     const { bridge } = page.createBridge('发送失败', '连接', '91001');
     configureNativeSubmission(page.windowObject);
@@ -198,11 +206,13 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     bridge.on('message', message => messages.push(message));
     await bridge.connect();
     try {
-      const result = await runRendererScript<{ failure: { success: boolean } }>(
+      const pending = runRendererScript<{ failure: { status: string } }>(
         nativeSubmissionScript,
         page.runtime.context
       );
-      expect(result.failure.success).toBe(false);
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(result.failure.status).toBe('unknown');
       expect(messages).toEqual([]);
     } finally {
       await bridge.disconnect();
@@ -419,7 +429,13 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     {
       name: '正文内事件',
       data: {
-        message: [{ sessionID: 716791, contentType: 6, content: { event: 'CancelMessage', msgID: '待撤回' } }],
+        message: [
+          {
+            sessionID: 716791,
+            contentType: 6,
+            content: { event: 'CancelMessage', msgID: '待撤回' },
+          },
+        ],
       },
     },
     {
@@ -471,43 +487,59 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     }
   });
 
-  it.each(['预挂已知会话', '动态新增会话', '补齐已监听会话'])('%s的本机撤回仅有msgID/msgIdx时沿用已知原生身份，与组件和原生通知只派发一次', async source => {
-    const dynamic = source !== '预挂已知会话';
-    const page = createPage(dynamic ? '已有界面会话' : '0-91002', dynamic ? 800001 : 716791);
-    if (source === '补齐已监听会话') {
-      page.runtime.editor.sortedSessions.push({ id: '', sesUUID: '0-91002' });
-    }
-    page.chat.sesInfo = { sesUUID: '0-91002' };
-    const { bridge } = page.createBridge('本机撤回', '连接');
-    const recalls: KK9RecalledEvent[] = [];
-    bridge.on('recalled', event => recalls.push(event));
-    await bridge.connect();
-    try {
-      if (dynamic) {
-        const session = { id: 716791, sesUUID: '0-91002', type: 0, typeID: 91002 };
-        page.runtime.editor.sortedSessions.push(session);
-        page.bus.emit('receive-message', { session, message: [] });
+  it.each(['预挂已知会话', '动态新增会话', '补齐已监听会话'])(
+    '%s的本机撤回仅有msgID/msgIdx时沿用已知原生身份，与组件和原生通知只派发一次',
+    async source => {
+      const dynamic = source !== '预挂已知会话';
+      const page = createPage(dynamic ? '已有界面会话' : '0-91002', dynamic ? 800001 : 716791);
+      if (source === '补齐已监听会话') {
+        page.runtime.editor.sortedSessions.push({ id: '', sesUUID: '0-91002' });
       }
-      expect(page.bus.listenerCount('0-91002-revokeMsg')).toBe(1);
-      const localNotice = { msgID: 136018959, msgIdx: 651 };
-      page.bus.emit('0-91002-revokeMsg', localNotice);
-      page.bus.emit('CancelMessage', { ...localNotice, sesUUID: '0-91002' });
-      expect(page.chat.addRevokeMsg(localNotice)).toBe('原撤回方法结果');
-      page.ipc.emit('message', {}, { args: {
-        sessionID: 716791,
-        message: [{ id: 136018960, contentType: 6, content: { event: 'CancelMessage', msgID: 136018959 } }],
-      } });
-      expect(recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId })))
-        .toEqual([{ messageId: '136018959', sessionId: '716791' }]);
-      expect(page.originalRevoke).toHaveBeenCalledOnce();
-      expect(page.originalRevoke).toHaveBeenCalledWith(localNotice);
-    } finally {
-      await bridge.disconnect();
+      page.chat.sesInfo = { sesUUID: '0-91002' };
+      const { bridge } = page.createBridge('本机撤回', '连接');
+      const recalls: KK9RecalledEvent[] = [];
+      bridge.on('recalled', event => recalls.push(event));
+      await bridge.connect();
+      try {
+        if (dynamic) {
+          const session = { id: 716791, sesUUID: '0-91002', type: 0, typeID: 91002 };
+          page.runtime.editor.sortedSessions.push(session);
+          page.bus.emit('receive-message', { session, message: [] });
+        }
+        expect(page.bus.listenerCount('0-91002-revokeMsg')).toBe(1);
+        const localNotice = { msgID: 136018959, msgIdx: 651 };
+        page.bus.emit('0-91002-revokeMsg', localNotice);
+        page.bus.emit('CancelMessage', { ...localNotice, sesUUID: '0-91002' });
+        expect(page.chat.addRevokeMsg(localNotice)).toBe('原撤回方法结果');
+        page.ipc.emit(
+          'message',
+          {},
+          {
+            args: {
+              sessionID: 716791,
+              message: [
+                {
+                  id: 136018960,
+                  contentType: 6,
+                  content: { event: 'CancelMessage', msgID: 136018959 },
+                },
+              ],
+            },
+          }
+        );
+        expect(
+          recalls.map(event => ({ messageId: event.messageId, sessionId: event.sessionId }))
+        ).toEqual([{ messageId: '136018959', sessionId: '716791' }]);
+        expect(page.originalRevoke).toHaveBeenCalledOnce();
+        expect(page.originalRevoke).toHaveBeenCalledWith(localNotice);
+      } finally {
+        await bridge.disconnect();
+      }
+      expect(page.bus.listenerCount('0-91002-revokeMsg')).toBe(0);
+      expect(page.chat.addRevokeMsg).toBe(page.originalRevoke);
+      expect(page.ipc.listenerCount('message')).toBe(0);
     }
-    expect(page.bus.listenerCount('0-91002-revokeMsg')).toBe(0);
-    expect(page.chat.addRevokeMsg).toBe(page.originalRevoke);
-    expect(page.ipc.listenerCount('message')).toBe(0);
-  });
+  );
 
   it('仅有界面会话标识的本机与组件撤回不合成原生身份', async () => {
     const page = createPage('0-91002', '');
@@ -530,18 +562,57 @@ describe('EventBridge 渲染资源所有权关闭', () => {
 
   it('单条历史撤回通知只提取正文目标，不使用通知自身ID或普通原记录的msgID', () => {
     const session = { id: '716791' };
-    expect(extractRecalledEventsFromPayload({
-      id: 136018960, contentType: 6, content: JSON.stringify({ event: 'CancelMessage', msgID: 136018959 }),
-    }, session)).toMatchObject([{ messageId: '136018959', sessionId: '716791' }]);
+    expect(
+      extractRecalledEventsFromPayload(
+        {
+          id: 136018960,
+          contentType: 6,
+          content: JSON.stringify({ event: 'CancelMessage', msgID: 136018959 }),
+        },
+        session
+      )
+    ).toMatchObject([{ messageId: '136018959', sessionId: '716791' }]);
     for (const msgFlag of ['C', 'D', 'C后缀', 'D后缀']) {
-      expect(extractRecalledEventsFromPayload({
-        msgID: 136018959, contentType: 4, msgFlag, content: { event: 'CancelMessage', msgID: '错误目标' },
-      }, session)).toEqual([]);
+      expect(
+        extractRecalledEventsFromPayload(
+          {
+            msgID: 136018959,
+            contentType: 4,
+            msgFlag,
+            content: { event: 'CancelMessage', msgID: '错误目标' },
+          },
+          session
+        )
+      ).toEqual([]);
     }
-    expect(extractRecalledEventsFromPayload({ msgID: 136018959, contentType: 4, content: '普通正文' }, session)).toEqual([]);
-    expect(extractRecalledEventsFromPayload({ msgID: 136018959, contentType: 4, content: { event: 'CancelMessage', msgID: '正文伪目标' } }, session)).toEqual([]);
-    expect(extractRecalledEventsFromPayload({ id: 136018960, contentType: 6, content: { event: 'MemberJoin', msgID: 136018959 } }, session)).toEqual([]);
-    expect(extractRecalledEventsFromPayload({ id: 136018960, contentType: 6, content: { event: 'CancelMessage' } }, session)).toEqual([]);
+    expect(
+      extractRecalledEventsFromPayload(
+        { msgID: 136018959, contentType: 4, content: '普通正文' },
+        session
+      )
+    ).toEqual([]);
+    expect(
+      extractRecalledEventsFromPayload(
+        {
+          msgID: 136018959,
+          contentType: 4,
+          content: { event: 'CancelMessage', msgID: '正文伪目标' },
+        },
+        session
+      )
+    ).toEqual([]);
+    expect(
+      extractRecalledEventsFromPayload(
+        { id: 136018960, contentType: 6, content: { event: 'MemberJoin', msgID: 136018959 } },
+        session
+      )
+    ).toEqual([]);
+    expect(
+      extractRecalledEventsFromPayload(
+        { id: 136018960, contentType: 6, content: { event: 'CancelMessage' } },
+        session
+      )
+    ).toEqual([]);
   });
 
   it('聊天组件保留原生会话范围供统一解析，仍调用原撤回方法', async () => {
@@ -590,7 +661,9 @@ describe('EventBridge 渲染资源所有权关闭', () => {
   it('撤回消息内原生编号优先于外层界面标识', () => {
     const events = extractRecalledEventsFromPayload({
       sessionId: '0-91002',
-      message: [{ sessionID: 716791, contentType: 6, content: { event: 'CancelMessage', msgID: '待撤回' } }],
+      message: [
+        { sessionID: 716791, contentType: 6, content: { event: 'CancelMessage', msgID: '待撤回' } },
+      ],
     });
     expect(events.map(event => event.sessionId)).toEqual(['716791']);
   });

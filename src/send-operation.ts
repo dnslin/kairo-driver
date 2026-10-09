@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { SendStatus } from './types/index.js';
+import type { NativeSendReceipt, SendOutcome, SendStatus } from './types/index.js';
 import { SendError } from './utils/errors.js';
 
 export type { SendStatus } from './types/index.js';
@@ -30,6 +30,8 @@ export interface SendOperationRecord {
   error?: string;
   isPreTrigger?: boolean;
   verifyLatencyMs?: number;
+  nativeCode?: number;
+  receipt?: NativeSendReceipt;
   createdAt: number;
   updatedAt: number;
 }
@@ -44,20 +46,14 @@ export interface SendOperationClaimResult {
   operation: SendOperationRecord;
 }
 
-export interface SendOperationUpdate {
-  status: SendStatus;
-  messageId?: string;
-  error?: string;
-  isPreTrigger?: boolean;
-  verifyLatencyMs?: number;
-}
+export type SendOperationUpdate = SendOutcome;
 
 export interface SendOperationStore {
-  /** 原子声明发送意图；相同未知/已送达操作不得再次声明。 */
+  /** 原子声明发送意图；相同操作不得再次提交。 */
   claim(input: SendOperationClaim): Promise<SendOperationClaimResult>;
   /** 只读查询发送操作。 */
   get(operationId: string): Promise<SendOperationRecord | null>;
-  /** 写入已观察到的发送状态。 */
+  /** 原子更新发送状态；已确认的sent/failed不得被unknown覆盖，返回实际保留的记录。 */
   update(operationId: string, update: SendOperationUpdate): Promise<SendOperationRecord>;
 }
 
@@ -155,20 +151,6 @@ export class InMemorySendOperationStore implements SendOperationStore {
       throw new SendError(`operationId [${operationId}] 的 fingerprint 不一致，拒绝复用`);
     }
 
-    if (existing.status === 'failed' && existing.isPreTrigger === true) {
-      const operation: SendOperationRecord = {
-        ...existing,
-        status: 'unknown',
-        messageId: undefined,
-        error: undefined,
-        isPreTrigger: undefined,
-        verifyLatencyMs: undefined,
-        updatedAt: Date.now(),
-      };
-      this.operations.set(operationId, operation);
-      return { claimed: true, operation: cloneOperation(operation) };
-    }
-
     return { claimed: false, operation: cloneOperation(existing) };
   }
 
@@ -193,6 +175,9 @@ export class InMemorySendOperationStore implements SendOperationStore {
     if (!existing) {
       throw new SendError(`未找到发送操作 [${normalizedOperationId}]`);
     }
+    if (existing.status !== 'unknown' && update.status === 'unknown') {
+      return cloneOperation(existing);
+    }
 
     const updated: SendOperationRecord = {
       operationId: existing.operationId,
@@ -205,6 +190,8 @@ export class InMemorySendOperationStore implements SendOperationStore {
     if (update.error !== undefined) updated.error = update.error;
     if (update.isPreTrigger !== undefined) updated.isPreTrigger = update.isPreTrigger;
     if (update.verifyLatencyMs !== undefined) updated.verifyLatencyMs = update.verifyLatencyMs;
+    if (update.nativeCode !== undefined) updated.nativeCode = update.nativeCode;
+    if (update.receipt !== undefined) updated.receipt = { ...update.receipt };
 
     this.operations.set(normalizedOperationId, updated);
     return cloneOperation(updated);

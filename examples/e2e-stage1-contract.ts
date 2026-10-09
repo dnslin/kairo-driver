@@ -556,9 +556,8 @@ function assertNoNewOutboundMessages(
   );
 }
 
-function assertDelivered(label: string, result: SendResult): string {
-  ensure(result.success, `${label} 未成功`);
-  ensure(result.status === 'delivered', `${label} 状态不是 delivered`);
+function assertSent(label: string, result: SendResult): string {
+  ensure(result.status === 'sent', `${label} 未取得本次原生业务确认`);
   ensure(isPositiveNativeId(result.messageId), `${label} 未返回正 native messageId`);
   return result.messageId;
 }
@@ -644,57 +643,52 @@ async function main(): Promise<void> {
       );
     });
 
-    const deliveredText = `T09-${new Date().toISOString()}-delivered`;
-    const deliveredOperationId = `t09-delivered-${Date.now()}`;
-    const deliveredResult = await requiredStep('发送真实 Bot 文本并取得 delivered', () =>
-      sendTextAndTrack(primary, targetSession, '真实 delivered Bot 文本', deliveredText, {
+    const sentText = `T09-${new Date().toISOString()}-sent`;
+    const sentOperationId = `t09-sent-${Date.now()}`;
+    const sentResult = await requiredStep('发送真实 Bot 文本并取得 sent', () =>
+      sendTextAndTrack(primary, targetSession, '真实 sent Bot 文本', sentText, {
         targetSessionId: config!.sessionId,
-        operationId: deliveredOperationId,
+        operationId: sentOperationId,
       })
     );
-    const deliveredMessageId = assertDelivered('Bot 文本发送', deliveredResult);
+    const sentMessageId = assertSent('Bot 文本发送', sentResult);
 
-    const deliveredEcho = await requiredStep('确认 Bot echo 为 outbound 且晚于员工入站', () =>
+    const sentEcho = await requiredStep('确认 Bot echo 为 outbound 且晚于员工入站', () =>
       waitForEventMessage(
         primary.name,
         message =>
           message.sessionId === config!.sessionId &&
-          messageId(message) === deliveredMessageId &&
-          message.content.includes(deliveredText)
+          messageId(message) === sentMessageId &&
+          message.content.includes(sentText)
       )
     );
-    ensure(deliveredEcho.message.direction === 'outbound', 'Bot echo 未分类为 outbound');
+    ensure(sentEcho.message.direction === 'outbound', 'Bot echo 未分类为 outbound');
     ensure(
-      deliveredEcho.sequence > inboundObservation.sequence,
+      sentEcho.sequence > inboundObservation.sequence,
       'Bot echo 观察顺序早于员工 inbound 消息'
     );
-    console.log(`出站 ${JSON.stringify(messageMetadata(deliveredEcho.message))}`);
+    console.log(`出站 ${JSON.stringify(messageMetadata(sentEcho.message))}`);
 
     await requiredStep('确认 EventBridge 与轮询可用同一消息键去重', async () => {
       const messages = await pollMessages(primary, targetSession);
       const pollingEcho = messages.find(
-        message => messageKey(message) === messageKey(deliveredEcho.message)
+        message => messageKey(message) === messageKey(sentEcho.message)
       );
       ensure(pollingEcho, '轮询未观察到与 EventBridge 相同的消息键');
       ensure(
-        messageKey(pollingEcho) === `${config!.sessionId}:${deliveredMessageId}`,
+        messageKey(pollingEcho) === `${config!.sessionId}:${sentMessageId}`,
         '业务消息键不是 (sessionId,messageId)'
       );
     });
 
     await requiredStep('确认 getSendStatus 只读且不发送', async () => {
       const before = await pollMessages(primary, targetSession);
-      const status = await primary.driver.getSendStatus(deliveredOperationId);
+      const status = await primary.driver.getSendStatus(sentOperationId);
       const after = await pollMessages(primary, targetSession);
-      rememberTestMarkerMessages(
-        after,
-        config!.sessionId,
-        deliveredText,
-        'getSendStatus 异常 Bot 文本'
-      );
+      rememberTestMarkerMessages(after, config!.sessionId, sentText, 'getSendStatus 异常 Bot 文本');
       assertNoNewOutboundMessages(before, after, config!.sessionId);
-      ensure(status.status === 'delivered', 'getSendStatus 未返回 delivered');
-      ensure(status.messageId === deliveredMessageId, 'getSendStatus 返回的 messageId 不一致');
+      ensure(status.status === 'sent', 'getSendStatus 未返回 sent');
+      ensure(status.messageId === sentMessageId, 'getSendStatus 返回的 messageId 不一致');
     });
 
     await requiredStep('确认同 operationId 同内容安全重试不双发', async () => {
@@ -702,43 +696,33 @@ async function main(): Promise<void> {
         primary,
         targetSession,
         '同 operationId 重试 Bot 文本',
-        deliveredText,
+        sentText,
         {
           targetSessionId: config!.sessionId,
-          operationId: deliveredOperationId,
+          operationId: sentOperationId,
         }
       );
-      ensure(replay.operationId === deliveredOperationId, '安全重试返回的 operationId 不一致');
-      ensure(replay.status === 'delivered', '安全重试未复用 delivered 状态');
-      ensure(replay.messageId === deliveredMessageId, '安全重试返回了不同 native messageId');
+      ensure(replay.operationId === sentOperationId, '安全重试返回的 operationId 不一致');
+      ensure(replay.status === 'sent', '安全重试未复用 sent 状态');
+      ensure(replay.messageId === sentMessageId, '安全重试返回了不同 native messageId');
       const messages = await pollMessages(primary, targetSession);
-      ensure(countContentMatches(messages, deliveredText) === 1, '同 operationId 重试产生了双发');
+      ensure(countContentMatches(messages, sentText) === 1, '同 operationId 重试产生了双发');
     });
 
     await requiredStep('确认不同内容复用 operationId 被拒绝', async () => {
-      const differentText = `${deliveredText}-different`;
+      const differentText = `${sentText}-different`;
       let rejectionError: unknown;
-      let rejectionResult: SendResult | undefined;
       try {
-        rejectionResult = await sendTextAndTrack(
-          primary,
-          targetSession,
-          '不同内容复用异常 Bot 文本',
-          differentText,
-          {
-            targetSessionId: config!.sessionId,
-            operationId: deliveredOperationId,
-          }
-        );
+        await sendTextAndTrack(primary, targetSession, '不同内容复用异常 Bot 文本', differentText, {
+          targetSessionId: config!.sessionId,
+          operationId: sentOperationId,
+        });
       } catch (error) {
         rejectionError = error;
       }
       const messages = await pollMessages(primary, targetSession);
       ensure(rejectionError instanceof SendError, '不同内容复用未返回 fingerprint 冲突错误');
       ensure(errorText(rejectionError).includes('fingerprint'), '拒绝原因不是 fingerprint 冲突');
-      if (rejectionResult) {
-        ensure(rejectionResult.success === false, '不同内容复用意外返回成功');
-      }
       ensure(countContentMatches(messages, differentText) === 0, '被拒绝的不同内容仍然发送');
     });
 
@@ -756,7 +740,6 @@ async function main(): Promise<void> {
           operationId: `t09-pre-trigger-${Date.now()}`,
         }
       );
-      ensure(result.success === false, '无效目标意外发送成功');
       ensure(result.status === 'failed', '无效目标状态不是 failed');
       ensure(result.isPreTrigger === true, '无效目标未标记为确定 pre-trigger failed');
       const after = await pollMessages(primary, targetSession);
@@ -825,7 +808,6 @@ async function main(): Promise<void> {
       }
       ensure(result.operationId === unknownOperationId, 'unknown 结果缺少 operationId');
       ensure(result.status === 'unknown', '发送后中断未产生 unknown 状态');
-      ensure(result.success === false, 'post-trigger unknown 不应标记 success');
       ensure(result.isPreTrigger === false, 'post-trigger unknown 错误标记为 pre-trigger');
       return result;
     });
@@ -848,7 +830,7 @@ async function main(): Promise<void> {
       unknownText,
       finalUnknownStatus
     );
-    const finalUnknownMessageId = assertDelivered('post-trigger 最终状态', finalUnknownStatus);
+    const finalUnknownMessageId = assertSent('post-trigger 最终状态', finalUnknownStatus);
     await requiredStep('核对 unknown 原生消息关联', () => {
       ensure(interruptionObservation, '缺少发送后中断前的原生回显');
       ensure(
@@ -869,7 +851,7 @@ async function main(): Promise<void> {
         }
       );
       ensure(replay.operationId === unknownOperationId, 'unknown 重试返回的 operationId 不一致');
-      ensure(replay.status === 'delivered', 'unknown operation 重试未复用最终 delivered');
+      ensure(replay.status === 'sent', 'unknown operation 重试未复用最终 sent');
       ensure(
         replay.messageId === finalUnknownMessageId,
         'unknown operation 重试返回不同 native messageId'
