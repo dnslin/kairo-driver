@@ -114,9 +114,12 @@ try {
       const value = payload?.args;
       if (String(channel).endsWith('-sendMsgCallback') && capture.drafts.has(String(value?.msgID))) {
         let ext = value.data?.ext;
-        if (typeof ext === 'string') ext = JSON.parse(ext);
+        let parseError;
+        try { if (typeof ext === 'string') ext = JSON.parse(ext); }
+        catch (error) { parseError = String(error); ext = undefined; }
         capture.receipts.push({ draftId: String(value.msgID), code: value.code, businessCode: ext?.status ?? null,
-          messageId: String(value.data?.id), sessionId: String(value.data?.sessionID), msgIdx: value.data?.msgIdx });
+          messageId: String(value.data?.id), sessionId: String(value.data?.sessionID), msgIdx: value.data?.msgIdx,
+          ...(parseError ? { parseError } : {}) });
       }
       return emit.call(this, channel, event, payload, ...rest);
     };

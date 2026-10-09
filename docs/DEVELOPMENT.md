@@ -85,6 +85,10 @@ KK9原版`sendMessageNew`负责`contentType:3`文件上传并写入`content.uri`
 
 Orca setup终端有安装输出但当前工作树不能解析vitest；确认依赖缺失后仅执行一次`pnpm install --frozen-lockfile`补齐219个包，随后复用，不升级依赖或修改配置。本轮LSP references可用，已核对sendFile实现与Driver调用。js-reverse相对先例/工具索引缺失，使用挂载工具实际schema；asar_search文件过滤失效已报告，唯一函数定位及Electron只读源码成功，未重试已知ASAR完整性失败。
 
+PR #5审计修复：`examples/verify-native-file.ts`的观测Hook不再让损坏的业务`ext`阻断原生事件派发。解析错误保留在本次采集回执的`parseError`字段，原始payload不修改，继续交给SDK/客户端监听；SDK按既有边界返回明确的解析失败`unknown`，不是等待回执超时。没有修改实际文件上传、业务结果契约或增加重试。
+
+对应回归位于`tests/native-send-receipt.test.ts`，直接执行文件专项中的实际采集注入与原生提交脚本。`pnpm exec vitest run tests/native-send-receipt.test.ts -t "文件专项采集"`修复前复现原生回执被阻断、SDK最终超时；修复后`pnpm exec vitest run tests/native-send-receipt.test.ts`的9项通过，确认原始损坏字段仍送达、解析错误可诊断、SDK按既有错误边界结束。本次实现改动后仅执行一次最终`pnpm check`，build/typecheck、32文件381项与lint通过。未重新发送或撤回真机文件，沿用此前双目标附件证据。
+
 
 ## 依赖与打包
 
