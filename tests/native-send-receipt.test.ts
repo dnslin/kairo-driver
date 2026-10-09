@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import ts from 'typescript';
 import {
   CONFIRM_SENT_MESSAGE_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
@@ -105,6 +107,47 @@ function harness(
 
 describe('原生业务回执与本次草稿关联', () => {
   afterEach(() => vi.useRealTimers());
+  it('文件专项采集遇到损坏ext仍交付原始回执，SDK立即返回解析失败unknown', async () => {
+    const h = harness({ code: 0, data: { id: 42, sessionID: 31, ext: '{损坏的业务扩展' } });
+    const source = ts.createSourceFile(
+      'verify-native-file.ts',
+      readFileSync(new URL('../examples/verify-native-file.ts', import.meta.url), 'utf8'),
+      ts.ScriptTarget.Latest,
+      true
+    );
+    let installation: ts.TemplateExpression | undefined;
+    function visit(node: ts.Node): void {
+      if (ts.isCallExpression(node) && node.arguments[0] && ts.isTemplateExpression(node.arguments[0]))
+        installation = node.arguments[0];
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+    if (!installation) throw new Error('未找到文件专项的实际采集注入');
+    const script = runInNewContext(installation.getText(source), {
+      operations: [{ key: h.confirmed.msgFlag }],
+    }) as string;
+    const ipc = Object.assign(h.ipc, { send: vi.fn() });
+    const window: {
+      ipcRenderer: typeof ipc;
+      __kairo_t06_capture?: { receipts: Array<Record<string, unknown>>; cleanup(): void };
+    } = { ipcRenderer: ipc };
+    runInNewContext(script, { window });
+    try {
+      ipc.send('data', { args: ['sendMessageNew', { msgFlag: h.confirmed.msgFlag, id: -1, contentType: 3 }] });
+      const result = await h.run();
+      expect(result).toMatchObject({
+        failure: { status: 'unknown', error: '本次业务ext无法解析', isPreTrigger: false },
+      });
+      expect(h.other.mock.calls[0]?.[1]).toMatchObject({
+        args: { msgID: -1, code: 0, data: { ext: '{损坏的业务扩展' } },
+      });
+      expect(window.__kairo_t06_capture?.receipts[0]).toMatchObject({
+        draftId: '-1', messageId: '42', sessionId: '31', parseError: expect.stringContaining('SyntaxError'),
+      });
+    } finally {
+      window.__kairo_t06_capture?.cleanup();
+    }
+  });
   it('本次成功回执关联正式ID，不误接错草稿或错会话', async () => {
     const h = harness({ code: 0 }, { wrongDraft: true, wrongSession: true });
     const result = await h.run();
