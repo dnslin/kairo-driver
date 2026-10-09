@@ -16,6 +16,7 @@ export function createNativeSendRuntime(
     sendDelayMs?: number;
     responseGate?: Promise<void>;
     responseStarted?: () => void;
+    prepareImage?: (thumb: string, source: string) => unknown;
   } = {}
 ) {
   const sessions = [
@@ -101,7 +102,12 @@ export function createNativeSendRuntime(
       return { code: 0 };
     }
     if (method === 'sendingImgBeforeHandle')
-      return { code: 0, data: { thumbPath: '原生缩略图', artworkPath: '原生原图' } };
+      return (
+        config.prepareImage?.(request.args[1] as string, request.args[2] as string) ?? {
+          code: 1,
+          error: '未提供图片预处理',
+        }
+      );
     throw new Error('未声明原生方法 ' + String(method));
   });
   if (config.sendDelayMs !== undefined) {
