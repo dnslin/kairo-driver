@@ -589,7 +589,7 @@ export class KK9EventBridge extends EventEmitter {
           }
         }
 
-        // Vue 仅保留 T05 尚未验收的本机手工撤回捕获，不参与普通消息接收。
+        // 本机菜单在cancelMessage成功后发Vue本地通知，原生message不能等价替代。
         const getMainPageVm = () => typeof document === 'undefined' ? null : document.querySelector('#main-page, .main-page, #app, .app-container')?.__vue__;
         const getEditorVm = () => typeof document === 'undefined' ? null : document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
         const getChatContentVm = () => {

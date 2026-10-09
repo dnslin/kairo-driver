@@ -193,8 +193,6 @@ async function cleanupMessages(): Promise<void> {
     const record = (await nativeHistory(target.id)).find(item => String(item['id']) === message.id);
     assert.ok(record && String(record['sender']) === uid && record['label'] === message.label, '未核对本轮本人正式记录，拒绝撤回');
     if (/^[CD]/.test(String(record['msgFlag']))) { message.recalled = true; continue; }
-    if ((await snapshot()).active !== target.id) assert.equal(await driver.selectSession(target.id), true);
-    await sleep(300);
     assert.equal(await driver.recallMessage(message.id, target), true, '本轮本人消息撤回失败');
     const recalled = (await nativeHistory(target.id)).find(item => String(item['id']) === message.id);
     assert.ok(recalled && /^[CD]/.test(String(recalled['msgFlag'])), '正式撤回标记未确认');

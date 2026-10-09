@@ -913,17 +913,10 @@ async function main(): Promise<void> {
       }
       for (const target of [...recallTargets.values()].reverse()) {
         await cleanupStep(`撤回清理 ${target.label}`, async () => {
-          let recalled = await authorizedCleanupDriver.driver.recallMessage(
+          const recalled = await authorizedCleanupDriver.driver.recallMessage(
             target.messageId,
             target.sessionId
           );
-          if (!recalled) {
-            await sleep(500);
-            recalled = await authorizedCleanupDriver.driver.recallMessage(
-              target.messageId,
-              target.sessionId
-            );
-          }
           ensure(recalled, `撤回失败 messageId=${target.messageId}`);
           recalledKeys.add(`${target.sessionId}:${target.messageId}`);
         });

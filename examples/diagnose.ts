@@ -316,19 +316,19 @@ async function main() {
       const msgId = args[0];
       const target = requiredArgument(args[1], '目标会话');
       if (!msgId) {
-        console.error('用法: pnpm diagnose recall <消息ID> <会话ID/会话名>');
+        console.error('用法: pnpm diagnose recall <消息ID> <原生会话ID>');
         process.exit(1);
       }
 
-      await driver.connect();
-      console.log(`正在通过底层 IPC 撤回消息 ${msgId} (会话: ${target})...`);
-      const ok = await driver.recallMessage(msgId, target);
-      if (ok) {
-        console.log('✅ 消息撤回指令执行成功！');
-      } else {
-        console.error('❌ 消息撤回失败');
+      try {
+        await driver.connect();
+        console.log(`正在通过底层 IPC 撤回消息 ${msgId} (会话: ${target})...`);
+        const ok = await driver.recallMessage(msgId, target);
+        if (ok) console.log('消息撤回成功');
+        else { console.error('没有可撤回的本人目标消息'); process.exitCode = 1; }
+      } finally {
+        await driver.disconnect();
       }
-      await driver.disconnect();
       break;
     }
 
@@ -434,7 +434,7 @@ async function main() {
   card <target> <url|biz|app|record> <JSON> 发送原生卡片
   voice <target> <text>           使用 Edge TTS 合成并发送语音
   voice-file <target> <path>      转换本地音频并发送语音
-  recall <msgId> <target>         撤回指定已发送消息
+  recall <msgId> <sessionId>      撤回指定原生会话的本人消息
 
 【组织架构与通讯录】
   user <uid>                      单点查询员工详细档案

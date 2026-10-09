@@ -37,6 +37,8 @@ function createSpikeHarness(
   let nextMessageId = 135_800_000;
   const ipc = new FakeIpcRenderer(request => {
     const method = request.args[0];
+    if (method === 'getMemberDetail') return { code: 0, data: { id: 1000 } };
+    if (method === 'getSessionBySessionID') return { code: 0, data: targetSession };
     if (method === 'insertSendBefoeMsg') {
       const message = request.args[1] as Record<string, unknown>;
       inserted.push(message);

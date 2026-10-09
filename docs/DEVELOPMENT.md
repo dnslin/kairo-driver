@@ -59,6 +59,20 @@ Orca setup 的219个依赖安装成功后直接复用，未重复安装或修改
 
 用户随后取消其他设备本人消息测试：专项脚本移除private-device/group-device标记、初始缺项及专用设备比较，SDK接收实现不变，旧报告不改写。使用既有真机元数据执行实际验收函数，`node tmp/t04-acceptance-smoke.cjs before`复现原设备缺项，`node tmp/t04-acceptance-smoke.cjs after`确认仅移除两项、其余判定逐项不变且全部验收仍false；未连接或操作真机。修改后的`pnpm check`再次通过build/typecheck、32文件392条测试及lint。临时冒烟脚本执行后移除。
 
+## T05 显式原生撤回
+
+`recallMessage(messageId, session)` 的会话参数必填，只接受原生 ID 或实体，不按名称解析，也不默认当前窗口。撤回从指定会话原生历史取得准确 `msgID/msgIdx`，验证实际登录发送者，仅使用 `type: own`；不再扫描可见消息或猜索引。无效、不存在、已撤回和非本人目标返回 `false`；原生读取/撤回失败抛出 `DriverError(RECALL_FAILED)`，含会话、消息、已知索引、原生方法/错误码与原因。`SendResult.recall()` 绑定本次目标并走相同通知路径。旧 `SendOps.recallMessage` 直接删除，没有兼容别名；其余 DOM 能力不在本轮删除。
+
+SDK 操作成功后进入 Driver 的撤回去重；远端 `message` 中的 `CancelMessage` 独立解析正文目标，不用通知自身 ID。历史查询与 C/D 原记录不重放通知。KK9 原版 `cancelMessage` 本机动作写库并发送系统消息，菜单成功后另发 `${sesUUID}-revokeMsg`；没有已确认的等价本机原生广播，因此保留 Vue 本地通知及组件重建 Hook，不改普通消息或 T04 回显。
+
+回归集中在 `tests/recall.test.ts` 与既有事件/历史/生命周期用例，实际运行生成的原生 RPC 脚本，不再保留旧 DOM 撤回和函数转发自证。Fake 只撤回已注入的指定会话本人消息，修改历史撤回状态并统一去重，不把发送请求自动回显成可撤回历史。真实专项为 `examples/verify-native-recall.ts`，授权范围、门禁、人工动作及结果见启动说明。
+
+本轮 LSP references 再次因初始化退出 code 0 不可用，未反复重启；实际源码、测试和示例调用检索补足。复用工作树已有依赖，没有重复安装或修改锁文件。js-reverse 的相对工具索引与先例文件仍缺失，按当前 jshookmcp schema 取证；安装包与共享工具环境未修改。
+
+实际验证：`pnpm exec vitest run tests/recall.test.ts` 首次复现6项失败，原生切换后7项通过；补充原生业务错误后为8项。八文件受影响回归最初145通过、1项卡片清理失败，定位到仍传界面ID，迁移到已核对原生ID；随后 `pnpm exec vitest run tests/recall.test.ts tests/spike-card-test.test.ts` 的14项通过。首次完整检查测试通过但lint报6处类型诊断，修正后完整检查32文件377项及build/typecheck/lint通过。真实人工撤回暴露验收脚本仅计预备ID的错误，修改 `examples/native-recall-evidence.ts` 与实际脚本并增加一条对应回归后，最终 `pnpm exec vitest run tests/recall.test.ts` 9项、`pnpm check` 32文件378项及build/typecheck/lint通过。仅因失败或后续相关改动重跑，未重跑已知无关的全量测试类型检查。测试数量减少来自删除已被原生切换替代的DOM撤回与mock转发自证，不是弱化失败断言。
+
+`pnpm exec tsx tmp/t05-evidence-smoke.ts` 使用本轮真实采集元数据执行同一修正后的验收函数，双目标三类均通过。新增专项回归验证实际人工新消息不受预备ID限制，旧索引和重复通知不能混入。没有再次发送、撤回或请求用户补发；保留原脚本false及独立最终报告，冒烟脚本执行后删除。真实SDK实现未因该判定修复改变或重启，实际调用与资源退出均来自原持续监听实例。
+
 ## 依赖与打包
 
 提交并保留 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 和 `patches`。两条音频依赖补丁属于运行所需配置，升级相关依赖时需重新核对补丁及语音处理行为。

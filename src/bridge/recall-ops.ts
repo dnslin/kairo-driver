@@ -1,89 +1,63 @@
 import type { CdpClient } from '../cdp/client.js';
-import { createChildLogger } from '../utils/logger.js';
-import {
-  encodeRendererPayload,
-  RENDERER_IPC_HELPERS_SCRIPT,
-  RENDERER_SESSION_RESOLVER_SCRIPT,
-} from './renderer-script.js';
+import { DriverError } from '../utils/errors.js';
+import { callIpcToData } from './rpc.js';
 
-const log = createChildLogger('bridge-recall-ops');
-
+/** 只撤回指定原生会话中的本人消息；历史查询不产生通知。 */
 export async function recallNativeMessage(
   cdp: CdpClient,
   messageId: string,
-  sessionId?: string
+  sessionId: string
 ): Promise<boolean> {
-  if (!messageId) return false;
-
-  const encoded = encodeRendererPayload({
-    targetId: messageId,
-    targetSessionId: sessionId || '',
-  });
-
+  if (!/^[1-9]\d*$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId)) ||
+      !/^[1-9]\d*$/.test(messageId) || !Number.isSafeInteger(Number(messageId))) return false;
+  let msgIdx: number | undefined;
   try {
-    const result = await cdp.evaluate<{ success: boolean }>(`
-      (async () => {
-        const data = JSON.parse(decodeURIComponent(${encoded}));
-        const targetId = data.targetId;
-        const targetSessionId = data.targetSessionId;
-        ${RENDERER_SESSION_RESOLVER_SCRIPT}
-        const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-        const main = document.querySelector('.main-page')?.__vue__;
-        const bus = main?.$bus;
-        const electron = window.require ? window.require('electron') : null;
-        const ipc = window.ipcRenderer || electron?.ipcRenderer;
-        ${RENDERER_IPC_HELPERS_SCRIPT}
+    const sessionID = Number(sessionId);
+    const session = await callIpcToData<Record<string, unknown>>(cdp, 'getSessionBySessionID', [sessionID]);
+    if (session.code !== 0) {
+      throw new Error(`getSessionBySessionID失败 (${session.code}): ${session.error || session.message || ''}`);
+    }
+    if (String(session.data?.['id']) !== sessionId) return false;
+    const identity = await callIpcToData<{ id: number }>(cdp, 'getMemberDetail');
+    if (identity.code !== 0 || !identity.data?.['id']) {
+      throw new Error(`getMemberDetail未取得实际登录身份 (${identity.code}): ${identity.error || identity.message || ''}`);
+    }
 
-        let targetSession = editor?.activedSes || null;
-        if (targetSessionId) {
-          targetSession = resolveRendererSession(editor?.sortedSessions, targetSessionId);
-        }
-        if (!targetSession) return { success: false };
+    let endIdx = 2147483647;
+    let target: Record<string, unknown> | undefined;
+    while (endIdx > 0) {
+      const history = await callIpcToData<Array<Record<string, unknown>>>(cdp, 'getMessages', [
+        { sessionID, count: 200, endIdx, sendTime: 0 },
+      ]);
+      if (history.code !== 0 || !Array.isArray(history.data)) {
+        throw new Error(`getMessages撤回目标查询失败 (${history.code}): ${history.error || history.message || '无效数组'}`);
+      }
+      target = history.data.find(message => String(message['id']) === messageId &&
+        String(message['sessionID']) === sessionId);
+      if (target || history.data.length < 200) break;
+      const nextEndIdx = Math.min(...history.data.map(message => Number(message['msgIdx']))) - 1;
+      if (!Number.isSafeInteger(nextEndIdx) || nextEndIdx >= endIdx) {
+        throw new Error('getMessages未取得可继续读取的原生索引');
+      }
+      endIdx = nextEndIdx;
+    }
+    if (!target) return false;
+    msgIdx = Number(target['msgIdx']);
+    if (!Number.isSafeInteger(msgIdx) || msgIdx <= 0) throw new Error('待撤回消息缺少准确原生索引');
+    if (String(target['sender']) !== String(identity.data['id'])) return false;
+    if (/^[CD]/.test(String(target['msgFlag']))) return false;
 
-        let matchedVueMessage = null;
-        const items = document.querySelectorAll('.rcd-item, .message-item, .msg-item');
-        for (let index = items.length - 1; index >= 0; index--) {
-          const item = items[index];
-          const vueMessage = item.__vue__?.msgitem || item.__vue__?.message;
-          const rawId = vueMessage?.id || vueMessage?.msgID ||
-            item.getAttribute('id') || item.getAttribute('data-msg-id');
-          if (rawId && String(rawId) === String(targetId)) {
-            matchedVueMessage = vueMessage;
-            break;
-          }
-        }
-
-        const sessionID = targetSession.id;
-        if (
-          matchedVueMessage?.sessionID !== undefined &&
-          String(matchedVueMessage.sessionID) !== String(sessionID)
-        ) {
-          return { success: false };
-        }
-
-        const sesUUID = targetSession.sesUUID || targetSessionId;
-        const msgID = matchedVueMessage?.id || matchedVueMessage?.msgID ||
-          Number(targetId) || targetId;
-        const msgIdx = matchedVueMessage?.msgIdx || 0;
-        const response = await callKairoIpc('cancelMessage', {
-          type: 'own',
-          sessionID,
-          msgID,
-          msgIdx
-        });
-        if (response?.code !== 0) return { success: false };
-
-        if (bus && sesUUID) {
-          try {
-            bus.$emit(sesUUID + '-revokeMsg', { msgID, msgIdx });
-          } catch (error) {}
-        }
-        return { success: true };
-      })()
-    `, 6000);
-    return Boolean(result?.success);
+    const response = await callIpcToData(cdp, 'cancelMessage', [
+      { type: 'own', sessionID, msgID: Number(target['id']), msgIdx },
+    ]);
+    if (response.code !== 0) {
+      throw new Error(`cancelMessage原生撤回失败 (${response.code}): ${response.error || response.message || ''}`);
+    }
+    return true;
   } catch (error) {
-    log.warn({ messageId, err: String(error) }, 'Bridge 撤回消息失败');
-    return false;
+    throw new DriverError(
+      `原生撤回失败；会话 ${sessionId}；消息 ${messageId}；索引 ${msgIdx ?? '未取得'}：${String(error)}`,
+      'RECALL_FAILED', error instanceof Error ? error : undefined
+    );
   }
 }

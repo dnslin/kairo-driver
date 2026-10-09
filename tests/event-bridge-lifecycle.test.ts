@@ -34,8 +34,9 @@ function createPage(sessionId = '会话', nativeSessionId: string | number = ses
     addRevokeMsg: originalRevoke,
     sesInfo: { sesUUID: sessionId },
   };
-  const observers = new Set<object>();
+  const observers = new Set<{ notify: () => void }>();
   runtime.context['MutationObserver'] = class {
+    constructor(public readonly notify: () => void) {}
     observe() {
       observers.add(this);
     }
@@ -806,6 +807,33 @@ describe('EventBridge 渲染资源所有权关闭', () => {
         session
       )
     ).toEqual([]);
+  });
+
+  it('组件重建后捕获新原生会话的人工撤回，重复服务器通知不重放，退出保留其他监听', async () => {
+    const page = createPage('0-91002', 716791);
+    const { bridge } = page.createBridge('重建撤回', '连接');
+    const events: KK9RecalledEvent[] = [];
+    bridge.on('recalled', event => events.push(event));
+    const other = vi.fn();
+    page.ipc.on('message', other);
+    const rebuiltOriginal = vi.fn((_data: unknown) => '重建原方法结果');
+    const rebuilt = { sesInfo: { id: 793803, sesUUID: '1-29467' }, addRevokeMsg: rebuiltOriginal };
+    await bridge.connect();
+    try {
+      Object.assign(page.runtime.context['document'] as object, {
+        querySelectorAll: () => [{ __vue__: rebuilt }],
+      });
+      for (const observer of page.observers) observer.notify();
+      expect(rebuilt.addRevokeMsg({ msgID: 123, msgIdx: 9 })).toBe('重建原方法结果');
+      page.ipc.emit('message', {}, { args: { sessionID: 793803, message: [
+        { id: 456, contentType: 6, content: { event: 'CancelMessage', msgID: 123 } },
+      ] } });
+      expect(events.map(event => [event.sessionId, event.messageId])).toEqual([['793803', '123']]);
+    } finally { await bridge.disconnect(); }
+    expect(rebuilt.addRevokeMsg).toBe(rebuiltOriginal);
+    expect(page.chat.addRevokeMsg).toBe(page.originalRevoke);
+    expect(page.observers.size).toBe(0);
+    expect(page.ipc.listeners('message')).toEqual([other]);
   });
 
   it('聊天组件保留原生会话范围供统一解析，仍调用原撤回方法', async () => {

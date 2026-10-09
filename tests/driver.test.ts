@@ -488,43 +488,6 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     expect(profile?.loginName).toBe('TEST-EMP-001');
   });
 
-  it('消息撤回与撤回事件监听', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
-    });
-    const internals = getDriverTestInternals(driver);
-
-    driver.getSessions = vi
-      .fn()
-      .mockResolvedValue([
-        { id: '0-91002', name: 'test-employee', type: 'private', unread: false },
-      ]);
-    internals.bridgeMessageOps.recallMessage = vi.fn().mockResolvedValue(true);
-
-    const ok = await driver.recallMessage('msg_1001', 'test-employee');
-    expect(ok).toBe(true);
-    expect(internals.bridgeMessageOps.recallMessage).toHaveBeenCalledWith('msg_1001', '0-91002');
-
-    const recalledEvents: unknown[] = [];
-    driver.on('recalled', evt => recalledEvents.push(evt));
-
-    internals.handleRecalledEvent({
-      messageId: 'msg_1001',
-      sessionId: 'test-employee',
-      sender: '我',
-      time: '12:00',
-    });
-
-    // 重复相同 messageKey 自动去重
-    internals.handleRecalledEvent({
-      messageId: 'msg_1001',
-      sessionId: 'test-employee',
-      sender: '我',
-      time: '12:00',
-    });
-
-    expect(recalledEvents).toHaveLength(1);
-  });
 
   describe('getEmployeeBySession 原生会话与员工 UID 分离', () => {
     const privateSession: KK9Session = {
