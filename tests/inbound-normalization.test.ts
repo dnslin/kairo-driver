@@ -1,7 +1,6 @@
 import EventEmitter from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createMessageIdentityKey,
   normalizeNativeMessage,
   type InboundNormalizationDiagnostic,
   type NormalizeNativeMessageContext,
@@ -167,7 +166,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
     });
   });
 
-  describe('2. 来源身份 (origin) 确定性规则四分类测试', () => {
+  describe('2. 原生发送者与系统消息来源', () => {
     it('外部普通成员发言应判定为 external', () => {
       const payload = {
         sessionId: 'group_room_1',
@@ -185,25 +184,25 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       expect(msg.isMe).toBe(false);
     });
 
-    it('人类操作员在客户端打字发言 (isMe: true 且非 bot_echo) 应判定为 operator', () => {
+    it('本机人工消息只确认本人方向，不推断业务角色', () => {
       const payload = {
         sessionId: 'session_user_002',
         sessionType: 'private',
         sender: '我',
         senderId: currentUserId,
         id: 'native-operator-1',
-        origin: 'operator',
         content: '收到，我这就处理。',
         time: '10:05:00',
         isMe: true,
       };
       const [msg] = normalizeNativeMessage(payload, { currentUserId });
-      expect(msg.origin).toBe('operator');
+      expect(msg.origin).toBe('unknown');
+      expect(msg?.sdkSendKey).toBeUndefined();
       expect(msg.direction).toBe('outbound');
       expect(msg.isMe).toBe(true);
     });
 
-    it('机器人自身发出的消息在事件总线回显 (isBotEcho / knownBotSentMessageKeys) 应判定为 bot_echo', () => {
+    it('本人普通原生消息不因正文或昵称被当作 SDK 确认回显', () => {
       const botMsgId = 'bot_sent_uuid_001';
       const payload = {
         id: botMsgId,
@@ -215,31 +214,25 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         time: '10:06:00',
         isMe: true,
       };
-      const [msg] = normalizeNativeMessage(payload, {
-        currentUserId,
-        knownBotSentMessageKeys: new Set([createMessageIdentityKey('session_user_002', botMsgId)]),
-      });
-      expect(msg.origin).toBe('bot_echo');
+      const [msg] = normalizeNativeMessage(payload, { currentUserId });
+      expect(msg.origin).toBe('unknown');
+      expect(msg?.sdkSendKey).toBeUndefined();
       expect(msg.direction).toBe('outbound');
       expect(msg.isMe).toBe(true);
     });
-    it('反例：isMe=true 且没有可靠来源关联时保留 unknown', () => {
+    it('其他设备本人消息仍为 outbound，但不建立 SDK 关联', () => {
       const payload = {
         id: 'unregistered_msg_999',
         sessionId: 'session_user_003',
         sessionType: 'private',
         sender: '我',
         senderId: currentUserId,
-        content: '操作员发出但没有可验证的来源事实',
+        content: '其他设备本人新消息',
         time: '10:07:00',
         isMe: true,
+        deviceID: 12345,
       };
-      const [msg] = normalizeNativeMessage(payload, {
-        currentUserId,
-        knownBotSentMessageKeys: new Set([
-          createMessageIdentityKey('session_user_003', 'other_bot_msg'),
-        ]),
-      });
+      const [msg] = normalizeNativeMessage(payload, { currentUserId });
       expect(msg.origin).toBe('unknown');
       expect(msg.direction).toBe('outbound');
       expect(msg.isMe).toBe(true);
@@ -405,7 +398,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
   });
 
   describe('5. EventBridge 与 Polling 离线 emit 派发与全身份覆盖测试', () => {
-    it('EventBridge 真实派发 external, operator, bot_echo, system 全部四类来源', async () => {
+    it('EventBridge 派发他人、本人、系统消息，不推断业务角色', async () => {
       const mockCdp = new MockCdpClient();
       const bridge = new KK9EventBridge(
         { cdp: { url: 'http://127.0.0.1:9222', pageMatch: 'renderer.html' }, currentUserId },
@@ -413,8 +406,6 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       );
       await bridge.connect();
 
-      // 登记已发送的 Bot 消息身份键
-      bridge.recordBotSentMessageId('group_eb', 'eb_bot_echo_1');
 
       const emittedMessages: KK9Message[] = [];
       bridge.on('message', msg => emittedMessages.push(msg));
@@ -427,12 +418,13 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
           sessionId: 'group_eb',
           sessionType: 'group',
           sender: '外部用户',
+          senderId: 'user_other',
           content: '大家好',
           isMe: false,
         },
       });
 
-      // 2. operator (isMe: true 且非 bot_echo)
+      // 本机本人消息。
       mockCdp.triggerBinding('__kairo_native_bridge', {
         type: 'receive-message',
         data: {
@@ -441,13 +433,12 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
           sessionType: 'group',
           sender: '操作员',
           senderId: currentUserId,
-          origin: 'operator',
           content: '操作员在客户端打字',
           isMe: true,
         },
       });
 
-      // 3. bot_echo (isMe: true 且已在 knownBotSentMessageKeys 中)
+      // 其他设备本人消息。
 
       mockCdp.triggerBinding('__kairo_native_bridge', {
         type: 'receive-message',
@@ -458,6 +449,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
           sender: 'Kairo 机器人',
           senderId: currentUserId,
           content: '机器人自身发出的回复',
+          deviceID: 12345,
           isMe: true,
         },
       });
@@ -480,17 +472,19 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       expect(emittedMessages[0].origin).toBe('external');
       expect(emittedMessages[0].direction).toBe('inbound');
       expect(emittedMessages[1].id).toBe('eb_op_1');
-      expect(emittedMessages[1].origin).toBe('operator');
+      expect(emittedMessages[1].origin).toBe('unknown');
+      expect(emittedMessages[1]?.sdkSendKey).toBeUndefined();
       expect(emittedMessages[1].direction).toBe('outbound');
       expect(emittedMessages[2].id).toBe('eb_bot_echo_1');
-      expect(emittedMessages[2].origin).toBe('bot_echo');
+      expect(emittedMessages[2].origin).toBe('unknown');
+      expect(emittedMessages[2]?.sdkSendKey).toBeUndefined();
       expect(emittedMessages[2].direction).toBe('outbound');
       expect(emittedMessages[3].id).toBe('eb_sys_1');
       expect(emittedMessages[3].origin).toBe('system');
       expect(emittedMessages[3].direction).toBe('unknown');
     });
 
-    it('Driver Polling 离线通过 MessageOps 解析 DOM 数据并派发 external, operator, bot_echo, system', async () => {
+    it('旧窗口轮询保留他人、本人、系统消息，不推断 SDK 关联', async () => {
       const mockCdp = new MockCdpClient();
       const driver = new KK9Driver({
         cdp: { url: 'http://127.0.0.1:9222', pageMatch: 'renderer.html' },
@@ -501,8 +495,6 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
 
       // 将 driver 内部的 cdpClient 替换为 MockCdpClient 进行底层 evaluate 拦截
       internals.cdp = mockCdp;
-      // 登记已发送的 Bot 消息身份键
-      driver.recordBotSentMessageId('ses_poll_all', 'poll_bot_echo_1');
 
       const emittedMessages: KK9Message[] = [];
       driver.on('message', msg => emittedMessages.push(msg));
@@ -524,7 +516,6 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
           time: '12:01',
           content: '我正在看',
           isMe: true,
-          origin: 'operator',
           messageType: 'text',
           raw: { msgID: 'poll-op-1' },
         },
@@ -566,7 +557,6 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       const parsedMessages = await domMessageOps.getRecentMessages(
         10,
         pollingSession,
-        new Set(['ses_poll_all:poll_bot_echo_1']),
         currentUserId
       );
       Object.assign(internals.bridgeMessageOps, {
@@ -581,14 +571,15 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       expect(emittedMessages[0].messageId).toBeDefined();
       expect(emittedMessages[0].id).toBe(emittedMessages[0].messageId);
 
-      expect(emittedMessages[1].origin).toBe('operator');
+      expect(emittedMessages[1].origin).toBe('unknown');
       expect(emittedMessages[1].direction).toBe('outbound');
       expect(emittedMessages[1].messageId).toBeDefined();
 
       // 原生 ID 验证
       expect(emittedMessages[2].id).toBe('poll_bot_echo_1');
       expect(emittedMessages[2].messageId).toBe('poll_bot_echo_1');
-      expect(emittedMessages[2].origin).toBe('bot_echo');
+      expect(emittedMessages[2].origin).toBe('unknown');
+      expect(emittedMessages[2]?.sdkSendKey).toBeUndefined();
       expect(emittedMessages[2].direction).toBe('outbound');
 
       expect(emittedMessages[3].origin).toBe('system');
@@ -628,13 +619,11 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       const messagesA = await domMessageOps.getRecentMessages(
         10,
         sessionA,
-        undefined,
         currentUserId
       );
       const messagesB = await domMessageOps.getRecentMessages(
         10,
         sessionB,
-        undefined,
         currentUserId
       );
       Object.assign(internals.bridgeMessageOps, {

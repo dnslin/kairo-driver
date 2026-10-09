@@ -58,9 +58,9 @@ export type KK9MessageType =
   | 'system';
 
 /** 消息来源身份；unknown 表示当前可观察事实不足以安全分类。 */
-export type KK9MessageOrigin = 'external' | 'operator' | 'bot_echo' | 'system' | 'unknown';
+export type KK9MessageOrigin = 'external' | 'system' | 'unknown';
 
-/** 消息方向；unknown 表示无法确认是员工还是 Bot 发出。 */
+/** 消息方向；unknown 表示原生发送者或当前登录 UID 不足。 */
 export type MessageDirection = 'inbound' | 'outbound' | 'unknown';
 
 /** 发送操作最终状态；unknown 不等同于确定失败。 */
@@ -247,6 +247,8 @@ export interface KK9Message {
   origin?: KK9MessageOrigin;
   /** 消息方向；标准化消息始终提供该字段。 */
   direction: MessageDirection;
+  /** 已确认本实例 SDK 发送的原生意图键，可用 createNativeMessageKey 对照 operationId。 */
+  sdkSendKey?: string;
   sender: string;
   senderId?: string;
   content: string;
@@ -367,8 +369,6 @@ export interface EventBridgeConfig {
   currentUserId?: string | number;
   enableRecallHook?: boolean;
   rejectExistingBridge?: boolean;
-  /** 共享的已发送 Bot 消息身份键集合（sessionId:nativeMessageId） */
-  knownBotSentMessageKeys?: Set<string>;
 }
 
 /** 本次原生业务回执的必要元数据；不包含聊天正文。 */
@@ -503,9 +503,6 @@ export interface IKK9Driver extends EventEmitter {
   startPolling(customPolling?: Partial<PollingConfig>): void;
   stopPolling(): void;
 
-  // 机器人发送状态跟踪
-  recordBotSentMessageId(sessionId: string, messageId: string): void;
-  isBotSentMessageId(sessionId: string, messageId: string): boolean;
 
   // 强类型事件监听器绑定
   on<U extends keyof DriverEvents>(event: U, listener: DriverEvents[U]): this;

@@ -71,8 +71,6 @@ export class MessageOps {
   public async getRecentMessages(
     limit = 20,
     session?: KK9Session,
-    knownBotSentMessageKeys?: Set<string>,
-
     currentUserId?: string | number
   ): Promise<KK9Message[]> {
     const currentSessionId = session?.id || '';
@@ -302,7 +300,6 @@ export class MessageOps {
         },
         {
           currentUserId,
-          knownBotSentMessageKeys,
           source: 'polling',
           onDiagnostic: (diagnostic: InboundNormalizationDiagnostic) => {
             log.warn(

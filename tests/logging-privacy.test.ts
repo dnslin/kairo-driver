@@ -312,6 +312,7 @@ describe('Issue #213 日志隐私回归测试', () => {
         id: 'normal-message-213',
         sessionId: 'normal-session-213',
         sender: '测试成员',
+        senderId: 'employee-213',
         content: sensitiveContent,
         isMe: false,
         atMe: true,

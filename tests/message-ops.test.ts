@@ -13,7 +13,7 @@ describe('原生历史会话与消息身份边界', () => {
     const ipc = new FakeIpcRenderer(() => ({ code: 0, data: [{ id: 1001, msgIdx: 88, sessionID: 91001, sender: 91002, content: '历史记录' }] }));
     const cdp = { evaluate: (script: string) => runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout }) } as unknown as CdpClient;
     const messages = await new BridgeMessageOps(cdp).getRecentMessages(
-      { id: '91001', name: '同号会话', type: 'private', nativeType: 0, receiverId: '91002', unread: false }, 1, undefined, 91001
+      { id: '91001', name: '同号会话', type: 'private', nativeType: 0, receiverId: '91002', unread: false }, 1, 91001
     );
     expect(messages).toMatchObject([{ id: '1001', msgIdx: 88, sessionId: '91001', direction: 'inbound' }]);
   });

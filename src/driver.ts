@@ -71,7 +71,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   private pollTimer: NodeJS.Timeout | null = null;
   private readonly knownMessageKeys = new Set<string>();
   private readonly knownRecalledMessageKeys = new Set<string>();
-  private readonly knownBotSentMessageKeys = new Set<string>();
   private currentUserId?: string | number;
 
   constructor(
@@ -89,7 +88,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
         cdp: config.cdp,
         startupGenerationId: this.startupGenerationId,
         rejectExistingBridge: config.rejectExistingBridge,
-        knownBotSentMessageKeys: this.knownBotSentMessageKeys,
       },
       this.cdp
     );
@@ -209,27 +207,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return targetSession ? this.bridgeSessionOps.markSessionRead(targetSession.id) : false;
   }
 
-  public recordBotSentMessageId(sessionId: string, messageId: string): void {
-    const normalizedSessionId = sessionId.trim();
-    const normalizedMessageId = messageId.trim();
-    if (!normalizedSessionId || !normalizedMessageId) return;
-    this.knownBotSentMessageKeys.add(
-      createMessageIdentityKey(normalizedSessionId, normalizedMessageId)
-    );
-    if (this.knownBotSentMessageKeys.size > 10000) {
-      const firstKey = this.knownBotSentMessageKeys.values().next().value;
-      if (firstKey) this.knownBotSentMessageKeys.delete(firstKey);
-    }
-  }
-
-  public isBotSentMessageId(sessionId: string, messageId: string): boolean {
-    const normalizedSessionId = sessionId.trim();
-    const normalizedMessageId = messageId.trim();
-    if (!normalizedSessionId || !normalizedMessageId) return false;
-    return this.knownBotSentMessageKeys.has(
-      createMessageIdentityKey(normalizedSessionId, normalizedMessageId)
-    );
-  }
 
   private recordSendResult(result: SendResult, sessionId?: string): void {
     const status = result.status;
@@ -249,15 +226,8 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     }
   }
 
-  private rememberBotSentMessage(result: SendResult, targetSessionId?: string): void {
-    if (result.status !== 'sent') return;
-    const sessionId = targetSessionId?.trim();
-    if (!sessionId) return;
-    this.recordBotSentMessageId(sessionId, result.messageId);
-  }
 
   private attachNativeRecall(result: SendResult, targetSessionId?: string): SendResult {
-    this.rememberBotSentMessage(result, targetSessionId);
     this.recordSendResult(result, targetSessionId);
     if (result.status !== 'sent') return result;
 
@@ -274,7 +244,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.bridgeMessageOps.getRecentMessages(
       session,
       limit,
-      this.knownBotSentMessageKeys,
       this.currentUserId
     );
   }

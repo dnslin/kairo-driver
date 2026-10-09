@@ -56,7 +56,13 @@ process.once('SIGINT', () => {
 });
 ```
 
-消息事件包含 `inbound`、`outbound` 和 `unknown` 方向。接入 Bot 时只把确认的入站消息交给上层，避免响应自己发出的消息。消息类型、提及、引用及附件字段见 [类型定义](src/types/index.ts)。
+消息方向只比较原生发送者 UID 与实际登录 UID：他人为 `inbound`，本人为 `outbound`；缺少任一身份或属于系统通知时保留 `unknown`。昵称、`isMe/fromMe` 输入标志和业务角色不能代替身份。接入 Bot 时只把确认的入站消息交给上层，避免响应自己发出的消息。消息类型、提及、引用及附件字段见 [类型定义](src/types/index.ts)。
+
+`origin` 只保留 `external/system/unknown`；已删除 `operator/bot_echo` 和 `recordBotSentMessageId/isBotSentMessageId`，没有兼容别名。本人方向不代表 SDK 发送：本机人工发送、其他设备本人消息与 SDK 回显都可以是 `outbound`。只有本实例取得本次业务成功回执并关联正式 ID 的实时回显才带 `sdkSendKey`，可用 `createNativeMessageKey('text', operationId)` 对照；历史查询不添加此确认标记。
+
+实时聊天使用原生 `message` 与本机发送业务回调，不依赖聊天窗口、Vue 普通消息转发或消息气泡。会话状态包不制造聊天；普通系统通知保留；按 `sessionId:messageId` 去重，`message/at` 对同一身份各最多派发一次。SDK 原生包先到时暂存到本次发送结束，失败或未知后仍派发真实本人消息而不伪造确认。尚属 T05 的本机手工撤回捕获和 T11 的旧轮询接口保留。
+
+T04 双目标SDK回显、真实新入站、本机人工本人消息、历史不重放、组件重建及真实组件缺席时的SDK回显和群入站已实测；私聊也有无组件接收记录，但专项标记放反，脚本判定未通过。按用户要求停止补测，已撤回本人测试消息并退出自有监听；真实状态更新等未验证项保留，不把离线回归写成真机通过。其他设备本人消息测试已按用户要求取消，不列验收缺项。证据与收尾结果见 [启动说明](docs/KK9-STARTUP.md#t04-原生实时事件专项验证)。
 
 ## 原生身份与会话
 

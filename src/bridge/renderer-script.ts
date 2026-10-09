@@ -176,6 +176,7 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
     const draftId = String(msgObj.id);
     const channel = msgObj.sessionType + '-' + msgObj.receiver + '-sendMsgCallback';
     const receipts = window.__kairo_send_receipts || (window.__kairo_send_receipts = new Map());
+    if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'pending', key: msgObj.msgFlag, sessionID: String(msgObj.sessionID) });
     let settle;
     let timer;
     let settled = false;
@@ -186,6 +187,7 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'unsubscribe', channel, listener: onReceipt });
       ipc.removeListener(channel, onReceipt);
       signal?.removeEventListener('abort', onAbort);
       settle(value);
@@ -212,6 +214,7 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
       finish(callback);
     };
     ipc.on(channel, onReceipt);
+    if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'subscribe', channel, listener: onReceipt });
     const onAbort = () => finish({ failure: { status: 'unknown', error: '本轮发送等待已取消', isPreTrigger: false } });
     signal?.addEventListener('abort', onAbort, { once: true });
     timer = setTimeout(() => finish({ failure: { status: 'unknown', error: '本次原生业务回执超时' + (requestError ? '；' + requestError : ''), isPreTrigger: false } }), timeoutMs);
@@ -232,12 +235,13 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
       }
       const receipt = { ...observation.receipt, messageId: String(confirmedMessage.id), msgIdx: Number(confirmedMessage.msgIdx) };
       receipts.set(msgObj.msgFlag, { receipt });
-      if (typeof observeNativeSend === 'function') observeNativeSend({ sessionId: String(msgObj.sessionID), session: targetSession, message: [confirmedMessage] });
+      if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'confirmed', key: msgObj.msgFlag, sessionID: String(msgObj.sessionID), session: targetSession, message: [confirmedMessage] });
       return { confirmedMessage, receipt };
     } catch (error) {
       return { failure: { status: 'unknown', error: String(error), isPreTrigger: false }, ...(callback?.receipt ? { receipt: callback.receipt } : {}) };
     } finally {
       finish({ failure: { status: 'unknown', error: '本轮发送结束', isPreTrigger: false } });
+      if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'settled', key: msgObj.msgFlag });
     }
   }
 `;

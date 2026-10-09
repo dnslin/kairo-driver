@@ -30,7 +30,8 @@ import {
   type SendOperationMessageType,
   type SendOperationStore,
 } from './send-operation.js';
-import { sendOperationRecordToResult } from './bridge/send-status.js';
+import { createNativeMessageKey, sendOperationRecordToResult } from './bridge/send-status.js';
+import { createMessageIdentityKey, normalizeNativeMessage } from './bridge/converter.js';
 
 export type FakeSendPayload =
   | FormattedText
@@ -91,9 +92,10 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private preSendCheckHandler?: (
     sessionId: string
   ) => Promise<PreSendCheckResult> | PreSendCheckResult;
-  private readonly botSentKeys = new Set<string>();
   private readonly sendOperationStore: SendOperationStore;
 
+  private readonly confirmedSendKeys = new Map<string, string>();
+  private readonly knownMessageKeys = new Set<string>();
   public readonly recordedCalls: RecordedSendCall[] = [];
   public selectSessionCallsCount = 0;
   public markSessionReadCallsCount = 0;
@@ -300,13 +302,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   public startPolling(_customPolling?: Partial<PollingConfig>): void {}
   public stopPolling(): void {}
 
-  public recordBotSentMessageId(sessionId: string, messageId: string): void {
-    this.botSentKeys.add(`${sessionId}:${messageId}`);
-  }
-
-  public isBotSentMessageId(sessionId: string, messageId: string): boolean {
-    return this.botSentKeys.has(`${sessionId}:${messageId}`);
-  }
 
   private async executeSendAction(
     operationType: SendOperationMessageType,
@@ -317,7 +312,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   ): Promise<SendResult> {
     const operationId =
       options?.operationId === undefined ? randomUUID() : options.operationId.trim();
-    const effectiveOptions = { ...options, operationId };
+    const effectiveOptions: SendOptions | SendFileOptions = { ...options, operationId };
     const replyTo = options && 'replyTo' in options ? options.replyTo : undefined;
     const mentions = options && 'mentions' in options ? options.mentions : undefined;
     const fingerprint = createSendOperationFingerprint({
@@ -349,7 +344,14 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
         outcome = { status: 'unknown', error: String(error), isPreTrigger: false };
       }
     }
-    return sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
+    const result = sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
+    if (result.status === 'sent' && effectiveOptions.targetSessionId) {
+      this.confirmedSendKeys.set(createMessageIdentityKey(effectiveOptions.targetSessionId, result.messageId),
+        createNativeMessageKey(operationType, operationId));
+      if (this.confirmedSendKeys.size > 10000)
+        this.confirmedSendKeys.delete(this.confirmedSendKeys.keys().next().value!);
+    }
+    return result;
   }
 
   private async executeSendBehavior(
@@ -412,7 +414,16 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public emitMessage(msg: KK9Message): void {
-    this.emit('message', msg);
+    const normalized = normalizeNativeMessage(msg, { currentUserId: this.currentUserId ?? undefined })[0];
+    if (!normalized) return;
+    const key = createMessageIdentityKey(normalized.sessionId, normalized.id);
+    if (this.knownMessageKeys.has(key)) return;
+    this.knownMessageKeys.add(key);
+    if (this.knownMessageKeys.size > 10000)
+      this.knownMessageKeys.delete(this.knownMessageKeys.values().next().value!);
+    if (normalized.direction === 'outbound') normalized.sdkSendKey = this.confirmedSendKeys.get(key);
+    this.emit('message', normalized);
+    if (normalized.atMe || normalized.atAll) this.emit('at', normalized);
   }
 
   public emitRecalled(evt: KK9RecalledEvent): void {

@@ -592,7 +592,7 @@ describe('原生媒体历史规范化', () => {
 });
 
 describe('KK9Driver 五类原生媒体门面', () => {
-  it('五类发送只标记指定会话的正式ID，快捷撤回清理对应原生记录', async () => {
+  it('五类发送关联指定会话的正式ID，快捷撤回清理对应原生记录', async () => {
     const native = createSuccessfulNativeRuntime();
     vi.mocked(prepareVoice).mockResolvedValue({ duration: 1, data: 'IyFBTVIK' });
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
@@ -615,8 +615,7 @@ describe('KK9Driver 五类原生媒体门面', () => {
     const results = await pending;
     expect(results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
     for (const result of results) {
-      expect(driver.isBotSentMessageId(String(session.id), result.messageId!)).toBe(true);
-      expect(driver.isBotSentMessageId('700001', result.messageId!)).toBe(false);
+      expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: result.messageId });
       if (!result.recall) throw new Error('已确认发送缺少快捷撤回');
       await expect(result.recall()).resolves.toBe(true);
     }
@@ -668,7 +667,6 @@ describe('KK9Driver 五类原生媒体门面', () => {
     );
     expect(result.status).toBe('sent');
     expect(native.sent[0]?.['sessionID']).toBe(session.id);
-    expect(driver.isBotSentMessageId(String(session.id), result.messageId!)).toBe(true);
-    expect(driver.isBotSentMessageId(String(other.id), result.messageId!)).toBe(false);
+    expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: result.messageId });
   });
 });

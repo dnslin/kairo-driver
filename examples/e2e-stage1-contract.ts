@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { InMemorySendOperationStore, KK9Driver, SendError } from '../src/index.js';
+import { createNativeMessageKey, InMemorySendOperationStore, KK9Driver, SendError } from '../src/index.js';
 import type { KK9EventBridge } from '../src/bridge/event-bridge.js';
 import type { CdpClient } from '../src/cdp/client.js';
 import type {
@@ -307,6 +307,7 @@ function messageMetadata(message: KK9Message): Record<string, unknown> {
     sessionId: message.sessionId,
     direction: message.direction,
     origin: message.origin,
+    sdkSendKey: message.sdkSendKey,
     senderId: message.senderId,
   };
 }
@@ -663,6 +664,7 @@ async function main(): Promise<void> {
       )
     );
     ensure(sentEcho.message.direction === 'outbound', 'Bot echo 未分类为 outbound');
+    ensure(sentEcho.message.sdkSendKey === createNativeMessageKey('text', sentOperationId), '回显未关联本次已确认 SDK 发送');
     ensure(
       sentEcho.sequence > inboundObservation.sequence,
       'Bot echo 观察顺序早于员工 inbound 消息'
