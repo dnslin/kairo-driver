@@ -25,13 +25,15 @@ T01/T02及前序审查仅验收读取与既有发送/撤回回归，没有完成
 - [ ] T05：显式目标撤回；核对SDK主动、远端与客户端手动撤回，不丢本地通知。
 - [ ] C2：真实文本双向收发、回显与撤回通过；错误与断线边界有行为回归，`pnpm check`通过。
 
+### PR 初始 T03 验收
+
 T03自动验收：相关15个文件、201条行为回归通过；最终 `pnpm check` 的build/typecheck、32个文件363条测试及lint全部通过。删除已被替代的DOM发送、旧success/delivered判别、自动重试与假成功断言，以执行实际生成脚本的原生回执回归替代；保留未切换的撤回、窗口、历史、富文本与媒体内容准备能力。617、普通失败、上传失败码-9、错草稿/错会话、回执先到、超时/提交后断线、重复不提交、查询不提交均有协议支撑的确定性回归。内存中反转617判别条件后，失败断言确实捕获正ID误判成功；未修改源码文件进行变异。
 
 T03真机命令：`cmd /c "set KK9_REAL_TEST_CONFIRM=5761:716791:793803&& set KK9_STAGE1_CONFIRM=5761:3585:716791&& pnpm exec tsx examples/verify-native-text.ts 5761 0123040139 716791 3585 int2024 793803 29467 测试123"`，最终运行ID `388017e3-456a-4312-a989-2860b21a5747`。重新核对登录0123040139/5761、私聊int2024/3585/716791、群测试123/793803/29467/nativeType1；同名群716827/26519未经选择，未发送。私聊正式ID137443977/索引673，群137443981/索引113，提交后断线137443985/索引674；各自草稿-26、回执code0、无业务失败、正式设备33039。断线初始unknown，复用Store创建新Driver后查询sent，未重发。
 
 私聊发送前后窗口均为793803，群均为716791；不读DOM/Vue/编辑器的发送实现在实际另一窗口上完成指定路由。每个意图只有一次原生提交，重复与查询都没有增加第二条消息。三个最终消息均已撤回并核对C/D标记，退出后本轮采集无残留、DriverHook无残留、在途0。617禁发、普通服务器业务失败与上传失败未真机触发；未发送媒体、改权限、管理员撤回、建会话、重启KK9或全局断网。现有撤回仅用于清理，不算T05验收；没有员工新入站，C2不勾选。
 
-保留全部运行清理证据：第一次业务回执包装错误导致unknown，私聊137439705已撤回；第二次群SDK结果sent但专项采集监听被聊天组件切换移除，137439983/137439987已撤回，未算通过；修正仅重挂自己的采集后第三次通过，137440701/137440703/137440707已撤回；最终三个消息也均撤回。本轮共九条本人测试消息，无未撤回项。证据为 `tmp/t03-first-live-failure.json`、`tmp/t03-second-live-failure.json`、`tmp/t03-third-live-evidence.json`、`tmp/t03-live-evidence.json` 和 `tmp/t03-protocol-evidence.json`；不保存正文或凭据，原主工作区材料仅读。
+保留全部运行清理证据：第一次业务回执包装错误导致unknown，私聊137439705已撤回；第二次群SDK结果sent但专项采集监听被聊天组件切换移除，137439983/137439987已撤回，未算通过；修正仅重挂自己的采集后第三次通过，137440701/137440703/137440707已撤回；最终三个消息也均撤回。本轮共九条本人测试消息，无未撤回项。证据为 `tmp/t03-first-live-failure.json`、`tmp/t03-second-live-failure.json`、`tmp/t03-third-live-evidence.json`、`tmp/t03-initial-live-evidence.json` 和 `tmp/t03-protocol-evidence.json`；初始最后一轮证据在运行修复后SDK前另存，不保存正文或凭据，原主工作区材料仅读。
 
 额外 `pnpm exec tsc --noEmit -p tsconfig.eslint.json` 未通过，只剩已记录的 `tests/cdp-client.test.ts`、`tests/driver-connection-lifecycle.test.ts` 的库目标/Buffer诊断及 `tests/inbound-normalization.test.ts` 的数组可空诊断；本轮发送结果、Fake、测试与示例未留新增诊断。LSP references仍初始化退出失败，未把导航记为成功。T03实施验收交付时改动仅留在本工作树，未提交、推送或合并；用户随后另行授权创建详细PR，仍不自动合并或继续T04。
 
@@ -43,6 +45,19 @@ T03真机命令：`cmd /c "set KK9_REAL_TEST_CONFIRM=5761:716791:793803&& set KK
 - 既有回归迁移：`tests/bridge-message-ops.test.ts`、`tests/send-ops.test.ts`、`tests/send-operation.test.ts`、`tests/fake-driver.test.ts`、`tests/driver.test.ts`、`tests/driver-health.test.ts`、`tests/driver-lifecycle-logging.test.ts`、`tests/driver-log-sink.test.ts`、`tests/event-bridge-lifecycle.test.ts`、`tests/native-media.test.ts`、`tests/recall.test.ts`、`tests/spike-card-test.test.ts`。
 - 专项真机脚本新增 `examples/verify-native-text.ts`；必要示例迁移：`examples/diagnose.ts`、`examples/e2e-real-test.ts`、`examples/e2e-media.ts`、`examples/e2e-stage1-contract.ts`、`examples/spike-card-test.ts`、`examples/verify-native-regressions.ts`。
 - 现有说明：`README.md`、`docs/DEVELOPMENT.md`、`docs/KK9-STARTUP.md`、`tasks/todo.md`。本机tmp证据不进入Git，完整保留失败、通过与清理记录。
+
+### PR #2 合并前四项修复
+
+- 业务回执等待：不因四秒外层 IPC 超时提前移除监听，保留请求错误诊断；图片、卡片传入实际业务期限。
+- 取消清理：声明前登记整个发送操作，取消覆盖异步 Store、原生身份/草稿准备和语音准备；未提交返回前置失败，已提交无业务证据保持unknown，仅取消本 SDK 的监听。
+- 会话绑定：所有发送门面固定调用时目标，复用可变 options 并发发送时，日志、Bot身份登记与快捷撤回仍使用实际原会话。
+- 终态保护：Store 原子更新阻止后到 unknown 覆盖 sent/failed及正式ID/业务码/回执；自定义 Store 遵循同一接口约束，未新增字段、迁移或兼容层。
+
+四项均有修复前失败回归。本轮新增18条行为回归，`pnpm check` 的build/typecheck、32个文件381条测试和lint通过；额外测试/示例类型检查仍只报告原有三个测试文件诊断，未记作通过。首次受影响回归发现旧无业务回执用例等待八秒而测试上限五秒，改用假时钟推进业务期限，保留unknown与不伪造回显断言，随后生命周期29条及完整检查通过。
+
+重新执行上列双门禁真机命令，运行ID `0357111b-c8ee-4afd-9a4e-285cd76d9069`；登录与两个既有目标重新核对。私聊正式ID137475067/索引677，群137475321/索引115，私聊提交后断线137475471/索引678；草稿均-26，回执code0、无业务失败、设备33039，断线unknown经共享Store新实例查询为sent。各意图仅一次提交，重复与查询无新增；私聊前后窗口793803，群前后窗口716791。三条本轮消息均撤回，无采集/DriverHook残留、在途0，jshookmcp独立清理后验一致。证据为 `tmp/t03-live-evidence.json`，不覆盖初始PR历史证据。
+
+慢回执、取消竞态、617、普通服务器失败和上传失败没有真实制造，已做协议支撑的确定性回归；未发媒体、改权限、操作同名716827群、全局断网或退出KK9。T04/T05/C2及后续媒体不勾选。用户随后授权提交四项修复、更新并合并PR #2，清理本轮功能分支并更新本地main；不继续后续任务。
 
 ## 逐类媒体
 

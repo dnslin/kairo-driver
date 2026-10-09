@@ -143,7 +143,11 @@ function buildMentionNodes(mentions?: SendOptions['mentions']): Array<Record<str
 
 export class BridgeMessageOps {
   private readonly sendStatus: BridgeSendStatus;
-  private readonly inFlight = new Map<string, Promise<SendOutcome>>();
+  private readonly inFlight = new Map<
+    AbortController,
+    { key?: string; result: Promise<SendResult> }
+  >();
+  private sendsCancelled = false;
   constructor(
     private readonly cdp: CdpClient,
     private readonly sendOperationStore: SendOperationStore = new InMemorySendOperationStore()
@@ -155,23 +159,46 @@ export class BridgeMessageOps {
   }
 
   public async cancelPendingSends(): Promise<void> {
-    if (this.inFlight.size === 0) return;
-    const keys = [...this.inFlight.keys()];
-    if (!isCdpUnavailableBeforeSend(this.cdp)) {
-      await this.cdp.evaluate(
-        '(() => { for (const key of ' +
-          JSON.stringify(keys) +
-          ') window.__kairo_pending_sends?.get(key)?.(); })()'
-      );
+    this.sendsCancelled = true;
+    const pending = [...this.inFlight.entries()];
+    for (const [controller] of pending) controller.abort();
+    const keys = pending.flatMap(([, operation]) => (operation.key ? [operation.key] : []));
+    try {
+      if (keys.length && !isCdpUnavailableBeforeSend(this.cdp)) {
+        await this.cdp.evaluate(
+          '(() => { for (const key of ' +
+            JSON.stringify(keys) +
+            ') window.__kairo_pending_sends?.get(key)?.(); })()'
+        );
+      }
+    } finally {
+      await Promise.allSettled(pending.map(([, operation]) => operation.result));
     }
-    await Promise.allSettled(this.inFlight.values());
   }
 
   private async executeOperation<T extends SendOptions | SendFileOptions>(
     kind: SendOperationMessageType,
     options: T,
     content: unknown,
-    action: (key: string, options: T) => Promise<SendOutcome>
+    action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>
+  ): Promise<SendResult> {
+    const controller = new AbortController();
+    if (this.sendsCancelled) controller.abort();
+    const result = this.runOperation(kind, options, content, action, controller);
+    this.inFlight.set(controller, { result });
+    try {
+      return await result;
+    } finally {
+      this.inFlight.delete(controller);
+    }
+  }
+
+  private async runOperation<T extends SendOptions | SendFileOptions>(
+    kind: SendOperationMessageType,
+    options: T,
+    content: unknown,
+    action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>,
+    controller: AbortController
   ): Promise<SendResult> {
     const operationId =
       options.operationId === undefined ? randomUUID() : options.operationId.trim();
@@ -196,19 +223,18 @@ export class BridgeMessageOps {
     if (!claim.claimed) return this.sendStatus.resolve(claim.operation);
     let outcome: SendOutcome;
     const key = createNativeMessageKey(kind, operationId);
+    this.inFlight.get(controller)!.key = key;
     if (!effectiveOptions)
       outcome = { status: 'failed', error: '发送必须指定明确原生会话ID', isPreTrigger: true };
+    else if (controller.signal.aborted)
+      outcome = { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
     else if (isCdpUnavailableBeforeSend(this.cdp))
       outcome = { status: 'failed', error: '发送前CDP未连接', isPreTrigger: true };
     else {
-      const pending = action(key, effectiveOptions);
-      this.inFlight.set(key, pending);
       try {
-        outcome = await pending;
+        outcome = await action(key, effectiveOptions, controller.signal);
       } catch (error) {
         outcome = { status: 'unknown', error: String(error), isPreTrigger: false };
-      } finally {
-        this.inFlight.delete(key);
       }
     }
     return sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
@@ -368,11 +394,13 @@ export class BridgeMessageOps {
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      const callIpc = callKairoIpc;
       ${NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
+      const cancellation = beginNativeSend(data.key);
+      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      try {
       let context;
       try { context = await readNativeSendContext(data.target); }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
@@ -387,9 +415,10 @@ export class BridgeMessageOps {
       // 草稿设备列允许NULL；正式核心从CORE_DATA使用当前注册设备，不以空值冒充设备身份。
       const msgObj = { contentType: data.contentType, content: messageContent, sender: identity.id, senderName: identity.name, senderNameEN: identity.name_en || '', senderNameTC: identity.name_tc || '', receiver, sessionType: targetSes.type, sessionID: targetSes.id,
         sendTime: Math.floor(Date.now()/1000), status: 'sending', type: 0, atState: data.mentionIds.length ? 0 : 1, atMemberIDList: data.mentionIds, msgFlag: data.key };
-      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout);
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
       if (submission.failure) return submission.failure;
       return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      } finally { cancellation.finish(); }
     })()`;
     try {
       const outcome = await this.cdp.evaluate<SendOutcome>(script, timeout + 12000);
@@ -530,7 +559,7 @@ export class BridgeMessageOps {
   }
   public sendVoice(voice: KK9VoiceOptions, options: SendOptions = {}): Promise<SendResult> {
     const input = { ...voice };
-    return this.executeOperation('voice', options, input, async (key, bound) => {
+    return this.executeOperation('voice', options, input, async (key, bound, signal) => {
       if (bound.replyTo !== undefined || bound.mentions !== undefined)
         return {
           status: 'failed',
@@ -539,6 +568,8 @@ export class BridgeMessageOps {
         };
       try {
         const prepared = await prepareVoice(this.cdp, input);
+        if (signal.aborted)
+          return { status: 'failed', error: '语音准备期间本轮发送已取消', isPreTrigger: true };
         return sendNativeStructuredMessage(
           this.cdp,
           { kind: 'voice', contentType: 2, content: prepared },

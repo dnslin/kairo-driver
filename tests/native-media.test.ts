@@ -99,6 +99,50 @@ afterEach(() => {
 });
 
 describe('原生卡片与语音发送集成', () => {
+  it('卡片按显式业务等待期限结束，不使用固定八秒', async () => {
+    vi.useFakeTimers();
+    const native = createSuccessfulNativeRuntime();
+    const send = native.ipc.send.bind(native.ipc);
+    native.ipc.send = (channel, request) => {
+      if (request.args[0] === 'sendMessageNew') setTimeout(() => send(channel, request), 200);
+      else send(channel, request);
+    };
+    const pending = new BridgeMessageOps(native.cdp).sendUrlCard(
+      { title: '等待期限', summary: '受控回执', linkUrl: 'https://example.test' },
+      { targetSessionId: '93001', operationId: 'op-card-deadline', verifyTimeoutMs: 100 }
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await pending).toMatchObject({ status: 'unknown', isPreTrigger: false });
+    expect(native.ipc.listenerCount('0-91002-sendMsgCallback')).toBe(0);
+  });
+  it('语音准备期间取消，不在准备完成后提交', async () => {
+    const native = createSuccessfulNativeRuntime();
+    const ops = new BridgeMessageOps(native.cdp);
+    let ready = (): void => {};
+    let release = (): void => {};
+    const started = new Promise<void>(resolve => {
+      ready = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    vi.mocked(prepareVoice).mockImplementation(async () => {
+      ready();
+      await gate;
+      return { duration: 2, data: 'IyFBTVIK' };
+    });
+    const pending = ops.sendVoice(
+      { text: '受控准备' },
+      { targetSessionId: '93001', operationId: 'op-cancel-voice' }
+    );
+    await started;
+    const cancelling = ops.cancelPendingSends();
+    release();
+    await cancelling;
+    expect(await pending).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(native.confirmed).toEqual([]);
+    expect(native.sent).toEqual([]);
+  });
   it('真实执行 renderer 脚本并序列化五类 payload，确认后推送同一 confirmedMessage', async () => {
     const native = createSuccessfulNativeRuntime();
     vi.mocked(prepareVoice).mockResolvedValue({
@@ -554,7 +598,7 @@ describe('KK9Driver 五类原生媒体门面', () => {
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
     getDriverTestInternals(driver).bridgeMessageOps = new BridgeMessageOps(native.cdp);
     const options = { targetSessionId: String(session.id) };
-    const results = await Promise.all([
+    const pending = Promise.all([
       driver.sendUrlCard(
         { title: '链接', summary: '摘要', linkUrl: 'https://example.com' },
         options
@@ -567,6 +611,8 @@ describe('KK9Driver 五类原生媒体门面', () => {
       ),
       driver.sendVoice({ filePath: 'C:\\tmp\\voice.wav' }, options),
     ]);
+    options.targetSessionId = '700001';
+    const results = await pending;
     expect(results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
     for (const result of results) {
       expect(driver.isBotSentMessageId(String(session.id), result.messageId!)).toBe(true);

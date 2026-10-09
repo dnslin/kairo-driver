@@ -49,6 +49,7 @@ export async function sendNativeStructuredMessage(
     msgFlag: nativeKey ?? createNativeMessageKey(message.kind),
     contentType: message.contentType,
     content: message.content,
+    timeout: options.verifyTimeoutMs ?? 8000,
   };
   const encoded = encodeRendererPayload(payloadData);
 
@@ -57,11 +58,13 @@ export async function sendNativeStructuredMessage(
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      const callIpc = callKairoIpc;
       ${NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
+      const cancellation = beginNativeSend(data.msgFlag);
+      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      try {
       let context;
       try { context = await readNativeSendContext(data.target); }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
@@ -126,7 +129,7 @@ export async function sendNativeStructuredMessage(
         msgFlag: data.msgFlag
       };
 
-      const submission = await submitNativeMessage(msgObj, targetSes);
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
       if (submission.failure) return submission.failure;
       const confirmedMessage = submission.confirmedMessage;
       // 媒体显示通知保持现有能力；不参与发送成功判定，文本路径不使用它。
@@ -140,11 +143,15 @@ export async function sendNativeStructuredMessage(
       catch { console.warn('[KairoDriver] 聊天窗口推送失败'); }
 
       return { status: 'sent', messageId: String(confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      } finally { cancellation.finish(); }
     })()
   `;
 
   try {
-    const result = await cdp.evaluate<SendOutcome>(script, options.verifyTimeoutMs ?? 20000);
+    const result = await cdp.evaluate<SendOutcome>(
+      script,
+      (options.verifyTimeoutMs ?? 8000) + 12000
+    );
     if (!result || !['sent', 'failed', 'unknown'].includes(result.status)) {
       return { status: 'unknown', error: '原生结构化消息未返回有效结果', isPreTrigger: false };
     }

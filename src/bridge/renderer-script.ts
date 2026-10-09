@@ -62,7 +62,7 @@ export const RENDERER_IPC_HELPERS_SCRIPT = `
     return currentId + 1;
   }
 
-  function callKairoIpcWithTimeout(timeoutMs, channel, ...args) {
+  function callKairoIpcWithSignalTimeout(timeoutMs, signal, channel, ...args) {
     return new Promise(resolve => {
       if (!ipc || typeof ipc.send !== 'function' || typeof ipc.once !== 'function') {
         resolve({ code: -1, error: '当前环境未找到有效的 ipcRenderer 对象' });
@@ -75,6 +75,7 @@ export const RENDERER_IPC_HELPERS_SCRIPT = `
       let timer;
 
       const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
         if (typeof ipc.removeListener === 'function') {
           try { ipc.removeListener(replyChannel, onReply); } catch (error) {}
         }
@@ -89,6 +90,9 @@ export const RENDERER_IPC_HELPERS_SCRIPT = `
       const onReply = (_event, payload) => {
         finish(payload || { code: 0 });
       };
+      const onAbort = () => finish({ code: -4, error: '本轮发送已取消' });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) { onAbort(); return; }
 
       timer = setTimeout(() => {
         finish({ code: -2, error: 'IPC 请求超时' });
@@ -107,6 +111,12 @@ export const RENDERER_IPC_HELPERS_SCRIPT = `
     });
   }
 
+  function callKairoIpcWithTimeout(timeoutMs, channel, ...args) {
+    return callKairoIpcWithSignalTimeout(timeoutMs, undefined, channel, ...args);
+  }
+  function callKairoIpcWithSignal(signal, channel, ...args) {
+    return callKairoIpcWithSignalTimeout(4000, signal, channel, ...args);
+  }
   function callKairoIpc(channel, ...args) {
     return callKairoIpcWithTimeout(4000, channel, ...args);
   }
@@ -148,7 +158,13 @@ export const CONFIRM_SENT_MESSAGE_SCRIPT = `
 // 订阅只属于本次负草稿；原生数据请求完成与业务回执是两件事。
 export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
   const observeNativeSend = window.__kairo_native_send_observer;
-  async function submitNativeMessage(msgObj, targetSession, timeoutMs = 8000) {
+  function beginNativeSend(key) {
+    const controller = new AbortController();
+    const pending = window.__kairo_pending_sends || (window.__kairo_pending_sends = new Map());
+    pending.set(key, () => controller.abort());
+    return { signal: controller.signal, finish: () => { controller.abort(); pending.delete(key); } };
+  }
+  async function submitNativeMessage(msgObj, targetSession, timeoutMs = 8000, signal) {
     const insertRes = await callIpc('insertSendBefoeMsg', msgObj);
     if (insertRes?.code !== 0 || !Number.isSafeInteger(Number(insertRes?.data?.id)) || Number(insertRes.data.id) >= 0) {
       const definite = Boolean(insertRes && insertRes.code !== 0 && insertRes.code !== -2);
@@ -160,18 +176,18 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
     const draftId = String(msgObj.id);
     const channel = msgObj.sessionType + '-' + msgObj.receiver + '-sendMsgCallback';
     const receipts = window.__kairo_send_receipts || (window.__kairo_send_receipts = new Map());
-    const pending = window.__kairo_pending_sends || (window.__kairo_pending_sends = new Map());
     let settle;
     let timer;
     let settled = false;
     let callback;
+    let requestError;
     const received = new Promise(resolve => { settle = resolve; });
     const finish = value => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       ipc.removeListener(channel, onReceipt);
-      pending.delete(msgObj.msgFlag);
+      signal?.removeEventListener('abort', onAbort);
       settle(value);
     };
     const onReceipt = (_event, payload) => {
@@ -196,18 +212,16 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
       finish(callback);
     };
     ipc.on(channel, onReceipt);
-    pending.set(msgObj.msgFlag, () => finish({ failure: { status: 'unknown', error: '本轮发送等待已取消', isPreTrigger: false } }));
-    timer = setTimeout(() => finish({ failure: { status: 'unknown', error: '本次原生业务回执超时', isPreTrigger: false } }), timeoutMs);
+    const onAbort = () => finish({ failure: { status: 'unknown', error: '本轮发送等待已取消', isPreTrigger: false } });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => finish({ failure: { status: 'unknown', error: '本次原生业务回执超时' + (requestError ? '；' + requestError : ''), isPreTrigger: false } }), timeoutMs);
     try {
       // 监听已就绪；回执可先于data请求回包到达，外层code0不参与成功判定。
       const submission = callIpc('sendMessageNew', { ...msgObj });
-      submission.catch(error => finish(callback || { failure: { status: 'unknown', error: String(error), isPreTrigger: false } }));
       submission.then(response => {
-        if (response?.code !== 0) finish(callback || { failure: { status: 'unknown',
-          error: 'sendMessageNew请求未完成 (' + response?.code + '): ' + (response?.error || ''), isPreTrigger: false } });
-      }, () => undefined);
+        if (response?.code !== 0) requestError = 'sendMessageNew请求未完成 (' + response?.code + '): ' + (response?.error || '');
+      }, error => { requestError = String(error); });
       const observation = await received;
-      await submission.catch(() => undefined);
       if (observation.failure) return observation;
       let confirmedMessage = observation.data;
       if (!/^[1-9]\\d*$/.test(String(confirmedMessage?.id))) {

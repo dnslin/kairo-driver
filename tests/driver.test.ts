@@ -294,6 +294,23 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     expect(missing.status).toBe('unknown');
     expect(missing.recall).toBeUndefined();
   });
+  it('复用 options 并发发送仍按各自实际会话登记消息', async () => {
+    const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
+    const native = createNativeSendRuntime();
+    getDriverTestInternals(driver).bridgeMessageOps = new BridgeMessageOps(native.cdp);
+    const options = { targetSessionId: '93001', operationId: 'driver-target-a' };
+    const firstPending = driver.sendText('第一会话', options);
+    options.targetSessionId = '93002';
+    options.operationId = 'driver-target-b';
+    const secondPending = driver.sendText('第二会话', options);
+    const [first, second] = await Promise.all([firstPending, secondPending]);
+    expect(first).toMatchObject({ status: 'sent', messageId: '135700000' });
+    expect(second).toMatchObject({ status: 'sent', messageId: '135700001' });
+    expect(native.records.map(record => record['sessionID'])).toEqual([93001, 93002]);
+    expect(driver.isBotSentMessageId('93001', '135700000')).toBe(true);
+    expect(driver.isBotSentMessageId('93002', '135700000')).toBe(false);
+    expect(driver.isBotSentMessageId('93002', '135700001')).toBe(true);
+  });
 
   it('历史查询返回历史撤回状态，不重放 message、at 或 recalled 事件', async () => {
     const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });

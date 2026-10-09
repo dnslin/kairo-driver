@@ -260,6 +260,7 @@ export function createRendererRuntime(options: RendererRuntimeOptions = {}): Ren
     },
     setTimeout,
     clearTimeout,
+    AbortController,
     Blob,
     ClipboardItem: FakeClipboardItem,
     MouseEvent: FakeMouseEvent,

@@ -53,7 +53,7 @@ export interface SendOperationStore {
   claim(input: SendOperationClaim): Promise<SendOperationClaimResult>;
   /** 只读查询发送操作。 */
   get(operationId: string): Promise<SendOperationRecord | null>;
-  /** 写入已观察到的发送状态。 */
+  /** 原子更新发送状态；已确认的sent/failed不得被unknown覆盖，返回实际保留的记录。 */
   update(operationId: string, update: SendOperationUpdate): Promise<SendOperationRecord>;
 }
 
@@ -174,6 +174,9 @@ export class InMemorySendOperationStore implements SendOperationStore {
     const existing = this.operations.get(normalizedOperationId);
     if (!existing) {
       throw new SendError(`未找到发送操作 [${normalizedOperationId}]`);
+    }
+    if (existing.status !== 'unknown' && update.status === 'unknown') {
+      return cloneOperation(existing);
     }
 
     const updated: SendOperationRecord = {

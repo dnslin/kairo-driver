@@ -75,6 +75,38 @@ describe('发送操作 Store port 与 FakeDriver', () => {
     });
     expect(await store.get('op-1')).toEqual(sent);
   });
+  it.each(['sent', 'failed'] as const)(
+    '并发后到 unknown 不清除已确认的%s及业务证据',
+    async status => {
+      const store = new InMemorySendOperationStore();
+      await store.claim({
+        operationId: 'op-final',
+        fingerprint: createSendOperationFingerprint({
+          targetSessionId: '93001',
+          messageType: 'text',
+          content: '终态保护',
+        }),
+      });
+      const receipt = {
+        draftId: '-1',
+        sessionId: '93001',
+        code: 0,
+        messageId: '135700000',
+        ...(status === 'failed' ? { businessCode: 617 } : {}),
+      };
+      const confirmed = store.update(
+        'op-final',
+        status === 'sent'
+          ? { status, messageId: '135700000', receipt, isPreTrigger: false }
+          : { status, error: '业务失败617', nativeCode: 617, receipt, isPreTrigger: false }
+      );
+      const weaker = store.update('op-final', { status: 'unknown', error: '较晚的CDP响应丢失' });
+      const [final, late] = await Promise.all([confirmed, weaker]);
+      expect(late).toEqual(final);
+      expect(await store.get('op-final')).toEqual(final);
+      expect(final.receipt).toEqual(receipt);
+    }
+  );
 
   it('同一 operationId 同内容重放只发送一次并复用 sent', async () => {
     const store = new InMemorySendOperationStore();

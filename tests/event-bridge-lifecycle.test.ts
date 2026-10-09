@@ -192,6 +192,7 @@ describe('EventBridge 渲染资源所有权关闭', () => {
   });
 
   it.each(['发送ack失败', '没有确认记录'])('%s不得根据请求正文伪造成功回显', async failure => {
+    vi.useFakeTimers();
     const page = createPage('0-91002');
     const { bridge } = page.createBridge('发送失败', '连接', '91001');
     configureNativeSubmission(page.windowObject);
@@ -205,10 +206,12 @@ describe('EventBridge 渲染资源所有权关闭', () => {
     bridge.on('message', message => messages.push(message));
     await bridge.connect();
     try {
-      const result = await runRendererScript<{ failure: { status: string } }>(
+      const pending = runRendererScript<{ failure: { status: string } }>(
         nativeSubmissionScript,
         page.runtime.context
       );
+      await vi.runAllTimersAsync();
+      const result = await pending;
       expect(result.failure.status).toBe('unknown');
       expect(messages).toEqual([]);
     } finally {

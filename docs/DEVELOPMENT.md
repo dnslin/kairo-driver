@@ -39,6 +39,10 @@ T03 文本发送必须指定原生会话 ID，结果为必填 `status` 的 `sent
 
 双目标真机验收使用 `examples/verify-native-text.ts`，参数及确认门禁见 [KK9-STARTUP.md](KK9-STARTUP.md)。LSP 本轮 references 仍因 `typescript-language-server exited unexpectedly (code 0)` 不可用；已用实际调用方检索、回归及测试/示例额外类型检查补足，不把失败导航记为成功。
 
+T03 合并前四项修复：业务回执等待不因四秒外层 IPC 超时提前结束，图片/卡片传入实际等待期限；取消登记覆盖 Store 声明和原生准备，异步语音准备结束后不再提交，其他 SDK 监听不受影响；所有发送门面固定调用时目标用于日志、身份登记和快捷撤回；Store 原子更新保留已确认的 sent/failed，不被后到 unknown 降级。自定义 Store 必须执行相同终态约束，接口形状与持久化数据未变化。
+
+本轮新增18条行为回归，四项问题均先用失败回归复现再修复；`pnpm check` 的build/typecheck、32个文件381条测试及lint通过。受影响生命周期回归中，外层请求失败但无业务回执的情况改用假时钟推进实际业务期限，保留 unknown 与无伪造回显断言，不增加真实睡眠或放宽测试超时。额外 `pnpm exec tsc --noEmit -p tsconfig.eslint.json` 仍只报告原有三个文件的库目标、Buffer及可空数组诊断，没有本轮修改文件的新诊断；该额外检查不是通过。
+
 ## 依赖与打包
 
 提交并保留 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 和 `patches`。两条音频依赖补丁属于运行所需配置，升级相关依赖时需重新核对补丁及语音处理行为。

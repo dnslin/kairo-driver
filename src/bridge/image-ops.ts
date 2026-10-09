@@ -149,6 +149,7 @@ export async function sendNativeImage(
     mimeType,
     width,
     height,
+    timeout: options.verifyTimeoutMs ?? 8000,
   };
 
   const encoded = encodeRendererPayload(payloadData);
@@ -158,11 +159,13 @@ export async function sendNativeImage(
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      const callIpc = callKairoIpc;
       ${NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
+      const cancellation = beginNativeSend(data.msgFlag);
+      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      try {
       let context;
       try { context = await readNativeSendContext(data.target); }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
@@ -223,7 +226,7 @@ export async function sendNativeImage(
         filepath: artworkPath
       };
 
-      const submission = await submitNativeMessage(msgObj, targetSes);
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
       if (submission.failure) return submission.failure;
       // 未切换的图片显示通知保持可用；只在业务确认后执行。
       const app = document.querySelector('#app')?.__vue__;
@@ -235,11 +238,15 @@ export async function sendNativeImage(
         bus?.$emit(targetSes.sesUUID + '-msg', [submission.confirmedMessage]);
       } catch (error) { console.warn('[KairoDriver] 图片显示通知失败: ' + String(error)); }
       return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      } finally { cancellation.finish(); }
     })()
   `;
 
   try {
-    const result = await cdp.evaluate<SendOutcome>(script, options.verifyTimeoutMs ?? 20000);
+    const result = await cdp.evaluate<SendOutcome>(
+      script,
+      (options.verifyTimeoutMs ?? 8000) + 12000
+    );
     if (!result || !['sent', 'failed', 'unknown'].includes(result.status)) {
       return { status: 'unknown', error: '底层图片IPC未返回有效结果', isPreTrigger: false };
     }

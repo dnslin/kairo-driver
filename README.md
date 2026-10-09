@@ -102,6 +102,10 @@ async function sendToSession(targetSessionId: string, text: string) {
 
 每次调用都返回稳定 `operationId`，省略输入时 SDK 为该意图生成一次。同一 ID 不能更换内容、目标、类型、提及或引用；重复调用只返回或查询原结果，不再次提交，包括明确前置失败。需要另一次发送时必须显式建立新意图。`getSendStatus()` 不发送消息；没有本次业务证据时保持 `unknown`。默认记录保存在内存，跨实例或进程接入复用调用方提供的 `SendOperationStore`；未新增数据库、迁移或兼容结果别名。
 
+`verifyTimeoutMs` 控制取得负草稿后的业务回执等待；外层 `sendMessageNew` 请求超时只保留诊断，不提前结束这段等待。图片、卡片与文本使用同一等待约定。调用 `disconnect()` 时，尚未提交的声明与准备工作取消，已提交且没有业务证据的操作保持 `unknown`；仅清理本实例的监听。发送结果登记和快捷撤回使用调用时固定的目标会话。
+
+自定义 `SendOperationStore.update()` 必须在一次原子更新中保留已确认的 `sent/failed`，不能让后到的 `unknown` 清除正式 ID、业务错误或回执；返回实际保留的记录，不能先读再写实现这个约束。默认内存 Store 已执行此规则；没有新增方法、持久化字段或数据迁移。
+
 还支持图片、文件、富文本、引用回复、卡片、语音和撤回；完整方法见 [IKK9Driver](src/types/index.ts)。图片和文件路径属于运行 Driver 的机器，跨机器接入时由调用方传输实际文件。
 
 ## 运行边界

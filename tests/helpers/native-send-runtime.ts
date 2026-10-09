@@ -12,6 +12,9 @@ export function createNativeSendRuntime(
     responseLost?: boolean;
     mismatchedSession?: boolean;
     queryCode?: number;
+    sendDelayMs?: number;
+    responseGate?: Promise<void>;
+    responseStarted?: () => void;
   } = {}
 ) {
   const sessions = [
@@ -89,13 +92,25 @@ export function createNativeSendRuntime(
       return { code: 0, data: { thumbPath: '原生缩略图', artworkPath: '原生原图' } };
     throw new Error('未声明原生方法 ' + String(method));
   });
+  if (config.sendDelayMs !== undefined) {
+    const send = ipc.send.bind(ipc);
+    ipc.send = (channel, request) => {
+      if (request.args[0] === 'sendMessageNew') {
+        setTimeout(() => send(channel, request), config.sendDelayMs);
+      } else send(channel, request);
+    };
+  }
   const window: Record<string, unknown> = { ipcRenderer: ipc };
-  const context: Record<string, unknown> = { window, setTimeout, clearTimeout };
+  const context: Record<string, unknown> = { window, setTimeout, clearTimeout, AbortController };
   let connected = true;
   const cdp = {
     getStatus: () => (connected ? 'connected' : 'disconnected'),
     evaluate: async (script: string) => {
       const value = await runRendererScript(script, context);
+      if (script.includes('submitNativeMessage(msgObj')) {
+        config.responseStarted?.();
+        await config.responseGate;
+      }
       if (config.responseLost && script.includes('submitNativeMessage(msgObj'))
         throw new Error('提交后CDP响应丢失');
       return value;

@@ -347,9 +347,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    * 发送纯文本消息
    */
   public async sendText(text: string, options: SendOptions = {}): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     return this.attachNativeRecall(
       await this.bridgeMessageOps.sendText(text, options),
-      options.targetSessionId
+      targetSessionId
     );
   }
 
@@ -360,9 +361,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     content: FormattedText,
     options: SendOptions = {}
   ): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     return this.attachNativeRecall(
       await this.bridgeMessageOps.sendRichText(content, options),
-      options.targetSessionId
+      targetSessionId
     );
   }
 
@@ -374,9 +376,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     content: FormattedText,
     options: SendOptions = {}
   ): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     return this.attachNativeRecall(
       await this.bridgeMessageOps.sendReply(replyTo, content, options),
-      options.targetSessionId
+      targetSessionId
     );
   }
 
@@ -384,9 +387,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    * 发送文件
    */
   public async sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     return this.attachNativeRecall(
       await this.bridgeMessageOps.sendFile(filePath, options),
-      options.targetSessionId
+      targetSessionId
     );
   }
   /**
@@ -400,9 +404,10 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    * 发送本地图片
    */
   public async sendImage(imagePath: string, options: SendOptions = {}): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     return this.attachNativeRecall(
       await this.bridgeMessageOps.sendImage(imagePath, options),
-      options.targetSessionId
+      targetSessionId
     );
   }
 
@@ -411,8 +416,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     card: KK9UrlCardOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     const result = await this.bridgeMessageOps.sendUrlCard(card, options);
-    return this.attachNativeRecall(result, options.targetSessionId);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 发送业务任务或通知卡片。 */
@@ -420,8 +426,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     message: KK9BizMsgOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     const result = await this.bridgeMessageOps.sendBizMessage(message, options);
-    return this.attachNativeRecall(result, options.targetSessionId);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 发送工作台微应用通知卡片。 */
@@ -429,8 +436,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     message: KK9AppMsgOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     const result = await this.bridgeMessageOps.sendAppMessage(message, options);
-    return this.attachNativeRecall(result, options.targetSessionId);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 发送合并聊天记录卡片。 */
@@ -438,14 +446,16 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     record: KK9ChatRecordOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     const result = await this.bridgeMessageOps.sendChatRecord(record, options);
-    return this.attachNativeRecall(result, options.targetSessionId);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /** 准备并发送原生语音消息。 */
   public async sendVoice(voice: KK9VoiceOptions, options: SendOptions = {}): Promise<SendResult> {
+    const targetSessionId = options.targetSessionId;
     const result = await this.bridgeMessageOps.sendVoice(voice, options);
-    return this.attachNativeRecall(result, options.targetSessionId);
+    return this.attachNativeRecall(result, targetSessionId);
   }
 
   /**
