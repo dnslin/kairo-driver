@@ -266,6 +266,7 @@ export async function runSpikeCardTest(
   const recalledMessageIds: string[] = [];
   let exitCode = 0;
   let connected = false;
+  let nativeSessionId: string | undefined;
 
   logger.log('=== KK9 非文本/卡片消息服务端可行性 Spike 测试 ===\n');
   try {
@@ -295,6 +296,7 @@ export async function runSpikeCardTest(
       targetName,
       env['KK9_MEDIA_CONFIRM']
     );
+    nativeSessionId = String(sessionInfo.targetSes.id);
     logger.log(
       `2. 目标会话确认: [${sessionInfo.targetSes.name}] (id: ${targetId}, type: ${sessionInfo.targetSes.type})`
     );
@@ -331,15 +333,20 @@ export async function runSpikeCardTest(
     exitCode = 1;
     logger.error('Spike 测试执行异常:', error);
   } finally {
-    if (connected && !keep) {
+    if (connected && !keep && nativeSessionId) {
       for (const messageId of sentMessageIds) {
-        const recalled = await recallNativeMessage(options.cdp, messageId, targetId);
-        if (recalled) {
-          recalledMessageIds.push(messageId);
-          logger.log(`已撤回 Spike 消息 ${messageId}`);
-        } else {
+        try {
+          const recalled = await recallNativeMessage(options.cdp, messageId, nativeSessionId);
+          if (recalled) {
+            recalledMessageIds.push(messageId);
+            logger.log(`已撤回 Spike 消息 ${messageId}`);
+          } else {
+            exitCode = 1;
+            logger.error(`未撤回 Spike 消息 ${messageId}: 没有可撤回目标`);
+          }
+        } catch (error) {
           exitCode = 1;
-          logger.error(`未撤回 Spike 消息 ${messageId}: 原生撤回返回失败`);
+          logger.error(`未撤回 Spike 消息 ${messageId}:`, error);
         }
       }
     } else if (keep && sentMessageIds.length > 0) {

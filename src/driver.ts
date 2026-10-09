@@ -235,7 +235,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     const sessionId = targetSessionId?.trim();
     return {
       ...result,
-      recall: () => this.bridgeMessageOps.recallMessage(messageId, sessionId),
+      recall: sessionId ? (): Promise<boolean> => this.recallMessage(messageId, sessionId) : undefined,
     };
   }
 
@@ -427,17 +427,16 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.attachNativeRecall(result, targetSessionId);
   }
 
-  /**
-   * 消息撤回 (Recall / CancelMessage)
-   */
-  public async recallMessage(messageId: string, session?: KK9Session | string): Promise<boolean> {
-    if (typeof session === 'string') {
-      const targetSession = await this.resolveSessionTarget(session);
-      return targetSession
-        ? this.bridgeMessageOps.recallMessage(messageId, targetSession.id)
-        : false;
+  /** 必须指定原生会话ID或实体；原生成功确认和实时通知共用撤回去重。 */
+  public async recallMessage(messageId: string, session: KK9Session | string): Promise<boolean> {
+    if (this.invalidated) return false;
+    const sessionId = typeof session === 'string' ? session.trim() : session?.id;
+    const success = await this.bridgeMessageOps.recallMessage(messageId, sessionId ?? '');
+    if (success && !this.invalidated) {
+      this.handleRecalledEvent({ messageId, sessionId,
+        sender: String(this.currentUserId ?? '我'), time: new Date().toLocaleTimeString(), timestamp: Date.now() });
     }
-    return this.bridgeMessageOps.recallMessage(messageId, session?.id);
+    return success;
   }
 
   private handleRecalledEvent(event: KK9RecalledEvent): void {

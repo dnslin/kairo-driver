@@ -96,6 +96,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   private readonly confirmedSendKeys = new Map<string, string>();
   private readonly knownMessageKeys = new Set<string>();
+  private readonly knownRecalledMessageKeys = new Set<string>();
   public readonly recordedCalls: RecordedSendCall[] = [];
   public selectSessionCallsCount = 0;
   public markSessionReadCallsCount = 0;
@@ -276,7 +277,14 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
         };
   }
 
-  public recallMessage(_messageId: string, _session?: KK9Session | string): Promise<boolean> {
+  public recallMessage(messageId: string, session: KK9Session | string): Promise<boolean> {
+    const sessionId = typeof session === 'string' ? session.trim() : session?.id;
+    const target = this.messages.find(message => message.sessionId === sessionId && message.id === messageId);
+    if (!sessionId || !/^[1-9]\d*$/.test(sessionId) || !target || target.isRecalled ||
+        !this.currentUserId || target.senderId !== this.currentUserId) return Promise.resolve(false);
+    target.isRecalled = true;
+    this.emitRecalled({ messageId, sessionId, sender: this.currentUserId,
+      time: new Date().toLocaleTimeString(), timestamp: Date.now() });
     return Promise.resolve(true);
   }
 
@@ -427,6 +435,12 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public emitRecalled(evt: KK9RecalledEvent): void {
+    if (!evt.sessionId || !evt.messageId) return;
+    const key = createMessageIdentityKey(evt.sessionId, evt.messageId);
+    if (this.knownRecalledMessageKeys.has(key)) return;
+    this.knownRecalledMessageKeys.add(key);
+    if (this.knownRecalledMessageKeys.size > 10000)
+      this.knownRecalledMessageKeys.delete(this.knownRecalledMessageKeys.values().next().value!);
     this.emit('recalled', evt);
   }
 

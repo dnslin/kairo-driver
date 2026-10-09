@@ -579,7 +579,7 @@ export class BridgeMessageOps {
       }
     });
   }
-  public recallMessage(messageId: string, sessionId?: string): Promise<boolean> {
+  public recallMessage(messageId: string, sessionId: string): Promise<boolean> {
     return recallNativeMessage(this.cdp, messageId, sessionId);
   }
 }

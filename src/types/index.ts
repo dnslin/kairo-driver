@@ -492,7 +492,8 @@ export interface IKK9Driver extends EventEmitter {
   sendAppMessage(message: KK9AppMsgOptions, options?: SendOptions): Promise<SendResult>;
   sendChatRecord(record: KK9ChatRecordOptions, options?: SendOptions): Promise<SendResult>;
   sendVoice(voice: KK9VoiceOptions, options?: SendOptions): Promise<SendResult>;
-  recallMessage(messageId: string, session?: KK9Session | string): Promise<boolean>;
+  /** 显式原生会话；无可撤回目标返回false，原生失败抛出含目标和错误上下文的DriverError。 */
+  recallMessage(messageId: string, session: KK9Session | string): Promise<boolean>;
 
   // 组织架构与员工档案
   getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]>;

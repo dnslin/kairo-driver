@@ -327,10 +327,6 @@ try {
     }
     for (const message of owned) {
       try {
-        // 现有撤回能力用于清理；必要切换仅在两个授权目标内，不代表实施T05。
-        if ((await activeWindow()) !== message.session.id)
-          assert.equal(await driver.selectSession(message.session.id), true);
-        await sleep(300);
         assert.equal(
           await driver.recallMessage(message.id, message.session),
           true,

@@ -432,11 +432,7 @@ try {
   if (connected) {
     for (const target of [...recallTargets].reverse()) {
       await cleanupStep(`真实撤回清理：${target.label}`, async () => {
-        let recalled = await driver.recallMessage(target.messageId, target.sessionId);
-        if (!recalled) {
-          await sleep(500);
-          recalled = await driver.recallMessage(target.messageId, target.sessionId);
-        }
+        const recalled = await driver.recallMessage(target.messageId, target.sessionId);
         if (!recalled) throw new Error(`撤回失败 messageId=${target.messageId}`);
         recalledKeys.add(`${target.sessionId}:${target.messageId}`);
       });

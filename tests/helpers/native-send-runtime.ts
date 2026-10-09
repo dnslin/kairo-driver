@@ -12,6 +12,7 @@ export function createNativeSendRuntime(
     responseLost?: boolean;
     mismatchedSession?: boolean;
     queryCode?: number;
+    cancelCode?: number;
     sendDelayMs?: number;
     responseGate?: Promise<void>;
     responseStarted?: () => void;
@@ -88,6 +89,17 @@ export function createNativeSendRuntime(
             message['sessionID'] === request.args[1] && message['msgIdx'] === request.args[2]
         ),
       };
+    if (method === 'cancelMessage') {
+      if (config.cancelCode) return { code: config.cancelCode, error: '原生拒绝撤回' };
+      const target = request.args[1];
+      if (!target || typeof target !== 'object' || !('sessionID' in target) ||
+          !('msgID' in target) || !('msgIdx' in target)) return { code: 627 };
+      const record = records.find(message => message['sessionID'] === target.sessionID &&
+        message['id'] === target.msgID && message['msgIdx'] === target.msgIdx);
+      if (!record) return { code: 627, error: '原生撤回目标不匹配' };
+      record['msgFlag'] = 'C';
+      return { code: 0 };
+    }
     if (method === 'sendingImgBeforeHandle')
       return { code: 0, data: { thumbPath: '原生缩略图', artworkPath: '原生原图' } };
     throw new Error('未声明原生方法 ' + String(method));
