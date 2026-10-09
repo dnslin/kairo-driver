@@ -138,6 +138,199 @@ function configureNativeSubmission(windowObject: Record<string, unknown>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe('T04 原生实时独立链路', () => {
+  it('没有实际聊天组件与 Vue 总线仍能连接、接收及关闭原生事件', async () => {
+    const page = createPage();
+    Object.assign(page.runtime.context['document'] as object, {
+      querySelector: () => null, querySelectorAll: () => [],
+    });
+    delete page.windowObject['vueBus'];
+    const { bridge } = page.createBridge('无组件', '连接', '91001');
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    try {
+      page.ipc.emit('message', {}, { args: { sessionID: 716791, message: [
+        { id: 1001, sender: 91002, contentType: 4, content: '新入站' },
+      ] } });
+      expect(messages).toMatchObject([{ id: '1001', direction: 'inbound', senderId: '91002' }]);
+    } finally { await bridge.disconnect(); }
+    expect(page.ipc.listenerCount('message')).toBe(0);
+  });
+
+  it.each(['原生先到', '确认先到'])('%s与重复包只派发一次已确认 SDK 回显及提及', async order => {
+    const page = createPage();
+    const { bridge } = page.createBridge(order, '连接', '91001');
+    const confirmed = { id: 1001, sessionID: 716791, sender: 91001,
+      contentType: 4, content: 'SDK回显', msgFlag: '本次意图', atMemberIDList: [91001] };
+    const envelope = { sessionID: 716791, message: [confirmed] };
+    const messages: KK9Message[] = [];
+    const ats: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    bridge.on('at', message => ats.push(message));
+    await bridge.connect();
+    try {
+      const observer = page.windowObject['__kairo_native_send_observer'] as (data: unknown) => void;
+      observer({ stage: 'pending', key: '本次意图', sessionID: 716791 });
+      if (order === '原生先到') {
+        page.ipc.emit('message', {}, { args: envelope });
+        expect(messages).toEqual([]);
+      }
+      observer({ stage: 'confirmed', key: '本次意图', ...envelope });
+      page.ipc.emit('message', {}, { args: envelope });
+      observer({ stage: 'settled', key: '本次意图' });
+      page.ipc.emit('message', {}, { args: envelope });
+      expect(messages).toMatchObject([{ id: '1001', sessionId: '716791', direction: 'outbound', sdkSendKey: '本次意图' }]);
+      expect(messages).toHaveLength(1);
+      expect(ats).toEqual(messages);
+    } finally { await bridge.disconnect(); }
+  });
+
+  it.each(['failed', 'unknown'])('%s释放真实本人消息，不伪造 SDK 确认', async status => {
+    const page = createPage();
+    const { bridge } = page.createBridge(status, '连接', '91001');
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    try {
+      const observer = page.windowObject['__kairo_native_send_observer'] as (data: unknown) => void;
+      observer({ stage: 'pending', key: '未确认意图', sessionID: 716791 });
+      page.ipc.emit('message', {}, { args: { sessionID: 716791, message: [
+        { id: 1001, sender: 91001, content: '真实本人消息', msgFlag: '未确认意图' },
+      ] } });
+      expect(messages).toEqual([]);
+      observer({ stage: 'settled', key: '未确认意图' });
+      expect(messages).toMatchObject([{ id: '1001', direction: 'outbound' }]);
+      expect(messages[0]?.sdkSendKey).toBeUndefined();
+    } finally { await bridge.disconnect(); }
+  });
+
+  it('真实组件清空会话回调后只处理本 SDK 等待，不恢复其他监听', async () => {
+    vi.useFakeTimers();
+    const page = createPage('0-91002');
+    const { bridge } = page.createBridge('组件清理', '连接', '91001');
+    const confirmed = { ...configureNativeSubmission(page.windowObject), msgFlag: '本次原生标识' };
+    const channel = '0-91002-sendMsgCallback';
+    const other = vi.fn();
+    page.ipc.on(channel, other);
+    page.windowObject['nativeSubmitIpc'] = (method: string) => {
+      if (method === 'insertSendBefoeMsg') return Promise.resolve({ code: 0, data: { id: -1 } });
+      page.ipc.removeAllListeners(channel);
+      page.ipc.emit(channel, {}, { args: { msgID: -1, code: 0, data: confirmed } });
+      return Promise.resolve({ code: 0 });
+    };
+    const originalEmit = page.ipc.emit;
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    try {
+      const pending = runRendererScript<{ confirmedMessage?: unknown; failure?: unknown }>(nativeSubmissionScript, page.runtime.context);
+      await vi.runAllTimersAsync();
+      expect(await pending).toMatchObject({ confirmedMessage: confirmed });
+      expect(messages).toMatchObject([{ id: confirmed.id, sdkSendKey: '本次原生标识', direction: 'outbound' }]);
+      expect(messages).toHaveLength(1);
+      expect(page.ipc.listeners(channel)).toEqual([]);
+      expect(other).not.toHaveBeenCalled();
+    } finally {
+      await bridge.disconnect();
+      vi.useRealTimers();
+    }
+    expect(page.ipc.emit).toBe(originalEmit);
+  });
+
+  it('session-only 状态不制造 message/at/recalled，原生系统通知保留，历史回包不重放', async () => {
+    const page = createPage();
+    const { bridge } = page.createBridge('状态分流', '连接', '91001');
+    const messages: KK9Message[] = [];
+    const ats: KK9Message[] = [];
+    const recalls: KK9RecalledEvent[] = [];
+    bridge.on('message', message => messages.push(message));
+    bridge.on('at', message => ats.push(message));
+    bridge.on('recalled', event => recalls.push(event));
+    await bridge.connect();
+    try {
+      page.ipc.emit('message', {}, { args: { sessionID: 716791, session: { id: 716791, userReadIndex: 1001, atState: 2 } } });
+      page.ipc.emit('data-100', {}, { code: 0, data: [{ id: 2001, sessionID: 716791, contentType: 6, content: { event: 'CancelMessage', msgID: 1001 } }] });
+      expect(messages).toEqual([]);
+      expect(ats).toEqual([]);
+      expect(recalls).toEqual([]);
+      page.ipc.emit('message', {}, { args: { sessionID: 716791, message: [
+        { id: 2002, sender: 91002, contentType: 6, content: { event: 'ModifyGroupName', data: '普通通知' } },
+      ] } });
+      expect(messages).toMatchObject([{ id: '2002', messageType: 'system', origin: 'system', direction: 'unknown' }]);
+      expect(ats).toEqual([]);
+      expect(recalls).toEqual([]);
+    } finally { await bridge.disconnect(); }
+  });
+
+  it('本机人工业务回调和他设备本人原生消息均 outbound，不标记 SDK；跨会话同号不丢失', async () => {
+    const page = createPage();
+    const { bridge } = page.createBridge('本人来源', '连接', '91001');
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    try {
+      const manual = { id: 1001, sessionID: 716791, sender: 91001, sessionType: 0, content: '本机人工文本', deviceID: 1 };
+      page.ipc.emit('0-91002-sendMsgCallback', {}, { args: { code: 0, msgID: -1, data: manual } });
+      page.ipc.emit('message', {}, { args: { sessionID: 716791, message: [manual] } });
+      page.ipc.emit('message', {}, { args: { sessionID: 793803, message: [{ ...manual, sessionID: 793803, sessionType: 1, deviceID: 2 }] } });
+      page.ipc.emit('0-91002-sendMsgCallback', {}, { args: { code: 0, msgID: -2, data: { ...manual, id: 1002, ext: { status: 617 } } } });
+      expect(messages.map(message => ({ id: message.id, session: message.sessionId, type: message.sessionType, direction: message.direction, key: message.sdkSendKey }))).toEqual([
+        { id: '1001', session: '716791', type: 'private', direction: 'outbound', key: undefined },
+        { id: '1001', session: '793803', type: 'group', direction: 'outbound', key: undefined },
+      ]);
+    } finally { await bridge.disconnect(); }
+  });
+
+  it('待确认意图只暂存本次本人会话，不暂存他会话同号或同意图键', async () => {
+    const page = createPage();
+    const { bridge } = page.createBridge('范围竞态', '连接', '91001');
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    try {
+      const observer = page.windowObject['__kairo_native_send_observer'] as (data: unknown) => void;
+      observer({ stage: 'pending', key: '当前意图', sessionID: 716791 });
+      const native = { id: 1001, sender: 91001, msgFlag: '当前意图', content: '正式文本' };
+      page.ipc.emit('message', {}, { args: { sessionID: 793803, message: [native] } });
+      page.ipc.emit('message', {}, { args: { sessionID: 716791, message: [native] } });
+      expect(messages.map(message => message.sessionId)).toEqual(['793803']);
+      observer({ stage: 'confirmed', key: '当前意图', sessionID: 716791, message: [native] });
+      observer({ stage: 'settled', key: '当前意图' });
+      expect(messages.map(message => ({ session: message.sessionId, key: message.sdkSendKey }))).toEqual([
+        { session: '793803', key: undefined }, { session: '716791', key: '当前意图' },
+      ]);
+    } finally { await bridge.disconnect(); }
+  });
+
+  it('组件清空监听后异常业务ext仍立即结束unknown，不等待超时或伪造回显', async () => {
+    vi.useFakeTimers();
+    const page = createPage('0-91002');
+    const { bridge } = page.createBridge('异常回执', '连接', '91001');
+    const confirmed = { ...configureNativeSubmission(page.windowObject), msgFlag: '本次原生标识', ext: '{无效JSON' };
+    page.windowObject['nativeSubmitIpc'] = (method: string) => {
+      if (method === 'insertSendBefoeMsg') return Promise.resolve({ code: 0, data: { id: -1 } });
+      page.ipc.removeAllListeners('0-91002-sendMsgCallback');
+      page.ipc.emit('0-91002-sendMsgCallback', {}, { args: { msgID: -1, code: 0, data: confirmed } });
+      return Promise.resolve({ code: 0 });
+    };
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    let result: { failure: { status: string } } | undefined;
+    const pending = runRendererScript<{ failure: { status: string } }>(nativeSubmissionScript, page.runtime.context)
+      .then(value => { result = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toMatchObject({ failure: { status: 'unknown' } });
+      expect(messages).toEqual([]);
+    } finally {
+      await vi.runAllTimersAsync(); await pending;
+      await bridge.disconnect(); vi.useRealTimers();
+    }
+  });
+});
+
 describe('EventBridge 渲染资源所有权关闭', () => {
   it('只有原生确认后才在调用返回前回显真实记录，其他来源重复与Vue历史不再派发', async () => {
     const page = createPage('0-91002');

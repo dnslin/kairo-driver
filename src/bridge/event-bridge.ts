@@ -52,7 +52,6 @@ export class KK9EventBridge extends EventEmitter {
   private disconnectPromise: Promise<void> | null = null;
   private readonly knownMessageKeys = new Set<string>();
   private readonly knownRecalledMessageKeys = new Set<string>();
-  private readonly knownBotSentMessageKeys: Set<string>;
 
   constructor(
     config: EventBridgeConfig | DriverConfig | { cdp: CdpConfig },
@@ -66,7 +65,6 @@ export class KK9EventBridge extends EventEmitter {
     this.currentUserId = bridgeConfig.currentUserId;
     this.enableRecallHook = bridgeConfig.enableRecallHook ?? true;
     this.rejectExistingBridge = bridgeConfig.rejectExistingBridge === true;
-    this.knownBotSentMessageKeys = bridgeConfig.knownBotSentMessageKeys ?? new Set<string>();
 
     this.cdp =
       cdpClient || new CdpClient(config.cdp, { startupGenerationId: this.startupGenerationId });
@@ -101,32 +99,6 @@ export class KK9EventBridge extends EventEmitter {
     return this.cdp;
   }
 
-  /**
-   * 记录由 Bot 自身发出的消息身份（sessionId:nativeMessageId）。
-   */
-  public recordBotSentMessageId(sessionId: string, messageId: string): void {
-    const normalizedSessionId = sessionId.trim();
-    const normalizedMessageId = messageId.trim();
-    if (!normalizedSessionId || !normalizedMessageId) return;
-    const messageKey = createMessageIdentityKey(normalizedSessionId, normalizedMessageId);
-    this.knownBotSentMessageKeys.add(messageKey);
-    if (this.knownBotSentMessageKeys.size > this.maxMessageIds) {
-      const firstKey = this.knownBotSentMessageKeys.values().next().value;
-      if (firstKey) this.knownBotSentMessageKeys.delete(firstKey);
-    }
-  }
-
-  /**
-   * 判断指定会话中的消息 ID 是否为 Bot 自身发出。
-   */
-  public isBotSentMessageId(sessionId: string, messageId: string): boolean {
-    const normalizedSessionId = sessionId.trim();
-    const normalizedMessageId = messageId.trim();
-    if (!normalizedSessionId || !normalizedMessageId) return false;
-    return this.knownBotSentMessageKeys.has(
-      createMessageIdentityKey(normalizedSessionId, normalizedMessageId)
-    );
-  }
 
   /**
    * 连接 CDP 并完成原生事件桥注入；可在注入前传入本代已读取的登录身份。
@@ -274,11 +246,7 @@ export class KK9EventBridge extends EventEmitter {
         sessionsHooked?: number;
       }>(hookScript);
       if (this.disconnectPromise) throw new Error('EventBridge 注入期间已关闭');
-      if (
-        !injectionResult?.ok ||
-        injectionResult.busFound !== true ||
-        injectionResult.nativeAttached !== true
-      ) {
+      if (!injectionResult?.ok || injectionResult.nativeAttached !== true) {
         throw new Error(
           `EventBridge 注入返回无效: ok=${String(injectionResult?.ok)}, busFound=${String(injectionResult?.busFound)}, nativeAttached=${String(injectionResult?.nativeAttached)}`
         );
@@ -363,8 +331,6 @@ export class KK9EventBridge extends EventEmitter {
     return normalizeNativeMessage(raw, {
       session: sessionContext,
       currentUserId: this.currentUserId,
-      knownBotSentMessageKeys: this.knownBotSentMessageKeys,
-
       source: 'event_bridge',
       onDiagnostic: diagnostic => this.reportNormalizationDiagnostic(diagnostic),
     });
@@ -448,6 +414,12 @@ export class KK9EventBridge extends EventEmitter {
         this.handleIncomingMessages(data);
         break;
       }
+      case 'send-confirmed': {
+        const confirmed = data as { key?: string; payload?: unknown };
+        if (typeof confirmed.key === 'string')
+          this.handleIncomingMessages(confirmed.payload, undefined, confirmed.key);
+        break;
+      }
       case 'recalled':
       case 'CancelMessage':
       case 'revokeMsg': {
@@ -462,16 +434,15 @@ export class KK9EventBridge extends EventEmitter {
   /**
    * 标准化消息并派发 message 和 at 事件
    */
-  private handleIncomingMessages(payload: unknown, sessionContext?: Partial<KK9Session>): void {
+  private handleIncomingMessages(payload: unknown, sessionContext?: Partial<KK9Session>, sdkSendKey?: string): void {
     const messages = normalizeNativeMessage(payload, {
       session: sessionContext,
       currentUserId: this.currentUserId,
-      knownBotSentMessageKeys: this.knownBotSentMessageKeys,
-
       source: 'event_bridge',
       onDiagnostic: diagnostic => this.reportNormalizationDiagnostic(diagnostic),
     });
     for (const msg of messages) {
+      if (sdkSendKey && msg.direction === 'outbound') msg.sdkSendKey = sdkSendKey;
       const messageKey = createMessageIdentityKey(msg.sessionId, msg.id);
 
       if (this.knownMessageKeys.has(messageKey)) {
@@ -618,9 +589,11 @@ export class KK9EventBridge extends EventEmitter {
           }
         }
 
-        const getMainPageVm = () => document.querySelector('#main-page, .main-page, #app, .app-container')?.__vue__;
-        const getEditorVm = () => document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
+        // Vue 仅保留 T05 尚未验收的本机手工撤回捕获，不参与普通消息接收。
+        const getMainPageVm = () => typeof document === 'undefined' ? null : document.querySelector('#main-page, .main-page, #app, .app-container')?.__vue__;
+        const getEditorVm = () => typeof document === 'undefined' ? null : document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
         const getChatContentVm = () => {
+          if (typeof document === 'undefined') return null;
           const containers = Array.from(document.querySelectorAll('.chat-container, .chat-content, .message-content-box'));
           for (const node of containers) {
             const vm = node.__vue__;
@@ -638,7 +611,7 @@ export class KK9EventBridge extends EventEmitter {
           return main?.$bus || editor?.$bus || chat?.$bus || window.vueBus || window.$bus || null;
         };
 
-        const bus = getBus();
+        const bus = ${this.enableRecallHook} ? getBus() : null;
         const electron = window.require ? window.require('electron') : null;
         const ipc = window.ipcRenderer || electron?.ipcRenderer;
         const nativeAttached = Boolean(ipc && typeof ipc.on === 'function' && typeof ipc.removeListener === 'function');
@@ -759,17 +732,90 @@ export class KK9EventBridge extends EventEmitter {
             });
           });
         }
-        // 原生接收事件先于 KK9 异步 UI 转发；历史查询回复不使用此通道。
-        const onNativeMessage = (_event, payload) => {
-          if (payload && payload.args) postEvent('receive-message', payload.args);
-        };
+        const pendingSends = new Map();
+        const pendingMessages = new Map();
+        const receiptWaiters = new Map();
+        function forwardNative(payload) {
+          if (!active || !payload) return;
+          const messages = Array.isArray(payload.message) ? payload.message : [];
+          if (!messages.length) {
+            if (!payload.session || payload.message) postEvent('receive-message', payload);
+            return;
+          }
+          for (const message of messages) {
+            const key = message.msgFlag;
+            const envelope = { ...payload, message: [message] };
+            if (pendingSends.get(key) === String(payload.sessionID ?? message.sessionID) && String(message.sender) === ${JSON.stringify(String(this.currentUserId ?? ''))}) {
+              const queued = pendingMessages.get(key) || [];
+              queued.push(envelope);
+              pendingMessages.set(key, queued);
+            } else postEvent('receive-message', envelope);
+          }
+        }
+        const onNativeMessage = (_event, payload) => forwardNative(payload?.args);
         ipc.on('message', onNativeMessage);
         unbindFns.push(() => ipc.removeListener('message', onNativeMessage));
 
-        // 仅接收本次原生提交的确认记录，不重新启用Vue普通历史消息。
-        const onNativeSend = data => postEvent('receive-message', data);
+        // 客户端本机手工发送只有原生业务回调；组件销毁会清空该会话监听。
+        // 在原生派发边界观察，不重建 KK9 监听快照，也不依赖 Vue 的 -msg 转发。
+        const originalEmit = ipc.emit;
+        const nativeEmit = function(channel, ...args) {
+          if (active && typeof channel === 'string' && /^\\d+-\\d+-sendMsgCallback$/.test(channel)) {
+            for (const listener of receiptWaiters.get(channel) || []) {
+              if (!ipc.listeners(channel).includes(listener)) listener(...args);
+            }
+            const receipt = args[1]?.args;
+            const message = receipt?.data;
+            let ext = message?.ext;
+            if (typeof ext === 'string') {
+              try { ext = JSON.parse(ext); }
+              catch (error) { console.warn('[KairoDriver] 原生回调ext无法解析', error); return originalEmit.call(this, channel, ...args); }
+            }
+            if (receipt?.code === 0 && (ext?.status === undefined || ext.status === 0) &&
+                /^[1-9]\\d*$/.test(String(message?.id)) && message?.sessionID !== undefined) {
+              forwardNative({ sessionID: message.sessionID, message: [message] });
+            }
+          }
+          return originalEmit.call(this, channel, ...args);
+        };
+        ipc.emit = nativeEmit;
+        unbindFns.push(() => {
+          if (ipc.emit === nativeEmit) ipc.emit = originalEmit;
+          else throw new Error('原生派发 Hook 已被其他调用方替换，未覆盖其 Hook');
+        });
+
+        const onNativeSend = data => {
+          if (!active) return;
+          if (data.stage === 'subscribe') {
+            const listeners = receiptWaiters.get(data.channel) || new Set();
+            listeners.add(data.listener);
+            receiptWaiters.set(data.channel, listeners);
+            return;
+          }
+          if (data.stage === 'unsubscribe') {
+            const listeners = receiptWaiters.get(data.channel);
+            listeners?.delete(data.listener);
+            if (!listeners?.size) receiptWaiters.delete(data.channel);
+            return;
+          }
+          if (data.stage === 'pending') { pendingSends.set(data.key, String(data.sessionID)); return; }
+          if (data.stage === 'confirmed') {
+            postEvent('send-confirmed', { key: data.key, payload: data });
+            return;
+          }
+          if (data.stage === 'settled') {
+            pendingSends.delete(data.key);
+            const queued = pendingMessages.get(data.key) || [];
+            pendingMessages.delete(data.key);
+            for (const payload of queued) forwardNative(payload);
+          }
+        };
         window.__kairo_native_send_observer = onNativeSend;
         unbindFns.push(() => {
+          pendingSends.clear(); pendingMessages.clear();
+          for (const [channel, listeners] of receiptWaiters)
+            for (const listener of listeners) ipc.removeListener(channel, listener);
+          receiptWaiters.clear();
           if (window.__kairo_native_send_observer === onNativeSend) delete window.__kairo_native_send_observer;
         });
 
@@ -855,41 +901,14 @@ export class KK9EventBridge extends EventEmitter {
             }
           });
         }
-        hookChatContentInstances();
-        // 5. DOM 变动监听器（作为系统气泡撤回提示的终极兜底守卫）
-        try {
-          observer = new MutationObserver((mutations) => {
-            hookChatContentInstances();
-            for (const m of mutations) {
-              for (const node of m.addedNodes) {
-                if (node && node.nodeType === 1) {
-                  const el = node;
-                  const text = el.textContent?.trim() || '';
-                  if (
-                    (el.classList?.contains('system-msg') ||
-                      el.classList?.contains('rcd-item') ||
-                      el.classList?.contains('system-recall')) &&
-                    text.includes('撤回')
-                  ) {
-                    const nativeId = el.getAttribute('data-msgid');
-                    const sessionId =
-                      el.getAttribute('data-session-id') || el.getAttribute('data-sessionid');
-                    if (nativeId && sessionId) {
-                      postEvent('recalled', {
-                        messageId: nativeId,
-                        sessionId,
-                        sender: 'unknown',
-                        time: new Date().toLocaleTimeString(),
-                        timestamp: Date.now()
-                      });
-                    }
-                  }
-                }
-              }
-            }
-          });
-          observer.observe(document.body, { childList: true, subtree: true });
-        } catch {}
+        if (${this.enableRecallHook} && typeof document !== 'undefined') {
+          hookChatContentInstances();
+          // 仅跟踪实际组件重建后的本机手工撤回方法，不读取历史气泡。
+          if (typeof MutationObserver !== 'undefined') {
+            observer = new MutationObserver(hookChatContentInstances);
+            observer.observe(document.body, { childList: true, subtree: true });
+          }
+        }
 
 
         return { ok: true, busFound: !!bus, nativeAttached, sessionsHooked: hookedSessions.size };

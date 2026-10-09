@@ -67,7 +67,6 @@ describe('BridgeMessageOps 原生消息操作', () => {
         const messages = await historyOps(data, 0, activeWindow).getRecentMessages(
           session,
           10,
-          undefined,
           91001
         );
         expect(messages).toMatchObject([
@@ -117,7 +116,7 @@ describe('BridgeMessageOps 原生消息操作', () => {
             msgFlag,
           },
         ];
-        const messages = await historyOps(data).getRecentMessages(session, 10, undefined, 91001);
+        const messages = await historyOps(data).getRecentMessages(session, 10, 91001);
         expect(messages).toMatchObject([
           {
             id: '1001',

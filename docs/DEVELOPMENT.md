@@ -43,6 +43,22 @@ T03 合并前四项修复：业务回执等待不因四秒外层 IPC 超时提�
 
 本轮新增18条行为回归，四项问题均先用失败回归复现再修复；`pnpm check` 的build/typecheck、32个文件381条测试及lint通过。受影响生命周期回归中，外层请求失败但无业务回执的情况改用假时钟推进实际业务期限，保留 unknown 与无伪造回显断言，不增加真实睡眠或放宽测试超时。额外 `pnpm exec tsc --noEmit -p tsconfig.eslint.json` 仍只报告原有三个文件的库目标、Buffer及可空数组诊断，没有本轮修改文件的新诊断；该额外检查不是通过。
 
+## T04 原生实时事件
+
+T04 使用原生发送者与实际登录 UID 计算方向，公开来源去除业务角色与公共 Bot 消息登记方法。`KK9Message.sdkSendKey` 只关联本次已确认实时回显；Fake 的明确注入也执行方向、会话身份去重和已确认关联，不把发送返回的请求正文自动当作消息。`src/index.ts` 的既有类型与规范化导出继续使用新契约，没有新增旧方法别名。
+
+当前 jshookmcp 核对到：主页面独立订阅 `message`；聊天组件销毁清空本会话 `sendMsgCallback`。事件桥在原生派发边界观察本机普通发送，并登记自身在途回执函数；被客户端移除的 SDK 等待仍可处理本次原生回执，不恢复其他监听快照。退出只释放自身函数与 Hook。Vue 和 MutationObserver 只用于保留本机手工撤回方法的组件生命周期捕获，不读取气泡制造普通消息或历史撤回事件。
+
+自动回归实际执行生成的注入/提交脚本，覆盖无聊天组件/无总线、状态与普通系统分流、回显两种顺序、会话范围去重、失败/未知释放真实本人消息、组件清空监听后成功和异常回执、只清理自身资源及旧连接隔离。原生方向、竞态、清空回执监听与 Fake 关联均有修复前失败记录。新增或切换断言验证行为，不以源码字符串或模拟回声代替。
+
+本轮实际命令：相关十个文件180条回归通过；后续 `pnpm exec vitest run tests/event-bridge-lifecycle.test.ts tests/logging-privacy.test.ts tests/fake-driver.test.ts` 的59条通过。最终 `pnpm check` 的build/typecheck、32个文件392条测试和lint通过。首次完整检查因日志隐私夹具仍只有 `isMe=false` 而失败，补充原生 senderId，保留原 inbound 断言后通过。`pnpm exec tsc --noEmit -p tsconfig.eslint.json` 仍未通过：只报告已有三个测试文件的库目标、Buffer与数组可空诊断，无新专项脚本/Fake诊断，不记作全量类型通过。
+
+Orca setup 的219个依赖安装成功后直接复用，未重复安装或修改依赖/锁文件。当前 LSP references 仍初始化退出code0，已检索全部源码、测试和示例调用；js-reverse 的 field-journal/tool-index 相对路径缺失，改用当前工具真实schema，未修改共享工具环境。真机范围、协议证据和剩余人工前提见 [T04专项验证](KK9-STARTUP.md#t04-原生实时事件专项验证)。T04未完成全部命名真机验收，T05/C2和后续任务不勾选。
+
+按用户要求停止继续补测后，执行现有真机脚本的finish：协助轮六条本人测试文本全部撤回，并用jshookmcp独立核对原生C:op:/C1状态；自有采集、Driver Hook及发送观察器全部退出，pendingSends=0，客户端原监听保留。没有继续关闭私聊、修改实现或重复运行检查。详细证据和未验证项保留在启动说明与tasks/todo.md，T04未冒充全项真机验收。
+
+用户随后取消其他设备本人消息测试：专项脚本移除private-device/group-device标记、初始缺项及专用设备比较，SDK接收实现不变，旧报告不改写。使用既有真机元数据执行实际验收函数，`node tmp/t04-acceptance-smoke.cjs before`复现原设备缺项，`node tmp/t04-acceptance-smoke.cjs after`确认仅移除两项、其余判定逐项不变且全部验收仍false；未连接或操作真机。修改后的`pnpm check`再次通过build/typecheck、32文件392条测试及lint。临时冒烟脚本执行后移除。
+
 ## 依赖与打包
 
 提交并保留 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 和 `patches`。两条音频依赖补丁属于运行所需配置，升级相关依赖时需重新核对补丁及语音处理行为。

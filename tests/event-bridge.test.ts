@@ -272,7 +272,7 @@ describe('KK9EventBridge 原生事件直连桥与同构事件流测试', () => {
     expect(receivedMessages[1]!.content).toBe('第二条消息');
   });
 
-  it('自身消息只有显式 operator/bot 事实时才分类来源并派发', async () => {
+  it('当前账号消息保留 outbound，缺少发送者则保留 unknown，不分类业务角色', async () => {
     const mockCdp = new MockCdpClient();
     const bridge = new KK9EventBridge(
       { ...defaultConfig, currentUserId: '10086' },
@@ -283,26 +283,24 @@ describe('KK9EventBridge 原生事件直连桥与同构事件流测试', () => {
     const receivedMessages: KK9Message[] = [];
     bridge.on('message', msg => receivedMessages.push(msg));
 
-    // 1. isMe: true (operator 操作员)
+    // 只有自身标志但没有原生 UID。
     mockCdp.triggerBinding('__kairo_native_bridge', {
       type: 'receive-message',
       data: {
         id: 'msg-self-1',
         sessionId: 'session-self-1',
-        origin: 'operator',
         sender: '我',
         content: '这是我自己发出的消息',
         isMe: true,
       },
     });
 
-    // 2. senderId 匹配 currentUserId (operator 操作员)
+    // 原生发送者匹配实际登录 UID。
     mockCdp.triggerBinding('__kairo_native_bridge', {
       type: 'receive-message',
       data: {
         id: 'msg-self-2',
         sessionId: 'session-self-2',
-        origin: 'operator',
         senderId: '10086',
         sender: '机器人自己',
         content: '通过 UID 识别的自身消息',
@@ -323,9 +321,11 @@ describe('KK9EventBridge 原生事件直连桥与同构事件流测试', () => {
 
     expect(receivedMessages).toHaveLength(3);
     expect(receivedMessages[0]!.id).toBe('msg-self-1');
-    expect(receivedMessages[0]!.origin).toBe('operator');
+    expect(receivedMessages[0]!.origin).toBe('unknown');
+    expect(receivedMessages[0]!.direction).toBe('unknown');
     expect(receivedMessages[1]!.id).toBe('msg-self-2');
-    expect(receivedMessages[1]!.origin).toBe('operator');
+    expect(receivedMessages[1]!.origin).toBe('unknown');
+    expect(receivedMessages[1]!.direction).toBe('outbound');
     expect(receivedMessages[2]!.id).toBe('msg-other-1');
     expect(receivedMessages[2]!.origin).toBe('external');
   });

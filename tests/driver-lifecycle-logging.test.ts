@@ -145,7 +145,7 @@ describe('Driver日志真实行为回归', () => {
     );
     expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
     expect(nativeSendCount).toBe(1);
-    expect(driver.isBotSentMessageId(String(session.id), '135700000')).toBe(true);
+    expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: '135700000' });
     expect(typeof result.recall).toBe('function');
     expect(warnings).toEqual([
       ['[KairoDriver] 会话摘要更新失败'],

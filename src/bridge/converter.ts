@@ -136,79 +136,6 @@ function determineMessageType(
   return 'text';
 }
 
-export function determineOrigin(
-  raw: Record<string, unknown>,
-  isMe: boolean,
-  messageType: KK9MessageType,
-  context?: {
-    currentUserId?: string | number;
-    knownBotSentMessageKeys?: Set<string>;
-    isBotEcho?: boolean;
-    sourceKnown?: boolean;
-    sessionId?: string;
-  },
-  id?: string
-): KK9MessageOrigin {
-  if (
-    messageType === 'system' ||
-    raw['isSystem'] === true ||
-    raw['system'] === true ||
-    raw['systemMsg'] === true ||
-    raw['sysType'] !== undefined ||
-    raw['type'] === 'system' ||
-    raw['msgType'] === 99 ||
-    raw['contentType'] === 99
-  ) {
-    return 'system';
-  }
-
-  const explicitOrigin = raw['origin'] ?? raw['source'];
-  if (
-    explicitOrigin === 'external' ||
-    explicitOrigin === 'operator' ||
-    explicitOrigin === 'bot_echo' ||
-    explicitOrigin === 'system' ||
-    explicitOrigin === 'unknown'
-  ) {
-    return explicitOrigin;
-  }
-
-  const rawNativeId = raw['msgID'] ?? raw['msgId'] ?? raw['messageId'] ?? raw['id'];
-  const nativeIdStr = rawNativeId !== undefined ? toSafeString(rawNativeId).trim() : undefined;
-  const botNativeId = id?.trim() || nativeIdStr;
-  const messageKey =
-    context?.sessionId && botNativeId
-      ? createMessageIdentityKey(context.sessionId, botNativeId)
-      : undefined;
-  const isBot = Boolean(
-    context?.isBotEcho || (messageKey && context?.knownBotSentMessageKeys?.has(messageKey))
-  );
-  if (isBot) {
-    return 'bot_echo';
-  }
-
-  if (isMe) {
-    return 'unknown';
-  }
-
-  if (context?.sourceKnown === false) {
-    return 'unknown';
-  }
-
-  if (raw['isMe'] === false || raw['fromMe'] === false) {
-    return 'external';
-  }
-
-  if (
-    typeof raw['sender'] === 'string' &&
-    raw['sender'] !== '未知' &&
-    raw['sender'] !== '未知用户'
-  ) {
-    return 'external';
-  }
-
-  return 'unknown';
-}
 
 export type InboundNormalizationSource = 'event_bridge' | 'polling' | 'history' | 'unknown';
 
@@ -223,120 +150,10 @@ export interface InboundNormalizationDiagnostic {
 export interface NormalizeNativeMessageContext {
   session?: Partial<KK9Session>;
   currentUserId?: string | number;
-  knownBotSentMessageKeys?: Set<string>;
-  isBotEcho?: boolean;
-  sourceKnown?: boolean;
   source?: InboundNormalizationSource;
   onDiagnostic?: (diagnostic: InboundNormalizationDiagnostic) => void;
 }
 
-function hasMessageBooleanFlag(
-  raw: Record<string, unknown>,
-  nestedRaw: Record<string, unknown> | undefined,
-  key: 'isFromSelf' | 'fromMe' | 'isMe',
-  value: boolean
-): boolean {
-  return raw[key] === value || nestedRaw?.[key] === value;
-}
-
-function isSystemMessageRecord(record: Record<string, unknown> | undefined): boolean {
-  return (
-    record?.['isSystem'] === true ||
-    record?.['system'] === true ||
-    record?.['systemMsg'] === true ||
-    record?.['sysType'] !== undefined ||
-    record?.['type'] === 'system' ||
-    record?.['messageType'] === 'system' ||
-    record?.['origin'] === 'system' ||
-    record?.['source'] === 'system' ||
-    record?.['msgType'] === 99 ||
-    record?.['contentType'] === 99
-  );
-}
-
-function hasRawMessageValue(
-  raw: Record<string, unknown>,
-  nestedRaw: Record<string, unknown> | undefined,
-  key: 'origin' | 'source',
-  value: KK9MessageOrigin
-): boolean {
-  return raw[key] === value || nestedRaw?.[key] === value;
-}
-
-function determineDirection(
-  raw: Record<string, unknown>,
-  nestedRaw: Record<string, unknown> | undefined,
-  isMe: boolean,
-  messageType: KK9MessageType,
-  origin: KK9MessageOrigin,
-  isKnownBotSentMessage: boolean,
-  context: NormalizeNativeMessageContext | undefined,
-  senderId: string | undefined
-): MessageDirection {
-  if (
-    messageType === 'system' ||
-    origin === 'system' ||
-    isSystemMessageRecord(raw) ||
-    isSystemMessageRecord(nestedRaw)
-  ) {
-    return 'unknown';
-  }
-
-  const currentUserId =
-    context?.currentUserId !== undefined ? toSafeString(context.currentUserId).trim() : '';
-  const nestedSenderId =
-    nestedRaw?.['senderId'] ?? nestedRaw?.['senderID'] ?? nestedRaw?.['fromUID'];
-  const observedSenderId = senderId?.trim() || toSafeString(nestedSenderId).trim();
-  const senderIdMatchesCurrentUser = Boolean(
-    currentUserId && observedSenderId && observedSenderId === currentUserId
-  );
-  const senderIdIsExternal = Boolean(
-    currentUserId && observedSenderId && observedSenderId !== currentUserId
-  );
-  const hasSelfEvidence =
-    isMe ||
-    senderIdMatchesCurrentUser ||
-    context?.isBotEcho === true ||
-    isKnownBotSentMessage ||
-    hasMessageBooleanFlag(raw, nestedRaw, 'isFromSelf', true) ||
-    hasMessageBooleanFlag(raw, nestedRaw, 'fromMe', true) ||
-    hasMessageBooleanFlag(raw, nestedRaw, 'isMe', true);
-
-  if (hasSelfEvidence) {
-    return 'outbound';
-  }
-
-  const hasExternalOrigin =
-    hasRawMessageValue(raw, nestedRaw, 'origin', 'external') ||
-    hasRawMessageValue(raw, nestedRaw, 'source', 'external');
-  const hasOutboundOrigin =
-    hasRawMessageValue(raw, nestedRaw, 'origin', 'operator') ||
-    hasRawMessageValue(raw, nestedRaw, 'origin', 'bot_echo') ||
-    hasRawMessageValue(raw, nestedRaw, 'source', 'operator') ||
-    hasRawMessageValue(raw, nestedRaw, 'source', 'bot_echo');
-  const hasExplicitNonSelfEvidence =
-    senderIdIsExternal ||
-    hasMessageBooleanFlag(raw, nestedRaw, 'isFromSelf', false) ||
-    hasMessageBooleanFlag(raw, nestedRaw, 'fromMe', false) ||
-    hasMessageBooleanFlag(raw, nestedRaw, 'isMe', false);
-
-  if (hasExternalOrigin && hasOutboundOrigin) {
-    return 'unknown';
-  }
-  if (hasExplicitNonSelfEvidence && hasOutboundOrigin) {
-    return 'unknown';
-  }
-  if (hasExplicitNonSelfEvidence || hasExternalOrigin) {
-    return 'inbound';
-  }
-  if (context?.sourceKnown === false) {
-    return 'unknown';
-  }
-  if (hasOutboundOrigin) {
-    return 'outbound';
-  }
-  return 'unknown';
-}
 
 function isRecalledMessageItem(item: Record<string, unknown>): boolean {
   const msgFlag = toSafeString(item['msgFlag']);
@@ -483,14 +300,6 @@ export function normalizeNativeMessage(
     context?.session?.name;
   const sessionName = toSafeString(rawSessionName, baseSessionId || '未知会话');
 
-  const isGroup =
-    rawObj['sessionType'] === 'group' ||
-    sessionObj['type'] === 1 ||
-    sessionObj['sessionType'] === 1 ||
-    sessionObj['type'] === 'group' ||
-    context?.session?.type === 'group';
-
-  const sessionType = context?.session?.type ?? (isGroup ? 'group' : 'private');
 
   let rawList: Array<Record<string, unknown>> = [];
   if (Array.isArray(rawObj['messages'])) {
@@ -517,6 +326,13 @@ export function normalizeNativeMessage(
         (context?.source === 'history' || (!isRecalledMessageItem(item) && !isCancelMessageItem(item)))
     )
     .map((item): KK9Message | null => {
+      const nativeType = item['sessionType'] ?? sessionObj['type'] ?? rawObj['sessionType'];
+      const sessionType: KK9Session['type'] = context?.session?.type ??
+        (nativeType === 0 || nativeType === 'private' ? 'private' :
+         nativeType === 1 || nativeType === 'group' ? 'group' :
+         nativeType === 2 || nativeType === 'discussion' ? 'discussion' :
+         nativeType === 3 || nativeType === 'service' ? 'service' :
+         nativeType === undefined ? 'private' : 'unknown');
       const rawSender =
         item['senderName'] ??
         item['sendName'] ??
@@ -525,12 +341,13 @@ export function normalizeNativeMessage(
         (item['isMe'] ? '我' : '未知用户');
       const sender = toSafeString(rawSender, '未知用户');
 
-      const rawSenderId =
-        item['senderId'] ??
-        item['senderID'] ??
-        item['fromUID'] ??
-        (typeof item['sender'] === 'number' ? item['sender'] : undefined);
-      const senderId = rawSenderId !== undefined ? toSafeString(rawSenderId) : undefined;
+      const nestedIdentity = item['raw'] && typeof item['raw'] === 'object'
+        ? item['raw'] as Record<string, unknown> : undefined;
+      const rawSenderId = item['senderId'] ?? item['senderID'] ?? item['fromUID'] ??
+        (typeof item['sender'] === 'number' || /^\d+$/.test(toSafeString(item['sender'])) ? item['sender'] : undefined) ??
+        nestedIdentity?.['senderId'] ?? nestedIdentity?.['senderID'] ?? nestedIdentity?.['fromUID'] ??
+        (typeof nestedIdentity?.['sender'] === 'number' || /^\d+$/.test(toSafeString(nestedIdentity?.['sender'])) ? nestedIdentity?.['sender'] : undefined);
+      const senderId = rawSenderId !== undefined ? toSafeString(rawSenderId).trim() : undefined;
 
       const contentObj =
         tryParseJson(item['content']) ||
@@ -539,15 +356,7 @@ export function normalizeNativeMessage(
       const rawTime = item['time'] ?? item['sendTime'];
       const time = toSafeString(rawTime, new Date(now).toLocaleTimeString());
 
-      const matchesCurrentUser = Boolean(
-        currentUserId && ((senderId && senderId === currentUserId) || sender === currentUserId)
-      );
-      const sourceKnown =
-        context?.sourceKnown ??
-        (typeof item['isMe'] === 'boolean' ||
-          typeof item['fromMe'] === 'boolean' ||
-          Boolean(currentUserId && senderId));
-      const isMe = Boolean(item['isMe'] === true || item['fromMe'] === true || matchesCurrentUser);
+      const isMe = Boolean(currentUserId && senderId && senderId === currentUserId);
 
       let timestamp = now;
       const rawTs =
@@ -791,27 +600,10 @@ export function normalizeNativeMessage(
         return null;
       }
 
-      const origin = determineOrigin(
-        item,
-        isMe,
-        messageType,
-        { ...context, sourceKnown, sessionId },
-        nativeMessageId
-      );
-      const isKnownBotSentMessage = Boolean(
-        context?.isBotEcho ||
-        context?.knownBotSentMessageKeys?.has(createMessageIdentityKey(sessionId, nativeMessageId))
-      );
-      const direction = determineDirection(
-        item,
-        nestedRaw,
-        isMe,
-        messageType,
-        origin,
-        isKnownBotSentMessage,
-        { ...context, sourceKnown },
-        senderId
-      );
+      const direction: MessageDirection = messageType === 'system' || !currentUserId || !senderId
+        ? 'unknown' : isMe ? 'outbound' : 'inbound';
+      const origin: KK9MessageOrigin = messageType === 'system' ? 'system'
+        : direction === 'inbound' ? 'external' : 'unknown';
 
       return {
         id: nativeMessageId,

@@ -244,7 +244,6 @@ export class BridgeMessageOps {
   public async getRecentMessages(
     session: KK9Session,
     limit = 20,
-    knownBotSentMessageKeys?: Set<string>,
     currentUserId?: string | number
   ): Promise<KK9Message[]> {
     const sessionId = session?.id?.trim();
@@ -276,7 +275,6 @@ export class BridgeMessageOps {
       {
         currentUserId,
         session,
-        knownBotSentMessageKeys,
         source: 'history',
         onDiagnostic: (diagnostic: InboundNormalizationDiagnostic) => {
           log.warn(

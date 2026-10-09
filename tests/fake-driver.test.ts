@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
 import type { KK9Employee, KK9Message, KK9Session } from '../src/types/index.js';
+import { createNativeMessageKey } from '../src/bridge/send-status.js';
 
 describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
   let driver: FakeKK9Driver;
@@ -257,5 +258,30 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     ).toEqual([{ id: '1001', sessionId: '93001', content: '甲的历史' }]);
     expect(events).toEqual([]);
     await expect(driver.getRecentMessages({ ...first, id: '93003' }, 1)).resolves.toEqual([]);
+  });
+
+  it('Fake 只关联已确认的本次本人发送，跨会话同号与未知结果仍独立派发', async () => {
+    driver.setCurrentUserId('91001');
+    driver.setSendBehavior({ mode: 'success', messageId: '1001' });
+    await driver.sendText('本人SDK文本', { targetSessionId: '93001', operationId: 'fake-confirmed' });
+    const events: KK9Message[] = [];
+    const ats: KK9Message[] = [];
+    driver.on('message', message => events.push(message));
+    driver.on('at', message => ats.push(message));
+    const message: KK9Message = { id: '1001', sessionId: '93001', sessionName: '测试', sessionType: 'private',
+      sender: '我', senderId: '91001', direction: 'unknown', isMe: false,
+      content: '本人SDK文本', time: '12:00', timestamp: 100, atMe: true };
+    driver.emitMessage(message);
+    driver.emitMessage(message);
+    driver.emitMessage({ ...message, sessionId: '93002' });
+    driver.setSendBehavior({ mode: 'post_trigger_timeout' });
+    await driver.sendText('未知文本', { targetSessionId: '93001', operationId: 'fake-unknown' });
+    driver.emitMessage({ ...message, id: '1002', content: '未知后真实消息' });
+    expect(events.map(item => ({ id: item.id, session: item.sessionId, direction: item.direction, key: item.sdkSendKey }))).toEqual([
+      { id: '1001', session: '93001', direction: 'outbound', key: createNativeMessageKey('text', 'fake-confirmed') },
+      { id: '1001', session: '93002', direction: 'outbound', key: undefined },
+      { id: '1002', session: '93001', direction: 'outbound', key: undefined },
+    ]);
+    expect(ats).toEqual(events);
   });
 });
