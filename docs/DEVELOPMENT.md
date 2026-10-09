@@ -73,6 +73,19 @@ SDK 操作成功后进入 Driver 的撤回去重；远端 `message` 中的 `Canc
 
 `pnpm exec tsx tmp/t05-evidence-smoke.ts` 使用本轮真实采集元数据执行同一修正后的验收函数，双目标三类均通过。新增专项回归验证实际人工新消息不受预备ID限制，旧索引和重复通知不能混入。没有再次发送、撤回或请求用户补发；保留原脚本false及独立最终报告，冒烟脚本执行后删除。真实SDK实现未因该判定修复改变或重启，实际调用与资源退出均来自原持续监听实例。
 
+## T06 原生文件发送
+
+`sendFile(filePath, { targetSessionId, operationId })` 沿用现有原生发送登记。文件来自运行Driver的机器，目录和超过100MB的文件在提交前失败；本地stat/open/read异常保留路径与原错误，返回`failed/isPreTrigger:true`。读取检查只读一个字节，不把整份文件复制进SDK或CDP载荷。检查后文件再被修改或删除，仍由原生上传回执报告，不加锁或自动重试。
+
+KK9原版`sendMessageNew`负责`contentType:3`文件上传并写入`content.uri`，无需SDK再上传一次。上传失败`-9`、业务失败及正式ID关联复用现有`sent/failed/unknown`；外层code0、正ID和文件卡片都不是独立成功证据。重复operationId与`getSendStatus`不再次上传或提交。公开类型、Driver门面、Fake和既有e2e调用契约未变，无需兼容路径；其他媒体不改。
+
+文件错误回归集中在`tests/send-ops.test.ts`，执行SDK生成的原生脚本，覆盖不存在、目录、现有限制超限、实际读取错误、上传-9及617正ID业务失败。删除原有文件code0回声成功断言；正式成功、附件内容和操作防重由`examples/verify-native-file.ts`在授权双目标各发一个小文件合并验收，不能用URL非空代替下载。运行与结果见[启动说明](KK9-STARTUP.md#t06-原生文件专项验证)。
+
+本轮`pnpm exec vitest run tests/send-ops.test.ts -t "文件实际读取失败"`先复现错误判sent；修正后`pnpm exec vitest run tests/send-ops.test.ts`的15项通过。一次最终`pnpm check`通过build/typecheck、32文件380项测试及lint。没有额外重跑T03–T05真机或补测T04，也未重跑已知无关的测试全量类型诊断。
+
+Orca setup终端有安装输出但当前工作树不能解析vitest；确认依赖缺失后仅执行一次`pnpm install --frozen-lockfile`补齐219个包，随后复用，不升级依赖或修改配置。本轮LSP references可用，已核对sendFile实现与Driver调用。js-reverse相对先例/工具索引缺失，使用挂载工具实际schema；asar_search文件过滤失效已报告，唯一函数定位及Electron只读源码成功，未重试已知ASAR完整性失败。
+
+
 ## 依赖与打包
 
 提交并保留 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 和 `patches`。两条音频依赖补丁属于运行所需配置，升级相关依赖时需重新核对补丁及语音处理行为。

@@ -346,20 +346,31 @@ export class BridgeMessageOps {
   public sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
     return this.executeOperation('file', options, filePath, async (key, bound) => {
       const fullPath = path.resolve(filePath);
-      if (!fs.existsSync(fullPath))
-        return { status: 'failed', error: '文件不存在: ' + fullPath, isPreTrigger: true };
-      const stats = fs.statSync(fullPath);
-      if (stats.isDirectory())
-        return { status: 'failed', error: '不能发送目录: ' + fullPath, isPreTrigger: true };
-      if (stats.size > MAX_FILE_SIZE_BYTES)
-        return { status: 'failed', error: '文件大小超出限制(100MB)', isPreTrigger: true };
+      let size: number;
+      try {
+        const stats = fs.statSync(fullPath);
+        if (stats.isDirectory())
+          return { status: 'failed', error: '不能发送目录: ' + fullPath, isPreTrigger: true };
+        if (stats.size > MAX_FILE_SIZE_BYTES)
+          return { status: 'failed', error: '文件大小超出限制(100MB)', isPreTrigger: true };
+        const descriptor = fs.openSync(fullPath, 'r');
+        try {
+          // 实际读取一个字节，发现本地读取错误；文件内容仍由原生发送负责上传。
+          fs.readSync(descriptor, Buffer.alloc(1), 0, 1, 0);
+        } finally {
+          fs.closeSync(descriptor);
+        }
+        size = stats.size;
+      } catch (error) {
+        return { status: 'failed', error: '本地文件预检失败: ' + fullPath + '；' + String(error), isPreTrigger: true };
+      }
       return this.sendContent(
         3,
         {
           type: 'File',
           mimetype: mime.lookup(fullPath) || 'application/octet-stream',
           filepath: fullPath,
-          size: String(stats.size),
+          size: String(size),
           isValid: true,
           filename: path.basename(fullPath),
         },

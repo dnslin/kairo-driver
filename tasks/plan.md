@@ -1,6 +1,6 @@
 # 原生 SDK 改造方案
 
-状态：T01、T02、C1已通过PR #1归档；T03已随PR #2合并，T04实现已随PR #3合并，记录见 [archive/T03-T04.md](archive/T03-T04.md)。T04按用户要求停止补测，未验证项保留，其他设备本人测试已取消。T05已完成双目标三类撤回验收并随PR #4合并，代码基线dd898ad7693944780d5900af3f9eee654b99646f，记录见 [archive/T05.md](archive/T05.md)。当前仅派发 [T06](T06-handoff.md)，不补测前序任务，不实施C2及其他后续任务。
+状态：T01、T02、C1已通过PR #1归档；T03已随PR #2合并，T04实现已随PR #3合并，记录见 [archive/T03-T04.md](archive/T03-T04.md)。T04按用户要求停止补测，未验证项保留，其他设备本人测试已取消。T05已完成双目标三类撤回验收并随PR #4合并，记录见 [archive/T05.md](archive/T05.md)。T06从6b3241dc7f5a64bb3547b1184cece2cd77379107实施，已在本工作树完成文件专项验收，按用户后续授权进入提交与PR交付，未合并；不补测前序任务，不实施C2及其他后续任务。
 
 ## 目标与非目标
 
@@ -142,11 +142,13 @@ T05已随PR #4合并：显式原生会话与历史索引、SDK确认通知、远
 
 依赖：T03。
 
-核心文件：`src/bridge/message-ops.ts`、`src/driver.ts`、`tests/native-media.test.ts`、`tests/bridge-message-ops.test.ts`、`examples/e2e-real-test.ts`。
+实际修改：`src/bridge/message-ops.ts`、`tests/send-ops.test.ts`、`examples/verify-native-file.ts`及开发/启动/任务说明。现有`sendFile`已原生提交，公开类型、Driver门面、Fake与旧e2e调用不变；没有文件DOM路径需要另行切换，也不删除其他媒体或DOM能力。
 
 验收：本地预检、上传失败与正式发送结果正确；没有文件选择器或DOM回退；在授权目标核对实际文件记录和附件可用性。
 
 验证：文件相关测试与`pnpm check`；保留门禁的真机附件场景。
+
+已完成：原版`sendMessageNew`内部上传本地filepath、写uri并返回本次草稿业务回执；SDK只补足本地stat/open/read错误的触发前failed分类。生成脚本回归覆盖本地错误、上传-9与617正ID业务失败；一次最终`pnpm check`32文件380项及build/typecheck/lint通过。运行`examples/verify-native-file.ts`于授权716791与793803各发一个73字节txt，正式137531289/700与137531291/137、code0/无业务失败，重复与只读查询无二次提交；按服务器附件URI无缓存重新下载并逐字节核对通过。两条本人文件已撤回、自有监听/临时文件清理；未真机制造失败，接收端人工打开未证明。详细命令与边界见[启动说明](../docs/KK9-STARTUP.md#t06-原生文件专项验证)。
 
 ### T07：图片准备与发送
 
