@@ -17,6 +17,7 @@ const sent: string[] = [];
 const marker = `Kairo媒体验收-${Date.now()}`;
 const keep = process.env['KK9_MEDIA_KEEP'] === '1';
 const verifyKeyCases = process.env['KK9_MEDIA_KEY_CASES'] === '1';
+const originals: Array<{ messageId: string; msgIdx: number }> = [];
 
 type Case = {
   name: string;
@@ -48,9 +49,9 @@ const cases: Case[] = [
       driver.sendBizMessage(
         {
           title: marker,
-          content: '任务完成通知验收',
-          summary: ['状态: 已完成', '来源: Kairo Driver'],
-          bizUrl: 'https://example.com',
+          content: '仅测试通知，不创建任务或审批',
+          summary: ['仅供测试', '来源: Kairo Driver'],
+          bizUrl: '/',
           bizType: 1,
         },
         options
@@ -77,11 +78,8 @@ const cases: Case[] = [
     send: options =>
       driver.sendChatRecord(
         {
-          title: marker,
-          msgArray: [
-            { senderName: '验收甲', contentType: 0, content: '请检查合并转发详情' },
-            { senderName: '验收乙', contentType: 0, content: '收到，这是第二条消息' },
-          ],
+          sourceSessionId: targetId,
+          msgArray: originals,
         },
         options
       ),
@@ -121,11 +119,9 @@ async function main(): Promise<void> {
       );
     const selected = requested.length ? cases.filter(item => requested.includes(item.name)) : cases;
     await probe.connect();
-    const uid = await probe.evaluate<string>(`(() => {
-      const main = document.querySelector('.main-page')?.__vue__;
-      const editor = document.querySelector('.chat-editor, .message-editor')?.__vue__;
-      return String(main?.userID || editor?.userID || '');
-    })()`);
+    const identity = await callIpcToData<{ id: number }>(probe, 'getMemberDetail', []);
+    assert.equal(identity.code, 0, '原生身份查询失败');
+    const uid = String(identity.data?.id || '');
     assert.ok(uid, '无法识别当前登录用户');
     assert.equal(
       process.env['KK9_MEDIA_CONFIRM'],
@@ -175,6 +171,7 @@ async function main(): Promise<void> {
           item.contentType,
           '历史中的原生类型必须与发送类型一致'
         );
+        if (item.contentType !== 15 && message.msgIdx !== undefined) originals.push({ messageId: message.id, msgIdx: message.msgIdx });
         assert.equal(
           message.messageType,
           item.messageType,

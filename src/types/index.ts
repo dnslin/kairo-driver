@@ -153,13 +153,15 @@ export interface KK9UrlCardOptions {
   picUrl?: string;
 }
 
-/** 业务任务或通知卡片发送参数。 */
+/** 业务通知；只发送展示载荷，不创建任务或日程。 */
 export interface KK9BizMsgOptions {
   title: string;
   content: string;
   summary?: string[];
-  bizUrl?: string;
-  bizType?: number;
+  /** 相对于 KK9 的 ekp_outer_domain，例如 /；不能传完整外部 URL。 */
+  bizUrl: string;
+  /** 原生展示类型：1 任务样式，2 日程样式。 */
+  bizType: 1 | 2;
 }
 
 /** 工作台微应用通知卡片发送参数。 */
@@ -170,16 +172,15 @@ export interface KK9AppMsgOptions {
   pcAppCode?: string;
 }
 
-/** 合并转发记录中的单条原始消息。 */
+/** 指定来源会话中准确的原生消息，不接受虚构正文或作者。 */
 export interface KK9ChatRecordItem {
-  senderName: string;
-  contentType: number;
-  content: unknown;
+  messageId: string;
+  msgIdx: number;
 }
 
-/** 合并转发聊天记录卡片发送参数。 */
+/** 合并转发；原生标题由来源会话和实际登录身份生成。 */
 export interface KK9ChatRecordOptions {
-  title: string;
+  sourceSessionId: string;
   msgArray: KK9ChatRecordItem[];
 }
 

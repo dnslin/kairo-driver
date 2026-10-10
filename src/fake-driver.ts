@@ -33,6 +33,7 @@ import {
 import { createNativeMessageKey, sendOperationRecordToResult } from './bridge/send-status.js';
 import { createMessageIdentityKey, normalizeNativeMessage } from './bridge/converter.js';
 import { buildMentionNodes, parseFormattedTextToKK } from './bridge/rich-text.js';
+import { getCardInputError } from './bridge/card-ops.js';
 
 export type FakeSendPayload =
   | FormattedText
@@ -348,6 +349,17 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
           if (!message || message.isRecalled || !message.senderId || !message.msgIdx) throw new Error('未在指定会话找到可引用的原生消息');
         }
       } catch (error) { textError = String(error); }
+    }
+    if (operationType === 'url-card' || operationType === 'biz-message' || operationType === 'app-message' || operationType === 'chat-record') {
+      textError = getCardInputError(operationType, payload as KK9UrlCardOptions | KK9BizMsgOptions | KK9AppMsgOptions | KK9ChatRecordOptions);
+      if (!textError && operationType === 'chat-record') {
+        const record = payload as KK9ChatRecordOptions;
+        if (record.msgArray.some(ref => !this.messages.some(message =>
+          message.sessionId === record.sourceSessionId && message.id === ref.messageId &&
+          message.msgIdx === ref.msgIdx && !message.isRecalled && message.senderId && message.sender))) {
+          textError = '合并来源消息不存在、索引不符、已撤回或缺少真实作者';
+        }
+      }
     }
     let outcome: SendOutcome;
     if (!options?.targetSessionId?.trim()) {

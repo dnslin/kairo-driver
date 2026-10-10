@@ -59,7 +59,12 @@ function extractTextContent(content: unknown, notifyMsg?: unknown, contentType?:
       const duration = Number(obj['duration']);
       return Number.isFinite(duration) && duration > 0 ? `[语音: ${duration}秒]` : '[语音]';
     }
-    if ([8, 10, 15, 17].includes(nativeContentType)) {
+    if (nativeContentType === 15) {
+      const sender = toSafeString(obj['senderName']);
+      const peer = toSafeString(obj['typeName']);
+      return sender ? `${sender}${obj['sessionType'] === 0 && peer ? `与${peer}` : ''}的聊天记录` : '[聊天记录]';
+    }
+    if ([8, 10, 17].includes(nativeContentType)) {
       const title = toSafeString(obj['title']).trim();
       const detail =
         nativeContentType === 10

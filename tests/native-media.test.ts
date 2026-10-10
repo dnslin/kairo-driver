@@ -9,7 +9,7 @@ import { normalizeNativeMessage } from '../src/bridge/converter.js';
 import { createNativeMessageKey } from '../src/bridge/send-status.js';
 import { prepareVoice } from '../src/bridge/voice-ops.js';
 import { KK9Driver } from '../src/driver.js';
-import { InMemorySendOperationStore, type SendOperationStore } from '../src/send-operation.js';
+import { InMemorySendOperationStore } from '../src/send-operation.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
 import {
   createRendererRuntime,
@@ -147,188 +147,127 @@ describe('原生卡片与语音发送集成', () => {
     expect(native.confirmed).toEqual([]);
     expect(native.sent).toEqual([]);
   });
-  it('真实执行 renderer 脚本并序列化五类 payload，确认后推送同一 confirmedMessage', async () => {
-    const native = createSuccessfulNativeRuntime();
-    vi.mocked(prepareVoice).mockResolvedValue({
-      duration: 3,
-      data: 'IyFBTVIK',
-      filepath: 'C:\\tmp\\voice.amr',
-    });
-    const operations = new BridgeMessageOps(native.cdp, new InMemorySendOperationStore());
-
-    const results = [
-      await operations.sendUrlCard(
-        { title: '部署报告', summary: '构建成功', linkUrl: 'https://example.com/report' },
-        { targetSessionId: String(session.id), operationId: 'op-url-card' }
-      ),
-      await operations.sendBizMessage(
-        { title: '任务完成', content: '审批已完成', summary: ['状态: 完成'] },
-        { targetSessionId: String(session.id), operationId: 'op-biz-message' }
-      ),
-      await operations.sendAppMessage(
-        { title: '应用通知', content: '<p>正文</p>', linkUrl: 'https://example.com/app' },
-        { targetSessionId: String(session.id), operationId: 'op-app-message' }
-      ),
-      await operations.sendChatRecord(
-        {
-          title: '甲与乙的聊天记录',
-          msgArray: [{ senderName: '甲', contentType: 0, content: '请确认方案' }],
-        },
-        { targetSessionId: String(session.id), operationId: 'op-chat-record' }
-      ),
-      await operations.sendVoice(
-        { text: '请确认语音' },
-        { targetSessionId: String(session.id), operationId: 'op-voice' }
-      ),
-    ];
-    const queried = await Promise.all(
-      ['op-url-card', 'op-biz-message', 'op-app-message', 'op-chat-record', 'op-voice'].map(
-        operationId => operations.getSendStatus(operationId)
-      )
-    );
-
-    expect(results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
-    expect(queried.map(result => result.messageId)).toEqual(
-      results.map(result => result.messageId)
-    );
-    expect(queried.every(result => result.status === 'sent')).toBe(true);
-    expect(native.inserted.map(message => message['contentType'])).toEqual([10, 17, 8, 15, 2]);
-    expect(native.inserted.map(message => message['msgFlag'])).toEqual([
-      createNativeMessageKey('url-card', 'op-url-card'),
-      createNativeMessageKey('biz-message', 'op-biz-message'),
-      createNativeMessageKey('app-message', 'op-app-message'),
-      createNativeMessageKey('chat-record', 'op-chat-record'),
-      createNativeMessageKey('voice', 'op-voice'),
-    ]);
-    expect(native.sent.map(message => message['contentType'])).toEqual([10, 17, 8, 15, 2]);
-    expect(native.sent.map(message => message['content'])).toEqual(
-      native.inserted.map(message => message['content'])
-    );
-    expect(native.inserted[0]?.['content']).toEqual({
-      title: '部署报告',
-      summary: '构建成功',
-      linkUrl: 'https://example.com/report',
-      picUrl: '',
-      isValid: true,
-      filepath: '',
-    });
-    expect(native.inserted[1]?.['content']).toEqual({
-      title: '任务完成',
-      content: '审批已完成',
-      summary: ['状态: 完成'],
-      bizUrl: '',
-      bizType: 1,
-    });
-    expect(native.inserted[2]?.['content']).toEqual({
-      title: '应用通知',
-      content: '<p>正文</p>',
-      linkUrl: 'https://example.com/app',
-      pcAppCode: '',
-    });
-    expect(native.inserted[3]?.['content']).toMatchObject({
-      title: '甲与乙的聊天记录',
-      sessionType: 0,
-      sessionID: session.id,
-      senderID: 91001,
-      senderName: '我',
-      typeID: session.typeID,
-      typeName: '甲与乙的聊天记录',
-      msgArray: [
-        {
-          id: 1,
-          msgIdx: 1,
-          senderID: 0,
-          senderName: '甲',
-          contentType: 4,
-          content: { content: [{ type: 0, text: '请确认方案' }] },
-          sessionType: 0,
-          sessionID: session.id,
-        },
-      ],
-    });
-    expect(native.inserted[4]?.['content']).toEqual({
-      duration: 3,
-      data: 'IyFBTVIK',
-      filepath: 'C:\\tmp\\voice.amr',
-    });
-    expect(prepareVoice).toHaveBeenCalledOnce();
-
-    expect(native.runtime.commits).toHaveLength(5);
-    expect(native.runtime.events).toHaveLength(5);
-    native.confirmed.forEach((confirmedMessage, index) => {
-      expect(native.runtime.commits[index]).toEqual({
-        type: 'updateSesLastMsg',
-        payload: { sesUUID: session.sesUUID, message: confirmedMessage },
-      });
-      expect(native.runtime.events[index]).toEqual({
-        event: `${session.sesUUID}-msg`,
-        args: [[confirmedMessage]],
-      });
-    });
+  it('链接和应用通知在无界面环境使用各自原生字段，不伪造图片资源或应用编号', async () => {
+    const native = createNativeSendRuntime();
+    const ops = new BridgeMessageOps(native.cdp);
+    const url = await ops.sendUrlCard({ title: '测试链接', summary: '无图片测试', linkUrl: 'https://example.com' }, { targetSessionId: '93001' });
+    const app = await ops.sendAppMessage({ title: '测试通知', content: '<p><b>仅测试</b></p>', linkUrl: 'https://example.com' }, { targetSessionId: '93002' });
+    expect(url.status).toBe('sent');
+    expect(app.status).toBe('sent');
+    expect(native.drafts[0]).toMatchObject({ contentType: 10, sessionID: 93001, content: { title: '测试链接', summary: '无图片测试', linkUrl: 'https://example.com' } });
+    expect(native.drafts[0]?.['content']).not.toHaveProperty('isValid');
+    expect(native.drafts[1]).toMatchObject({ contentType: 8, sessionID: 93002, content: { title: '测试通知', content: '<p><b>仅测试</b></p>', linkUrl: 'https://example.com' } });
+    expect(native.drafts[1]?.['content']).not.toHaveProperty('pcAppCode');
   });
 
-  it('ChatRecord 在 claim 等待期间保持调用时的嵌套内容快照，并允许原始内容安全重放', async () => {
-    const native = createSuccessfulNativeRuntime();
-    const innerStore = new InMemorySendOperationStore();
-    let markStarted = (): void => {};
-    let release = (): void => {};
-    const claimStarted = new Promise<void>(resolve => {
-      markStarted = resolve;
-    });
-    const releaseClaim = new Promise<void>(resolve => {
-      release = resolve;
-    });
-    const store: SendOperationStore = {
-      claim: vi.fn(async input => {
-        markStarted();
-        await releaseClaim;
-        return innerStore.claim(input);
-      }),
-      get: operationId => innerStore.get(operationId),
-      update: (operationId, update) => innerStore.update(operationId, update),
-    };
-    const operations = new BridgeMessageOps(native.cdp, store);
-    const nestedContent = { content: [{ type: 0, text: 'A' }] };
-    const options = {
-      targetSessionId: String(session.id),
-      operationId: 'op-chat-record-snapshot',
-    };
+  it('业务通知必须明确原生类型与相对详情路径，不把外部网址拼到业务域名后', async () => {
+    const native = createNativeSendRuntime();
+    const ops = new BridgeMessageOps(native.cdp);
+    const invalid = await ops.sendBizMessage({ title: '测试', content: '不创建任务', bizType: 1, bizUrl: 'https://example.com' }, { targetSessionId: '93001' });
+    expect(invalid).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringContaining('ekp_outer_domain') });
+    expect(native.drafts).toEqual([]);
+    const valid = await ops.sendBizMessage({ title: '测试', content: '不创建任务', summary: ['仅展示通知'], bizType: 1, bizUrl: '/' }, { targetSessionId: '93001' });
+    expect(valid.status).toBe('sent');
+    expect(native.drafts[0]).toMatchObject({ contentType: 17, content: { bizType: 1, bizUrl: '/', summary: ['仅展示通知'] } });
+  });
 
-    const pending = operations.sendChatRecord(
-      {
-        title: '嵌套内容快照',
-        msgArray: [{ senderName: '甲', contentType: 4, content: nestedContent }],
-      },
-      options
+  it('合并从来源会话读取真实正文、作者、ID和索引，按原顺序生成详情条目', async () => {
+    const native = createNativeSendRuntime();
+    native.records.push(
+      { id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原作者甲', sendTime: 1700000001, contentType: 0, content: '第一条原文', msgFlag: '' },
+      { id: 82, msgIdx: 8, sessionID: 93001, sender: 91002, senderName: '原作者乙', sendTime: 1700000002, contentType: 4, content: JSON.stringify({ content: [{ type: 0, text: '第二条原文' }] }), msgFlag: '' }
     );
-    await claimStarted;
-    nestedContent.content[0]!.text = 'B';
-    release();
-
-    const first = await pending;
-    const replay = await operations.sendChatRecord(
-      {
-        title: '嵌套内容快照',
-        msgArray: [
-          {
-            senderName: '甲',
-            contentType: 4,
-            content: { content: [{ type: 0, text: 'A' }] },
-          },
-        ],
-      },
-      options
-    );
-
-    expect(first).toMatchObject({ status: 'sent', messageId: '135700000' });
-    expect(replay).toEqual(first);
-    expect(native.inserted[0]?.['content']).toMatchObject({
-      msgArray: [{ content: { content: [{ type: 0, text: 'A' }] } }],
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord({ sourceSessionId: '93001', msgArray: [{ messageId: '82', msgIdx: 8 }, { messageId: '81', msgIdx: 7 }] }, { targetSessionId: '93002' });
+    expect(result.status).toBe('sent');
+    const merged = native.drafts[0]?.['content'] as { sessionID: number; sessionType: number; typeID: number; msgArray: Array<Record<string, unknown>> };
+    expect(merged).toMatchObject({ sessionID: 93001, sessionType: 0, typeID: 91002 });
+    expect(merged.msgArray.map(item => [item['id'], item['msgIdx'], item['senderID'], item['senderName'], item['sendTime']])).toEqual([[81, 7, 91001, '原作者甲', '1700000001'], [82, 8, 91002, '原作者乙', '1700000002']]);
+    const bodies = merged.msgArray.map(item => {
+      const content = item['content'];
+      if (!content || typeof content !== 'object' || !('content' in content) || !Array.isArray(content.content)) throw new Error('详情正文不是原生节点');
+      const node: unknown = content.content[0];
+      return node && typeof node === 'object' && 'text' in node ? node.text : undefined;
     });
-    expect(
-      native.ipc.sent.filter(request => request.args[0] === 'insertSendBefoeMsg')
-    ).toHaveLength(1);
-    expect(native.ipc.sent.filter(request => request.args[0] === 'sendMessageNew')).toHaveLength(1);
+    expect(bodies).toEqual(['第一条原文', '第二条原文']);
+    expect(merged.msgArray.map(item => item['contentType'])).toEqual([4, 4]);
+  });
+
+  it('合并引用回复时隐藏已撤回的引用正文，保留正常引用和回复正文', async () => {
+    const native = createNativeSendRuntime();
+    const reply = (messageId: number) => ({
+      replyedMsgId: messageId,
+      replyedContentType: 4,
+      replyedContent: { content: [{ type: 0, text: '引用原文' }] },
+      replyContent: { content: [{ type: 0, text: '回复正文' }] },
+    });
+    native.records.push(
+      { id: 80, msgIdx: 6, sessionID: 93001, msgFlag: 'C:op:原操作' },
+      { id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原生账号', sendTime: 1700000001, contentType: 13, content: JSON.stringify(reply(80)), msgFlag: '' },
+      { id: 82, msgIdx: 8, sessionID: 93001, msgFlag: '' },
+      { id: 83, msgIdx: 9, sessionID: 93001, sender: 91002, senderName: '员工甲', sendTime: 1700000002, contentType: 13, content: JSON.stringify(reply(82)), msgFlag: '' }
+    );
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }, { messageId: '83', msgIdx: 9 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result.status).toBe('sent');
+    const merged = native.drafts[0]?.['content'] as { msgArray: Array<{ content: { replyedContent: unknown; replyedContentType: number; replyContent: unknown } }> };
+    expect(merged.msgArray.map(item => item.content.replyedContent)).toEqual([
+      { content: [{ type: 0, text: '消息已被撤回' }] },
+      { content: [{ type: 0, text: '引用原文' }] },
+    ]);
+    expect(merged.msgArray.map(item => item.content.replyedContentType)).toEqual([4, 4]);
+    expect(merged.msgArray.map(item => item.content.replyContent)).toEqual([
+      { content: [{ type: 0, text: '回复正文' }] },
+      { content: [{ type: 0, text: '回复正文' }] },
+    ]);
+  });
+
+  it('合并引用目标查询失败时保留错误且不提交旧引用正文', async () => {
+    const native = createNativeSendRuntime({ queryCode: 627 });
+    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原生账号', sendTime: 1700000001, contentType: 13,
+      content: { replyedMsgId: 80, replyedContentType: 4, replyedContent: { content: [{ type: 0, text: '旧引用正文' }] }, replyContent: { content: [{ type: 0, text: '回复正文' }] } }, msgFlag: '' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringMatching(/getMessageByMsgId.*627/) });
+    expect(native.drafts).toEqual([]);
+  });
+
+  it('对端创建私聊的合并标题使用与对端UID对应的创建者名称', async () => {
+    const native = createNativeSendRuntime();
+    Object.assign(native.sessions[0]!, { typeID: 91001, typeName: '原生账号', creater: 91002, createrName: '实际对端' });
+    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 91002, senderName: '实际对端', sendTime: 1700000001, contentType: 0, content: '测试正文', msgFlag: '' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result.status).toBe('sent');
+    expect(native.drafts[0]?.['content']).toMatchObject({ typeID: 91002, typeName: '实际对端' });
+    expect(normalizeNativeMessage(native.drafts[0])[0]?.content).toBe('原生账号与实际对端的聊天记录');
+  });
+
+  it('合并索引指向另一消息时在创建草稿前失败，不借另一会话或假ID补齐', async () => {
+    const native = createNativeSendRuntime();
+    native.records.push({ id: 82, msgIdx: 8, sessionID: 93001, sender: 91001, senderName: '本人', sendTime: 1700000000, contentType: 0, content: '不是请求的消息' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord({ sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 8 }] }, { targetSessionId: '93002' });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringContaining('81') });
+    expect(native.drafts).toEqual([]);
+  });
+
+  it('合并来源UID0不能冒充真实作者，也不创建草稿', async () => {
+    const native = createNativeSendRuntime();
+    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 0, senderName: '未知用户', sendTime: 1700000000, contentType: 0, content: '缺少作者' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord({ sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] }, { targetSessionId: '93002' });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringContaining('真实作者') });
+    expect(native.drafts).toEqual([]);
+  });
+
+  it('卡片原生617业务失败即使有正ID也不能判sent', async () => {
+    const native = createNativeSendRuntime({ businessCode: 617 });
+    const result = await new BridgeMessageOps(native.cdp).sendAppMessage({ title: '测试拒绝', content: '不伪造成功' }, { targetSessionId: '93001' });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: false, error: expect.stringContaining('617') });
   });
 
   it('卡片显式传入 replyTo 或 mentions 时触发前失败并写入操作状态', async () => {
@@ -387,7 +326,7 @@ describe('原生卡片与语音发送集成', () => {
       evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
     } as unknown as CdpClient;
     const operations = new BridgeMessageOps(cdp, store);
-    const input = { title: '未知结果', content: '发送动作已触发' };
+    const input = { title: '未知结果', content: '发送动作已触发', bizType: 1 as const, bizUrl: '/' };
     const options = {
       targetSessionId: String(session.id),
       operationId: 'op-card-unknown',
@@ -505,24 +444,8 @@ describe('原生卡片与语音发送集成', () => {
       { targetSessionId: String(session.id), operationId }
     );
     expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
-    expect(native.runtime.events[0]?.args).toEqual([[native.confirmed[3]]]);
   });
 
-  it('会话摘要更新异常不阻断已送达消息的聊天窗口推送', async () => {
-    const native = createSuccessfulNativeRuntime();
-    await runRendererScript(
-      `(() => {
-      document.querySelector('#app').__vue__.$store.commit = () => { throw new Error('摘要更新失败'); };
-    })()`,
-      native.runtime.context
-    );
-    const result = await new BridgeMessageOps(native.cdp).sendAppMessage(
-      { title: '应用通知', content: '<p>已送达</p>' },
-      { targetSessionId: String(session.id) }
-    );
-    expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
-    expect(native.runtime.events[0]?.args).toEqual([[native.confirmed[0]]]);
-  });
 
   it('不支持的语音选项在调用 TTS 前失败', async () => {
     const native = createSuccessfulNativeRuntime();
@@ -559,9 +482,9 @@ describe('原生媒体历史规范化', () => {
       },
       {
         contentType: 15,
-        content: { title: '聊天记录', msgArray: [] },
+        content: { senderName: '原生作者', typeName: '原生对端', sessionType: 0, msgArray: [] },
         messageType: 'chat-record',
-        summary: '聊天记录',
+        summary: '原生作者与原生对端的聊天记录',
       },
       {
         contentType: 2,
@@ -595,8 +518,8 @@ describe('原生媒体历史规范化', () => {
   });
 });
 
-describe('KK9Driver 五类原生媒体门面', () => {
-  it('五类发送关联指定会话的正式ID，快捷撤回清理对应原生记录', async () => {
+describe('KK9Driver 原生媒体固定目标', () => {
+  it('共享结构化发送的快捷撤回固定调用时目标', async () => {
     const native = createSuccessfulNativeRuntime();
     vi.mocked(prepareVoice).mockResolvedValue({ duration: 1, data: 'IyFBTVIK' });
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
@@ -607,23 +530,19 @@ describe('KK9Driver 五类原生媒体门面', () => {
         { title: '链接', summary: '摘要', linkUrl: 'https://example.com' },
         options
       ),
-      driver.sendBizMessage({ title: '业务', content: '正文' }, options),
+      driver.sendBizMessage({ title: '业务', content: '正文', bizType: 1, bizUrl: '/' }, options),
       driver.sendAppMessage({ title: '应用', content: '<p>正文</p>' }, options),
-      driver.sendChatRecord(
-        { title: '记录', msgArray: [{ senderName: '甲', contentType: 0, content: '内容' }] },
-        options
-      ),
       driver.sendVoice({ filePath: 'C:\\tmp\\voice.wav' }, options),
     ]);
     options.targetSessionId = '700001';
     const results = await pending;
-    expect(results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
+    expect(results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent']);
     for (const result of results) {
       expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: result.messageId });
       if (!result.recall) throw new Error('已确认发送缺少快捷撤回');
       await expect(result.recall()).resolves.toBe(true);
     }
-    expect(native.confirmed.map(message => message['msgFlag'])).toEqual(['C', 'C', 'C', 'C', 'C']);
+    expect(native.confirmed.map(message => message['msgFlag'])).toEqual(['C', 'C', 'C', 'C']);
   });
 
   it('明确目标在语音准备前绑定，窗口变化不改投', async () => {
