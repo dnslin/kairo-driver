@@ -178,7 +178,7 @@ await driver.sendChatRecord({
 - Driver 失效或调用 `disconnect()` 后，需要创建新实例再连接。调用方负责监听 `health`、恢复连接和安排重试；Kairo 应用原有的连接监督器没有包含在本包中。
 - Driver 依赖 KK9 客户端内部接口，客户端升级后需要验证相关收发能力。
 - `pnpm test` 是自动测试，不连接真实 KK9。真机命令会读取客户端数据，部分命令还会发送、撤回或标已读；必须限定授权身份与原生目标，操作范围见启动说明。
-- 本机菜单撤回仍保留 `event-bridge.ts` 中已验收的Vue总线、会话撤回通知、`addRevokeMsg`及组件重建用 `MutationObserver`。这些依赖尚无已证明等价的无Vue替代；它们不用于发送、历史读取或补聊天气泡。“无DOM点击自动化”不等于“无任何Vue/DOM依赖”，也不代表C4完成。
+- 本机菜单撤回仍保留 `event-bridge.ts` 中已验收的Vue总线、会话撤回通知、`addRevokeMsg`及组件重建用 `MutationObserver`。这些依赖尚无已证明等价的无Vue替代；它们不用于发送、历史读取或补聊天气泡。“无DOM点击自动化”不等于“无任何Vue/DOM依赖”。C3/C4现行范围的证据与本轮运行结果见[开发说明](docs/DEVELOPMENT.md#c3-逐类媒体证据收口)和[启动记录](docs/KK9-STARTUP.md#c4-最终构建入口只读验收)。
 - 原生发送不承诺当前客户端立即显示新气泡；不通过切窗口或伪造Vue刷新掩盖差异。`unknown` 只查询原意图，不直接重发。
 - `pnpm verify` 从 `@kairo/driver` 的构建后ESM入口运行授权双目标只读烟测，先运行 `pnpm build`（或已有成功的 `pnpm check`）；不会自动构建或发送。环境与输出范围见启动说明。
 

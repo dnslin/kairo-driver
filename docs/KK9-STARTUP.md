@@ -55,7 +55,7 @@ pnpm verify
 ```
 
 
-旧 `check-vue-messages.ts`、`inspect-chat-content.ts`、`test-reload-messages.ts` 已删除；历史/资源/撤回核对继续使用各原生脚本。现行脚本不再准备或恢复窗口；必要界面操作由操作者在KK9内完成，独立只读观察不作为SDK数据源。本机菜单撤回仍依赖已验收的Vue本地通知、`addRevokeMsg`与组件重建观察，未证明等价原生替代前保留，不声称全原生或C4完成。
+旧 `check-vue-messages.ts`、`inspect-chat-content.ts`、`test-reload-messages.ts` 已删除；历史/资源/撤回核对继续使用各原生脚本。现行脚本不再准备或恢复窗口；必要界面操作由操作者在KK9内完成，独立只读观察不作为SDK数据源。本机菜单撤回仍依赖已验收的Vue本地通知、`addRevokeMsg`与组件重建观察，未证明等价原生替代前保留，不声称全原生；现行验收见文末C4记录。
 
 以下T01–T11验收数值、旧路径及窗口切换描述均保留为历史事实，不重新执行。现行图片/撤回脚本需要查看时请人工打开授权目标，使用 `snapshot`（撤回）或 `finish`；旧自动 `private/group` 切换不再提供。实时事件脚本的 `private/group` 仅核对人工准备后的现场，T04仍停止补测。
 ## 六项修正专项回归
@@ -474,3 +474,26 @@ node --input-type=module -e "process.env.KK9_TEST_PRIVATE_ID='716791'; process.e
 退出后message监听1→1、DriverHook=false、nativeObserver=false、pendingSends=0，窗口和索引仍与基线一致。Driver运行4fdaeb03-aee6-4f7d-b9f7-406d57bac569及核对连接8ce8b1ed-be85-4321-ba8b-716a4a03b1f4均disconnected，脚本exit0。未发送、撤回、标已读、清原生缓存或修改共享客户端其他监听；只读查询可能由KK9内部更新查询缓存，不承诺内部缓存不变。没有自建临时脚本、文件或常驻采集需要清理。
 
 本轮没有改实时、撤回捕获或媒体准备协议，复用有效前序证据，不重复真机发送/播放/菜单撤回，不补测已停止T04。保留的必要Vue总线、会话通知、addRevokeMsg和MutationObserver组件重建监听没有等价无Vue替代证明；T12a彻底去依赖与C4保持未勾选，不虚报全原生。T12b/T12c完成，未提交、推送、开PR、合并或发布；交付后停止。
+
+## C4 最终构建入口只读验收
+
+本轮先完成[C3逐类媒体证据核对](DEVELOPMENT.md#c3-逐类媒体证据收口)，再核对[现行契约与保留行为](DEVELOPMENT.md#c4-现行契约与最终验收)。生产代码、公开类型、Fake、测试及依赖均未改；保留用户手动勾选的T12和真机前置条件。以上T12“未勾选”描述是历史实施状态，不覆盖当前清单，也不追加彻底去Vue或已停止T04补测为默认前置。
+
+实际执行一次`pnpm check`：build/typecheck、30文件336项及lint全部通过，无需重跑。复用该次构建产物，从`@kairo/driver`公开ESM入口实际执行现有`pnpm verify`，命令为：
+
+```bash
+node --input-type=module -e "process.env.KK9_TEST_PRIVATE_ID='716791'; process.env.KK9_TEST_GROUP_ID='793803'; process.env.KK9_TEST_USER_ID='3585'; const { spawnSync } = await import('node:child_process'); const result = spawnSync('pnpm verify', { shell: true, stdio: 'inherit', env: process.env }); process.exitCode = result.status ?? 1;"
+```
+
+重新核对真实登录0123040139/UID5761、int2024/UID3585/私聊716791，以及测试123/群793803/接收对象29467/nativeType1全部通过；必要档案及私聊对端映射一致。每目标读取3条历史，与独立原生`getMessages`的ID、索引和会话逐项相同：
+
+| 目标 | 本轮读取的原生ID/索引 | 读取前后max/read |
+| --- | --- | --- |
+| 私聊716791 | 137587661/722、137587823/723、137593073/724 | 724/724 → 724/724 |
+| 群793803 | 137587293/151、137587827/152、137593135/153 | 153/153 → 153/153 |
+
+窗口ID511315前后不变，只独立观察其ID、不读取该聊天正文或操作该会话；message/at/recalled实时事件均0。退出后message监听1→1、DriverHook=false、nativeObserver=false、pendingSends=0，完整快照恢复基线。Driver运行`cd79b96f-33f5-4190-b88b-0fb827b26a15`及核对连接`9c2c3b55-859d-4a16-8e93-551af42795d6`均disconnected，脚本成功退出。
+
+本轮未发送、撤回、切窗口、标已读，未操作同名716827、清理原生缓存或修改其他监听。只读查询可能使KK9内部更新查询缓存，不承诺内部缓存不变；输出仅必要元数据，没有保存聊天正文/凭据或全员联系方式，没有自建临时脚本、文件或常驻采集待清理。
+
+C3/C4按当前验收范围完成；媒体、三类撤回、组织/已读/历史范围及真实断线unknown查询复用前序已合并证据，不称本轮重测。必要Vue本机菜单通知、即时气泡刷新差异和历史未实测边界继续保留，不虚报全原生或全部历史命名场景实测；T04停止补测、C2不变。本轮仅更新现有说明与清单，没有提交、推送、开PR、合并、发布或升级版本；交付后停止。
