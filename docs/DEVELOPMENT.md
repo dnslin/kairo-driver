@@ -104,6 +104,10 @@ PR #5审计修复：`examples/verify-native-file.ts`的观测Hook不再让损坏
 
 工作树已有依赖直接可用，未再次安装或修改锁文件。LSP references本轮初始化退出code0，未反复重启；结合实际调用路径和受影响回归核对。jshookmcp按实际schema核对KK9图片协议，没有重试旧ASAR完整性失败或修改安装包。辅助浏览器附着不支持Electron的Target.createTarget，改用已有CDP连接采集查看器实际图像；没有为工具失败重发图片。
 
+PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建草稿前失败」回归。预处理边界把真实640×360 PNG原图作为缩略图返回，验证SDK拒绝这一有效但未缩小的产物，保留缩略图路径及具体错误，且不创建草稿。未扩展格式矩阵或修改生产逻辑。
+
+为确认新增回归能捕获审计缺口，临时将缩略图尺寸检查的`||`改为`&&`，执行`pnpm exec vitest run tests/native-media.test.ts -t "可解码但尺寸错误"`，新用例按预期失败（错误结果为sent）。恢复源码并核对与实验前一致后，图片准备专项12项通过；本次唯一一次最终`pnpm check`的build/typecheck、32文件389项测试及lint全部通过。没有真机重发图片，原双目标验收证据继续保留。
+
 ## 依赖与打包
 
 提交并保留 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 和 `patches`。两条音频依赖补丁属于运行所需配置，升级相关依赖时需重新核对补丁及语音处理行为。

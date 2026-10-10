@@ -691,7 +691,7 @@ describe('原生图片准备与提交', () => {
       businessCode?: number;
       callback?: boolean;
       sendDelayMs?: number;
-      preparation?: '缺失原图' | '损坏缩略图' | '原生失败';
+      preparation?: '缺失原图' | '损坏缩略图' | '尺寸错误缩略图' | '原生失败';
     } = {}
   ) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kairo-t07-'));
@@ -704,12 +704,16 @@ describe('原生图片准备与提交', () => {
       ...config,
       prepareImage: (thumb, original) => {
         if (config.preparation === '原生失败') return { code: 627, error: '图片准备拒绝' };
-        fs.writeFileSync(
-          thumbPath,
-          config.preparation === '损坏缩略图'
-            ? '损坏图片'
-            : Buffer.from(thumb.replace('data:image/png;base64,', ''), 'base64')
-        );
+        if (config.preparation === '尺寸错误缩略图') {
+          fs.copyFileSync(original, thumbPath);
+        } else {
+          fs.writeFileSync(
+            thumbPath,
+            config.preparation === '损坏缩略图'
+              ? '损坏图片'
+              : Buffer.from(thumb.replace('data:image/png;base64,', ''), 'base64')
+          );
+        }
         if (config.preparation !== '缺失原图') fs.copyFileSync(original, artworkPath);
         return { code: 0, data: { thumbPath, artworkPath } };
       },
@@ -868,6 +872,15 @@ describe('原生图片准备与提交', () => {
       expect(native.drafts).toEqual([]);
     }
   );
+
+  it('可解码但尺寸错误的缩略图在创建草稿前失败', async () => {
+    const native = imageRuntime({ preparation: '尺寸错误缩略图' });
+    const result = await native.ops.sendImage(native.file, { targetSessionId: '93001' });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(result.error).toContain('缩略图生成结果不符');
+    expect(result.error).toContain(native.thumbPath);
+    expect(native.drafts).toEqual([]);
+  });
 
   it.each([
     { code: -9, expected: -9 },
