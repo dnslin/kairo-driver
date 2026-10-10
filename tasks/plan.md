@@ -1,6 +1,6 @@
 # 原生 SDK 改造方案
 
-当前状态以用户手动更新的 [todo.md](todo.md) 为准：T12a/T12b/T12c及真机终验前条件已勾选，T04归档停止补测、C2既有状态保留。T12已交付清理随PR #11合并，基线bf1c29dc90613e019febd51535993f2f6d0face7，完整结果和必要Vue通知边界见 [archive/T12.md](archive/T12.md)。当前派发 [C3+C4](C3-C4-handoff.md)，收口媒体证据与现行契约/运行验收，不默认追加彻底去Vue或重做T12，不改写历史未实测事实。
+当前状态以用户手动更新的 [todo.md](todo.md) 为准：T12a/T12b/T12c及真机终验前条件已勾选，T04归档停止补测、C2既有状态保留。T12已交付清理随PR #11合并，基线bf1c29dc90613e019febd51535993f2f6d0face7，完整结果和必要Vue通知边界见 [archive/T12.md](archive/T12.md)。本轮已按 [C3+C4交接](C3-C4-handoff.md) 完成媒体证据收口与现行契约/运行验收，结果见 [开发说明](../docs/DEVELOPMENT.md#c3-逐类媒体证据收口) 和 [启动记录](../docs/KK9-STARTUP.md#c4-最终构建入口只读验收)；未追加彻底去Vue或重做T12，不改写历史未实测事实。
 
 ## 目标与非目标
 

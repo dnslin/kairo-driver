@@ -244,3 +244,32 @@ T12c：删除三条过时的Vue/组件历史专用诊断，保留并迁移全部
 改动后真实 `pnpm verify` 通过，使用本轮清空dist后生成的 `@kairo/driver` ESM入口；登录、双目标、每目标3条ID/索引原生对照及必要档案一致，窗口511315与读索引724/153不变，实时事件0。退出后message监听仍1，自身Hook/发送观察器false、在途0，两个CDP连接disconnected且进程exit0。完整命令与元数据见启动说明T12节。
 
 保留边界：`event-bridge.ts` 未修改，仍有Vue总线、会话通知、`addRevokeMsg`、组件发现/重建监听及撤回显示名读取；它们仅服务原已验收本机菜单撤回，未作为发送或原生历史的数据源。没有已确认且经真机证明等价的无Vue本机菜单通知，本轮不尝试全局拦截或改安装包来替代。复用T05三类撤回、T03/T04实时与unknown、T06–T10媒体、T11范围/已读既有证据，不把这些旧结果称为本轮重测。T12a可达清理已交付，但彻底去除此必要依赖的条件未满足，因此T12a和C4保持未勾选；T12b/T12c完成，C2/C3与T04既有状态不变。未提交、推送、开PR、合并或发布。
+
+## C3 逐类媒体证据收口
+
+本轮核对现行 `BridgeMessageOps`、图片/卡片/富文本/语音准备及既有行为回归，复用已合并的T06–T10实际记录。T12仅迁移纯数据工具并删除旧窗口路径，未改变这些媒体协议；未发现使逐类证据失效的改动或具体缺项，C3完成。不重新发送媒体、不重复TTS或试听、不新增测试；下表完整检查均为对应历史阶段的最终结果，不是本轮重跑。
+
+| 能力与证据 | 现行路径及行为回归 | 复用的真实客户端证据 | 历史最终完整检查 |
+| --- | --- | --- | --- |
+| [T06 文件](../tasks/archive/T06.md) | `message-ops.ts`；`send-ops.test.ts`、`native-send-receipt.test.ts`：本地读取失败、上传/617业务失败、防重及损坏回执不阻断派发 | 双目标各73字节附件，服务器无缓存重下载并逐字节一致，已撤回并退出自身资源 | build/typecheck/lint及32文件381项通过 |
+| [T07 图片](../tasks/archive/T07.md) | `image-ops.ts`；`native-media.test.ts`：真实尺寸/格式使用、独立缩略图、损坏/错误尺寸产物拒绝、取消与防重 | 双目标原图/缩略图重新下载解码，KK9查看器及接收端显示/打开确认，已清理 | build/typecheck/lint及32文件389项通过 |
+| [T08 富文本/提及/引用](../tasks/archive/T08.md) | `rich-text.ts`、`message-ops.ts`；`rich-text.test.ts`：整条font、真实UID、准确引用ID/索引及Text(0)原文 | 私聊格式/引用、群普通/引用提及，用户确认全部展示与两次通知正确，六条本人消息已清理 | build/typecheck/lint及32文件375项通过 |
+| [T09 四类卡片/合并](../tasks/archive/T09.md) | `card-ops.ts`；`native-media.test.ts`：原生字段、业务路径、准确来源/作者、撤回引用占位、反向私聊标题、617拒绝 | 链接/业务/应用/合并逐类呈现与合并详情；审计修复另有撤回占位真机，全部本人消息已清理 | build/typecheck/lint及32文件376项通过 |
+| [T10 语音](../tasks/archive/T10.md) | `voice-ops.ts`及结构化提交；`voice-ops.test.ts`、`node-edge-tts-boundary.test.ts`、`native-media.test.ts`：编码/输入错误、清理、取消与防重 | 真实Edge TTS与本地WAV分布双目标，AMR/正式播放资源核对，用户确认两条播放及结尾正常，已清理 | build/typecheck/lint及32文件376项通过 |
+
+未实测边界不扩大：T06未证明另一接收设备人工打开；T07不承诺当前聊天气泡即时刷新；T08审计新增Text(0)引用分支只有协议回归、未另作真机发送；T09反向私聊标题只有行为回归，另一设备及远端业务站点未实测，合并预览保留原版HTML标签差异；T10未真机制造编码器或服务器故障，必要AMR及两条音频补丁保留。旧tmp不随Git，本轮依据已合并归档与开发/启动记录，不声称重新读取旧原始文件，也不把历史发送/展示/播放称为本轮实测。
+
+## C4 现行契约与最终验收
+
+本轮只核对并记录，不修改生产代码、公开类型、Fake、测试、依赖或门禁。`src/index.ts`和`package.json`仅提供现行包入口；`IKK9Driver`、Driver与Bridge均无旧窗口/active/选择器/预检/后台轮询接口或DOM回退，纯员工/图片工具和音频补丁保留。原生会话ID、接收对象UID与消息ID/索引各自明确，`SendResult`为必填`status/operationId`，sent不代表对端收到或已读。
+
+核对的现行行为及既有回归：
+
+- 连接失效报告原始cause和连接身份，旧事件不进入新连接，旧实例退出不破坏新Hook；见`driver-health.test.ts`、`driver-connection-lifecycle.test.ts`、`event-bridge-lifecycle.test.ts`。
+- 同一operationId先声明再提交，指纹冲突拒绝；重复意图与unknown只返回/查询既有业务证据，不重发，后到unknown不覆盖sent/failed；见`native-text-sdk.test.ts`、`native-send-receipt.test.ts`及`send-operation.test.ts`。真实提交后断线查询复用[T03记录](../tasks/archive/T03-T04.md)，不制造新断线或消息。
+- message/at共用会话＋消息ID去重，recalled按会话＋撤回目标去重，不把通知自身ID当目标；历史返回不进入实时派发，不切窗口或标已读。见`event-bridge.test.ts`、`event-bridge-lifecycle.test.ts`、`recall.test.ts`及`compensation-scan.test.ts`；三类撤回复用[T05](../tasks/archive/T05.md)，组织/已读/历史范围复用[T11](../tasks/archive/T11.md)，媒体证据见上节。
+- 退出只移除自身订阅、binding、观察器及在途等待，保留客户端和其他实例监听；生成脚本回归与本轮构建入口烟测分别证明边界行为和真实退出，不互相冒充。
+
+保留必要本机菜单Vue总线/会话通知、`addRevokeMsg`及组件重建监听；不宣传无任何Vue/DOM依赖，不承诺即时聊天气泡刷新。T04真实状态包和正确标签私聊缺席专项未全部实测的事实不改，停止补测及取消其他设备本人测试的决定继续有效。当前T12和真机前置条件按用户手动勾选保留，C2不变；旧T12段落的未勾选描述仅为历史，不成为本轮新增前置。
+
+本轮最终仅运行一次`pnpm check`，build/typecheck、30文件336项及lint全部通过；随后复用该次干净构建的`dist`执行现有`pnpm verify`，授权身份、双目标每目标3条历史原生对照、档案/私聊映射、窗口/读索引/实时事件及自身资源退出全部通过。实际命令与元数据见[本轮启动记录](KK9-STARTUP.md#c4-最终构建入口只读验收)。未另跑build/pack、媒体矩阵、TTS/试听、前序真机专项或已知无关的额外类型检查。仅本次完整检查与只读烟测为本轮实测，其余真机能力复用上述已合并证据；C3/C4完成不表示全原生，也不改写T04/C2状态。
