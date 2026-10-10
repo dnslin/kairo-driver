@@ -187,6 +187,61 @@ describe('T04 原生实时独立链路', () => {
     } finally { await bridge.disconnect(); }
   });
 
+  it.each(['原生先到', '确认先到'])('首次会话%s只延迟匹配本人、接收对象和类型的回显', async order => {
+    const page = createPage();
+    const { bridge } = page.createBridge('首次会话' + order, '连接', '91001');
+    const key = '首次工号发送';
+    const confirmed = { id: 1001, sessionID: 94001, sender: 91001, receiver: 91003,
+      sessionType: 0, contentType: 4, content: '首次文本', msgFlag: key, msgIdx: 1 };
+    const unrelated = [
+      { ...confirmed, id: 1002, sender: 91004 },
+      { ...confirmed, id: 1003, sessionID: 94002, receiver: 91004 },
+      { ...confirmed, id: 1004, sessionID: 94003, sessionType: 1 },
+    ];
+    const messages: KK9Message[] = [];
+    bridge.on('message', message => messages.push(message));
+    await bridge.connect();
+    try {
+      page.windowObject['nativeSubmitIpc'] = (method: string) => {
+        if (method === 'getSessionBySessionID') return Promise.resolve({ code: 0, data: {
+          id: 94001, type: 0, typeID: 91003, creater: 91001, typeName: '准确接收者',
+        } });
+        if (method === 'insertSendBefoeMsg') return Promise.resolve({ code: 0, data: { id: -1, msgIdx: 1.001 } });
+        for (const message of unrelated) page.ipc.emit('message', {}, { args: {
+          sessionID: message.sessionID, message: [message],
+        } });
+        expect(messages.map(message => message.id)).toEqual(['1002', '1003', '1004']);
+        if (order === '原生先到') {
+          page.ipc.emit('message', {}, { args: { sessionID: 94001, message: [confirmed] } });
+          expect(messages).toHaveLength(3);
+        }
+        page.ipc.emit('0-91003-sendMsgCallback', {}, {
+          args: { msgID: -1, code: 0, data: confirmed },
+        });
+        return Promise.resolve({ code: 0 });
+      };
+      page.windowObject['confirmNativeSend'] = () => Promise.resolve(confirmed);
+      const result = await runRendererScript<{ confirmedMessage?: unknown }>(`(async () => {
+        const ipc = window.ipcRenderer;
+        ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
+        const callIpc = window.nativeSubmitIpc;
+        const waitForPersistedMessage = window.confirmNativeSend;
+        return submitNativeMessage({ sessionID: 0, sender: 91001, receiver: 91003,
+          sessionType: 0, contentType: 4, content: '首次文本', msgFlag: ${JSON.stringify(key)} },
+          { id: 0, type: 0, typeID: 91003 }, 50, undefined, 'int2023');
+      })()`, page.runtime.context);
+      expect(result).toMatchObject({ confirmedMessage: confirmed });
+      page.ipc.emit('message', {}, { args: { sessionID: 94001, message: [confirmed] } });
+      page.ipc.emit('message', {}, { args: { sessionID: 94001, message: [confirmed] } });
+      expect(messages).toHaveLength(4);
+      expect(messages[3]).toMatchObject({ id: '1001', sessionId: '94001', direction: 'outbound', sdkSendKey: key });
+      expect(messages.slice(0, 3).map(message => message.sdkSendKey)).toEqual([undefined, undefined, undefined]);
+      expect(messages[0]).toMatchObject({ direction: 'inbound' });
+      expect(messages.slice(1, 3).map(message => message.sessionId)).toEqual(['94002', '94003']);
+      expect(page.ipc.listenerCount('0-91003-sendMsgCallback')).toBe(0);
+    } finally { await bridge.disconnect(); }
+  });
+
   it.each(['failed', 'unknown'])('%s释放真实本人消息，不伪造 SDK 确认', async status => {
     const page = createPage();
     const { bridge } = page.createBridge(status, '连接', '91001');

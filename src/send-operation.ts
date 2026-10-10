@@ -6,6 +6,7 @@ export type { SendStatus } from './types/index.js';
 
 export type SendOperationMessageType =
   | 'text'
+  | 'text-to-user'
   | 'rich-text'
   | 'reply'
   | 'image'
@@ -18,6 +19,8 @@ export type SendOperationMessageType =
 
 export interface SendOperationFingerprint {
   targetSessionId: string;
+  /** 按工号发送的准确账号；与会话目标分别参与意图比较。 */
+  targetLoginName?: string;
   messageType: SendOperationMessageType;
   contentDigest: string;
 }
@@ -27,6 +30,7 @@ export interface SendOperationRecord {
   fingerprint: SendOperationFingerprint;
   status: SendStatus;
   messageId?: string;
+  sessionId?: string;
   error?: string;
   isPreTrigger?: boolean;
   verifyLatencyMs?: number;
@@ -59,6 +63,7 @@ export interface SendOperationStore {
 
 export interface SendOperationFingerprintInput {
   targetSessionId?: string;
+  targetLoginName?: string;
   messageType: SendOperationMessageType;
   content: unknown;
 }
@@ -100,6 +105,7 @@ function fingerprintsEqual(
 ): boolean {
   return (
     left.targetSessionId === right.targetSessionId &&
+    left.targetLoginName === right.targetLoginName &&
     left.messageType === right.messageType &&
     left.contentDigest === right.contentDigest
   );
@@ -114,6 +120,7 @@ export function createSendOperationFingerprint(
 
   return {
     targetSessionId: input.targetSessionId?.trim() ?? '',
+    ...(input.targetLoginName !== undefined ? { targetLoginName: input.targetLoginName.trim() } : {}),
     messageType: input.messageType,
     contentDigest,
   };
@@ -187,6 +194,7 @@ export class InMemorySendOperationStore implements SendOperationStore {
       updatedAt: Date.now(),
     };
     if (update.messageId !== undefined) updated.messageId = update.messageId;
+    if (update.sessionId !== undefined) updated.sessionId = update.sessionId;
     if (update.error !== undefined) updated.error = update.error;
     if (update.isPreTrigger !== undefined) updated.isPreTrigger = update.isPreTrigger;
     if (update.verifyLatencyMs !== undefined) updated.verifyLatencyMs = update.verifyLatencyMs;

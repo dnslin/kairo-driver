@@ -331,6 +331,8 @@ export interface NativeSendReceipt {
 
 /** 发送状态只有一个判别字段；sent不表示对端收到或已读。 */
 export type SendOutcome = {
+  /** 已确认的正式会话ID；按工号发送成功时必填，不返回首次提交的零值。 */
+  sessionId?: string;
   recall?: () => Promise<boolean>;
   isPreTrigger?: boolean;
   verifyLatencyMs?: number;
@@ -377,6 +379,12 @@ export interface SendFileOptions {
   verifyTimeoutMs?: number;
 }
 
+/** 按准确工号发送纯文本，不接受会话目标、引用或提及。 */
+export interface SendToUserOptions {
+  operationId?: string;
+  verifyTimeoutMs?: number;
+}
+
 export interface DriverEvents {
   status: (status: ConnectionStatus) => void;
   message: (message: KK9Message) => void;
@@ -415,6 +423,8 @@ export interface IKK9Driver extends EventEmitter {
 
   // 消息发送与撤回
   sendText(text: string, options?: SendOptions): Promise<SendResult>;
+  /** 按准确login_name发送；首次发送由KK9建立私聊，成功返回正式sessionId。 */
+  sendTextToUser(loginName: string, text: string, options?: SendToUserOptions): Promise<SendResult>;
   sendRichText(content: FormattedText, options?: SendOptions): Promise<SendResult>;
   sendReply(
     replyTo: string | KK9ReplyTarget,

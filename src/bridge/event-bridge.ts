@@ -745,7 +745,10 @@ export class KK9EventBridge extends EventEmitter {
           for (const message of messages) {
             const key = message.msgFlag;
             const envelope = { ...payload, message: [message] };
-            if (pendingSends.get(key) === String(payload.sessionID ?? message.sessionID) && String(message.sender) === ${JSON.stringify(String(this.currentUserId ?? ''))}) {
+            const pending = pendingSends.get(key);
+            const sameSession = pending?.sessionID === String(payload.sessionID ?? message.sessionID);
+            const firstContact = pending?.sessionID === '0' && pending.sessionType === 0 && message.sessionType === 0 && String(message.receiver) === pending.receiver;
+            if ((sameSession || firstContact) && String(message.sender) === ${JSON.stringify(String(this.currentUserId ?? ''))}) {
               const queued = pendingMessages.get(key) || [];
               queued.push(envelope);
               pendingMessages.set(key, queued);
@@ -798,7 +801,7 @@ export class KK9EventBridge extends EventEmitter {
             if (!listeners?.size) receiptWaiters.delete(data.channel);
             return;
           }
-          if (data.stage === 'pending') { pendingSends.set(data.key, String(data.sessionID)); return; }
+          if (data.stage === 'pending') { pendingSends.set(data.key, { sessionID: String(data.sessionID), sessionType: data.sessionType, receiver: String(data.receiver) }); return; }
           if (data.stage === 'confirmed') {
             postEvent('send-confirmed', { key: data.key, payload: data });
             return;
@@ -813,8 +816,7 @@ export class KK9EventBridge extends EventEmitter {
         window.__kairo_native_send_observer = onNativeSend;
         unbindFns.push(() => {
           pendingSends.clear(); pendingMessages.clear();
-          for (const [channel, listeners] of receiptWaiters)
-            for (const listener of listeners) ipc.removeListener(channel, listener);
+          // 回执监听由发送任务创建并在其finish中移除；Hook只借用登记，不能取消其他发送。
           receiptWaiters.clear();
           if (window.__kairo_native_send_observer === onNativeSend) delete window.__kairo_native_send_observer;
         });
