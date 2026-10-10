@@ -63,6 +63,7 @@ export class BridgeOrgOps {
     const uid = String(userId ?? '').trim();
     if (!uid) return null;
     const target = /^[0-9]+$/.test(uid) ? Number(uid) : uid;
+    if (target === 0) return null;
     try {
       const res = await callIpcToData<(Record<string, unknown> & { deptPaths?: KK9Employee['deptPaths'] }) | null>(this.cdp, 'getMemberDetail', [target], 3000);
       if (res.code !== 0) throw new Error(`失败 (${res.code}): ${res.error || res.message || ''}`);

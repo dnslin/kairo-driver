@@ -38,6 +38,8 @@ try {
   assert.equal(groupSession?.nativeType, 1);
   assert.equal(groupSession?.receiverId, '29467');
   assert.equal(groupSession?.name, '测试123');
+  assert.equal(await driver.getUserProfile(0), null, '零 UID 不得查询当前账号');
+  assert.equal(await driver.getUserProfile('000'), null, '零填充 UID 不得查询当前账号');
   if (phase === 'a') {
     const before = await snapshot();
     const roots = await callIpcToData<Array<{ id: number; name: string }>>(cdp, 'getDepartmentVisible');

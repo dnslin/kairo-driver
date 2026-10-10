@@ -57,4 +57,13 @@ describe('原生组织与员工查询', () => {
     await expect(ops.getUserProfile(9999)).resolves.toBeNull();
     await expect(ops.getUserProfile(8888)).rejects.toThrow(/getMemberDetail.*8888.*627.*档案读取失败/);
   });
+
+  it('零填充 UID 不触发原生当前账号默认身份', async () => {
+    const ops = nativeOrg(({ args: [, value] }) => {
+      // 原生 getMemberDetail 将假值 UID 替换为当前登录 UID。
+      const uid = value || 5761;
+      return { code: 0, data: uid === 5761 ? { id: 5761, name: '当前账号' } : null };
+    });
+    await expect(ops.getUserProfile('000')).resolves.toBeNull();
+  });
 });
