@@ -184,3 +184,8 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 
 本轮唯一一次最终`pnpm check`通过build/typecheck、32文件376项测试及lint；之后仅更新Markdown记录，没有重复检查。修改后的真实SDK双目标各一条，用户一次明确确认“两条播放及结尾均正常”；正式记录、时长、确认与清理见启动说明T10节。未真机制造编码器故障、上传-9或服务器业务失败，未运行前序专项或已知无关测试全量类型检查。
 
+## T11a 原生组织与员工查询
+
+组织遍历从 `getDepartmentVisible` 的真实可见根开始，复用 `getChildDeptsAndMembers` 每页200成员、部门遍历与UID去重。正常空组织返回 `[]`，档案 `getMemberDetail` 正常缺席返回 `null`；原生错误、期限耗尽、部门上限或无效页抛出带方法/部门/页/原因的 `DriverError`，不返回部分全量。移除DOM/Vue身份发现、Vuex补集、Driver回退及旧 `OrgOps` 导出/实现，纯解析工具仍保留。
+
+实际回归：`pnpm exec vitest run tests/bridge-org-ops.test.ts tests/driver.test.ts -t "原生组织与员工查询|原生正常空组织|getEmployeeBySession"`，8项通过。组织专项先复现4项失败；修正后发现并补回部门路径。LSP references初始化退出code0，未重启，已检索实际调用补足。真机命令和结果见启动说明；最终完整检查等待三切片完成后只运行一次。

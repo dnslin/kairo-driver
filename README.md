@@ -86,6 +86,10 @@ const history = await driver.getRecentMessages(session, 10);
 
 这里只切换主动历史读取；现有自动轮询和补偿扫描的窗口操作尚未在本轮移除，不应将它们用于只读验收。
 
+## 组织与员工查询
+
+`getOrgEmployees(timeoutMs?)` 从原生可见根部门分页遍历并按UID去重；正常空返回 `[]`，任何部门/页错误或遍历中断抛错，不返回部分全量。`getUserProfile(uid)` 使用原生档案，正常缺席返回 `null`；已删除旧 `OrgOps` 及DOM回退，纯数据解析工具保留。
+
 ## 指定会话撤回
 
 `await driver.recallMessage(messageId, session)` 必须指定原生会话 ID 或 `KK9Session`，不接受会话名称、界面标识或省略目标。SDK 从该会话原生历史取得准确消息 ID 和索引，仅以 `type: own` 撤回本人消息，不切窗口、不扫描气泡、不用 0 猜索引。`SendResult.recall()` 固定本次发送目标，走同一撤回路径。

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { KK9Driver } from '../src/driver.js';
 import type { KK9EventBridge } from '../src/bridge/event-bridge.js';
-import type { IKK9Driver, KK9Employee, KK9Message, KK9Session } from '../src/types/index.js';
+import type { IKK9Driver, KK9Message, KK9Session } from '../src/types/index.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
 import { FakeIpcRenderer, runRendererScript } from './helpers/renderer-runtime.js';
 import { CdpError } from '../src/utils/errors.js';
@@ -458,34 +458,17 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     expect(internals.domSessionOps.markSessionRead).not.toHaveBeenCalled();
   });
 
-  it('组织架构查询应优先调用 Bridge 组织架构服务', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
+  it('原生正常空组织与缺席档案不触发窗口回退', async () => {
+    const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
+    const ipc = new FakeIpcRenderer(({ args: [method] }) => {
+      if (method === 'getDepartmentVisible') return { code: 0, data: [] };
+      if (method === 'getMemberDetail') return { code: 0, data: null };
+      throw new Error('不应降级查询');
     });
-    const internals = getDriverTestInternals(driver);
-
-    const mockEmployee: KK9Employee = {
-      id: 91001,
-      loginName: 'TEST-EMP-001',
-      name: '测试员工',
-      position: 'IT开发工程师',
-      deptPaths: [
-        { id: 15, name: '测试公司' },
-        { id: 29, name: 'IT组' },
-      ],
-      updatedAt: Date.now(),
-    };
-
-    internals.bridgeOrgOps.getOrgEmployees = vi.fn().mockResolvedValue([mockEmployee]);
-    internals.bridgeOrgOps.getUserProfile = vi.fn().mockResolvedValue(mockEmployee);
-
-    const employees = await driver.getOrgEmployees(5000);
-    expect(employees).toHaveLength(1);
-    expect(employees[0]?.name).toBe('测试员工');
-
-    const profile = await driver.getUserProfile(91001);
-    expect(profile).not.toBeNull();
-    expect(profile?.loginName).toBe('TEST-EMP-001');
+    getDriverTestInternals(driver).cdp.evaluate = (script: string) =>
+      runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout });
+    await expect(driver.getOrgEmployees()).resolves.toEqual([]);
+    await expect(driver.getUserProfile(9999)).resolves.toBeNull();
   });
 
 

@@ -7,7 +7,6 @@ import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
 import { createMessageIdentityKey, extractRecalledEventsFromPayload } from './bridge/converter.js';
 
-import { OrgOps } from './dom/org-ops.js';
 import { resolveSelectors } from './dom/selectors.js';
 import { SessionOps } from './dom/session-ops.js';
 
@@ -65,7 +64,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
   // 保留旧版 DOM 操作层（作为后备回退）
   private readonly domSessionOps: SessionOps;
-  private readonly domOrgOps: OrgOps;
 
   private isPolling = false;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -99,7 +97,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
     // 初始化 DOM 操作层 (保留)
     this.domSessionOps = new SessionOps(this.cdp, this.selectors);
-    this.domOrgOps = new OrgOps(this.cdp);
 
     this.wireCdpEvents();
   }
@@ -462,26 +459,16 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     this.emit('recalled', event);
   }
 
-  /**
-   * 优先通过 Bridge / IPC 递归遍历企业全量员工档案
-   */
-  public async getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]> {
-    const employees = await this.bridgeOrgOps.getOrgEmployees(timeoutMs);
-    if (employees.length > 0) {
-      return employees;
-    }
-    return this.domOrgOps.getEmployees(timeoutMs);
+  /** 原生可见组织查询；正常空不切换实现，失败抛错。 */
+  public getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]> {
+    return this.bridgeOrgOps.getOrgEmployees(timeoutMs);
   }
 
   /**
    * 按 UID 精确单点查询员工档案
    */
-  public async getUserProfile(userId: number | string): Promise<KK9Employee | null> {
-    const profile = await this.bridgeOrgOps.getUserProfile(userId);
-    if (profile) {
-      return profile;
-    }
-    return this.domOrgOps.getUserProfile(userId);
+  public getUserProfile(userId: number | string): Promise<KK9Employee | null> {
+    return this.bridgeOrgOps.getUserProfile(userId);
   }
 
   /** 通过原生会话 ID 或实体查询私聊对端档案；用户 UID 请使用 getUserProfile。 */
