@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { KK9Driver } from '../src/driver.js';
 import type { KK9EventBridge } from '../src/bridge/event-bridge.js';
-import type { IKK9Driver, KK9Message, KK9Session } from '../src/types/index.js';
+import type { IKK9Driver, KK9Session } from '../src/types/index.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
 import { FakeIpcRenderer, runRendererScript } from './helpers/renderer-runtime.js';
 import { CdpError } from '../src/utils/errors.js';
@@ -128,7 +128,7 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     }
   });
 
-  it('轮询跳过历史撤回记录与通知，普通文本和其他系统通知仍正常派发', async () => {
+  it('历史保留撤回记录与通知及普通系统记录，但不派发实时事件', async () => {
     const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
     const internals = getDriverTestInternals(driver);
     const session: KK9Session = {
@@ -178,104 +178,8 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     const history = await driver.getRecentMessages(session, 10);
     expect(history.map(message => message.id)).toEqual(['1001', '1002', '1003', '1004']);
     expect(events).toEqual([]);
-    await internals.collectAndEmitMessages(session, 10);
-    await internals.collectAndEmitMessages(session, 10);
-    expect(events).toEqual(['消息:1003', '消息:1004']);
   });
 
-  it('startPolling 与 stopPolling 应正确切换轮询状态', () => {
-    const driver = new KK9Driver({
-      cdp: {
-        url: 'http://127.0.0.1:9222',
-        pageMatch: 'renderer.html',
-      },
-      polling: {
-        intervalMs: 100,
-      },
-    });
-
-    driver.startPolling();
-    // 重复调用不应抛错
-    driver.startPolling();
-    driver.stopPolling();
-    expect(driver.getStatus()).toBe('disconnected');
-  });
-
-  it('collectAndEmitMessages 应触发 message 与专用的 at 事件', async () => {
-    const driver = new KK9Driver({
-      cdp: {
-        url: 'http://127.0.0.1:9222',
-        pageMatch: 'renderer.html',
-      },
-    });
-    const internals = getDriverTestInternals(driver);
-
-    const receivedMessages: KK9Message[] = [];
-    const receivedAtMessages: KK9Message[] = [];
-
-    driver.on('message', msg => {
-      receivedMessages.push(msg);
-    });
-
-    driver.on('at', msg => {
-      receivedAtMessages.push(msg);
-    });
-
-    const mockMessages: KK9Message[] = [
-      {
-        id: 'fp_1',
-        sessionId: '0-91002',
-        sessionName: 'test-employee',
-        sessionType: 'private',
-        sender: 'test-employee',
-        content: '私聊咨询',
-        time: '12:01',
-        isMe: false,
-        direction: 'inbound',
-        atMe: false,
-        timestamp: Date.now(),
-      },
-      {
-        id: 'fp_2',
-        sessionId: '1-92001',
-        sessionName: 'test-group',
-        sessionType: 'group',
-        sender: '群员B',
-        content: '@机器人 请查一下数据',
-        time: '12:02',
-        isMe: false,
-        direction: 'inbound',
-        atMe: true,
-        mentions: {
-          isAtMe: true,
-          isAtAll: false,
-          mentionedUsers: ['机器人'],
-        },
-        timestamp: Date.now() + 1000,
-      },
-    ];
-
-    Object.assign(internals.bridgeMessageOps, {
-      getRecentMessages: vi.fn().mockResolvedValue(mockMessages),
-    });
-
-    await internals.collectAndEmitMessages(
-      {
-        id: '93002',
-        name: 'test-group',
-        type: 'group',
-        nativeType: 1,
-        receiverId: '92001',
-        unread: true,
-      },
-      10
-    );
-
-    expect(receivedMessages).toHaveLength(2);
-    expect(receivedAtMessages).toHaveLength(1);
-    expect(receivedAtMessages[0]?.content).toContain('@机器人');
-    expect(receivedAtMessages[0]?.sessionName).toBe('test-group');
-  });
 
   it('确认发送提供正式回执和快捷撤回，unknown不提供成功标记', async () => {
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });

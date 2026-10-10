@@ -134,6 +134,17 @@ export class BridgeSessionOps {
     return Object.values(response.data.sessionsInfo).map(item => toKK9Session(item, currentUserId));
   }
 
+  /** 按原生 ID 读取会话，不受当前窗口和可见会话列表影响。 */
+  public async getSessionById(sessionId: string): Promise<KK9Session | null> {
+    if (!/^-?[0-9]+$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId))) throw new DriverError(`原生会话 ID 无效: ${sessionId}`, 'INVALID_SESSION_ID');
+    const currentUserId = await this.getCurrentUserId();
+    const response = await callIpcToData<RawSessionItem | null>(this.cdp, 'getSessionBySessionID', [sessionId]);
+    if (response.code !== 0) throw new DriverError(`getSessionBySessionID 会话 ${sessionId} 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
+    if (!response.data) return null;
+    if (String(response.data.id) !== sessionId) throw new DriverError(`getSessionBySessionID 会话 ${sessionId} 返回其他会话`, 'IPC_INVALID_RESPONSE');
+    return toKK9Session(response.data, currentUserId);
+  }
+
   /**
    * 获取当前激活会话
    */

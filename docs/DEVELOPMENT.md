@@ -29,9 +29,9 @@ pnpm check
 
 涉及 KK9 实际行为时，还需要在授权测试账号与会话上运行对应真机脚本。自动测试通过只能说明代码层面的验证结果，不能替代客户端收发、附件和断线恢复验收。记录执行命令、通过项和未验证项即可，不复制真实聊天正文或凭据。
 
-T01/T02 的原生读取只读验收使用 `pnpm exec tsx examples/verify-native-readonly.ts <登录UID> <登录账号> <原生会话ID> <对端UID> <对端账号>`。脚本核对真实身份、目标、历史消息ID和索引，检查读索引不变；不执行聊天操作。`getRecentMessages(session, limit)` 必须显式传入原生会话实体，调用方不再先切窗口。自动轮询和补偿扫描的窗口语义仍在后续T11范围，本轮未重做。
+T01/T02 的原生读取只读验收使用 `pnpm exec tsx examples/verify-native-readonly.ts <登录UID> <登录账号> <原生会话ID> <对端UID> <对端账号>`。脚本核对真实身份、目标、历史消息ID和索引，检查读索引不变；不执行聊天操作。`getRecentMessages(session, limit)` 必须显式传入原生会话实体，调用方不再先切窗口。T11已将主动范围读取切到原生分页并删除自动窗口轮询。
 
-历史中的 `C/D` 前缀标记表示原消息已撤回，返回 `isRecalled: true` 并保留原消息类型；撤回系统通知仍保留自身消息 ID。原生历史查询不重放实时事件，现有轮询也跳过已撤回原记录和撤回通知，但保留普通系统通知。当前窗口会话按活动原生 ID 单独查询，不以可见会话列表缺席判断窗口不存在。Driver 的实时与历史方向都使用原生登录身份；身份为空时不沿用配置 UID。
+历史中的 `C/D` 前缀标记表示原消息已撤回，返回 `isRecalled: true` 并保留原消息类型；撤回系统通知仍保留自身消息 ID。所有历史查询不重放实时事件。当前窗口会话按活动原生 ID 单独查询，不以可见会话列表缺席判断窗口不存在。Driver 的实时与历史方向都使用原生登录身份；身份为空时不沿用配置 UID。
 
 `KK9Session` 的测试实体也必须提供 `nativeType` 和 `receiverId`。`pnpm check` 的源码类型检查不覆盖全部测试；可额外运行 `pnpm exec tsc --noEmit -p tsconfig.eslint.json` 核对测试与示例。该额外检查仍存在既有的 `Promise.withResolvers` 库目标、WebSocket Buffer 类型和测试数组可空诊断，本轮不扩展修复这些无关问题。
 
@@ -184,6 +184,7 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 
 本轮唯一一次最终`pnpm check`通过build/typecheck、32文件376项测试及lint；之后仅更新Markdown记录，没有重复检查。修改后的真实SDK双目标各一条，用户一次明确确认“两条播放及结尾均正常”；正式记录、时长、确认与清理见启动说明T10节。未真机制造编码器故障、上传-9或服务器业务失败，未运行前序专项或已知无关测试全量类型检查。
 
+
 ## T11a 原生组织与员工查询
 
 组织遍历从 `getDepartmentVisible` 的真实可见根开始，复用 `getChildDeptsAndMembers` 每页200成员、部门遍历与UID去重。正常空组织返回 `[]`，档案 `getMemberDetail` 正常缺席返回 `null`；原生错误、期限耗尽、部门上限或无效页抛出带方法/部门/页/原因的 `DriverError`，不返回部分全量。移除DOM/Vue身份发现、Vuex补集、Driver回退及旧 `OrgOps` 导出/实现，纯解析工具仍保留。
@@ -195,3 +196,19 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 `markSessionRead` 仅接受原生会话ID，先 `getSessionBySessionID` 取得真实类型和 `maxMessageIndex`，再调用 `readMessage`；不按名称或当前窗口选目标，不猜索引、不改Vue/总线。不存在返回false，原生失败抛带会话/方法/码/原因的DriverError。删除旧DOM视觉已读方法及旧回归，Fake按明确会话更新未读状态。
 
 实际命令：`pnpm exec vitest run tests/bridge-session-ops.test.ts tests/driver.test.ts tests/fake-driver.test.ts -t "指定原生会话已读|已读名称|会话管理与组织|历史查询返回历史撤回"`，6项通过；专项先复现2项失败。真机双目标真实未读推进、已读幂等与历史只读已验收，详见启动说明；不重复前序真机或逐片全量check。
+
+## T11c 主动历史范围读取与轮询删除
+
+复用 `getMessages`、历史规范化与原生会话映射，以 `endIdx` 每页200条向前读取并筛选时间闭区间，保留每会话最近N条、原生身份和会话范围去重。达到数量、时间下界或原生短页即结束；默认N为20，不把原生短页或数量上限冒充无限全量。原生底层按 `msgIdx <= endIdx` 倒序查询再反转，并应用会话 `showIndex`；资源/历史缓存可能由KK9内部更新，但SDK不切窗口、不改读索引、不派发历史事件。页失败及无法推进索引抛带会话/endIdx/原因的DriverError。
+
+删除 `startPolling/stopPolling`、`PollingConfig`、`DriverConfig.polling`、`switchDelayMs`、窗口计时循环、历史事件重放方法和所有调用；Fake实现相同主动范围筛选，不增加调度器、缓存、数据库、重试或兼容层。诊断/阶段示例改为既有实时监听；旧回归脚本只做主动历史读取。删除失效轮询回声/计时器/日志测试，保留真实事件、历史不重放与连接生命周期回归。
+
+实际定点命令：`pnpm exec vitest run tests/compensation-scan.test.ts tests/bridge-message-ops.test.ts tests/driver.test.ts tests/inbound-normalization.test.ts tests/logging-privacy.test.ts`，69项通过；四项范围回归先复现窗口依赖、边界与Fake空占位失败。真机 `pnpm exec tsx examples/verify-native-queries.ts c` 已核对跨页老范围、数量上限与双目标只读，详见启动说明。三切片最后统一运行一次 `pnpm check`。
+
+### T11 最终检查与边界
+
+最终 `pnpm check` 通过build、typecheck、33文件367项测试及lint。首次统一检查build/typecheck及全部测试通过，仅报专项脚本多余类型断言与Fake范围方法require-await；移除多余断言、Fake显式返回成功/拒绝Promise后，因该失败重跑一次通过。此后只更新Markdown，不重复检查。未运行已知无关的额外测试全量类型检查、T03–T10真机专项或T04补测。
+
+当前包未发布，仓内受影响调用全部直接迁移，删除项无兼容别名；不新增依赖、组织缓存、数据库、查询框架、自动轮询替代品或恢复监督。LSP本轮初始化退出code0，以真实调用检索补足；js-reverse相对先例/工具索引缺失，使用已挂载jshookmcp真实schema。ASAR搜索fileGlob失效已报告，改为既有CdpClient只读读取当前主进程相关源码，未重试整包完整性失败或修改安装包/共享工具。
+
+一次性协议脚本已删除，Driver/核对连接及监听终端已退出，独立后验Hook残留false、在途0；仅保留必要元数据说明与可复用专项脚本。原生故障由必要回归覆盖，删除/隐藏前的不可见历史未实测，不把有限范围称为全量。未实施C2/C3/T12，未提交、推送、开PR或合并。

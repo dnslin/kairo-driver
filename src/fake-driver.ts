@@ -17,7 +17,6 @@ import type {
   KK9Session,
   KK9UrlCardOptions,
   KK9VoiceOptions,
-  PollingConfig,
   PreSendCheckResult,
   SendFileOptions,
   SendOptions,
@@ -34,6 +33,7 @@ import { createNativeMessageKey, sendOperationRecordToResult } from './bridge/se
 import { createMessageIdentityKey, normalizeNativeMessage } from './bridge/converter.js';
 import { buildMentionNodes, parseFormattedTextToKK } from './bridge/rich-text.js';
 import { getCardInputError } from './bridge/card-ops.js';
+import { DriverError } from './utils/errors.js';
 
 export type FakeSendPayload =
   | FormattedText
@@ -163,8 +163,25 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     );
   }
 
-  public scanCompensationWindow(_options: CompensationScanOptions): Promise<KK9Message[]> {
-    return Promise.resolve([]);
+  public scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]> {
+    const to = options.toTimestamp ?? Date.now();
+    const limit = options.maxMessagesPerSession ?? 20;
+    if (!Number.isFinite(options.fromTimestamp) || !Number.isFinite(to) || options.fromTimestamp > to) return Promise.reject(new DriverError('补偿扫描时间窗口无效', 'COMPENSATION_SCAN_INVALID_WINDOW'));
+    if (!Number.isSafeInteger(limit) || limit <= 0) return Promise.reject(new DriverError('补偿扫描数量必须为正整数', 'COMPENSATION_SCAN_INVALID_LIMIT'));
+    for (const id of options.sessionIds ?? []) {
+      if (!this.sessions.some(session => session.id === id)) return Promise.reject(new DriverError(`补偿扫描原生会话不存在: ${id}`, 'COMPENSATION_SCAN_SESSION_NOT_FOUND'));
+    }
+    const result: KK9Message[] = [];
+    for (const session of this.sessions) {
+      if (options.sessionIds && !options.sessionIds.includes(session.id)) continue;
+      const seen = new Set<string>();
+      const selected = this.messages.filter(m => m.sessionId === session.id && m.timestamp >= options.fromTimestamp && m.timestamp <= to)
+        .sort((a, b) => (b.msgIdx ?? b.timestamp) - (a.msgIdx ?? a.timestamp))
+        .filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true; })
+        .slice(0, limit).reverse();
+      result.push(...selected);
+    }
+    return Promise.resolve(result);
   }
 
   public setSendBehavior(behavior: FakeSendBehavior): void {
@@ -316,8 +333,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
       : null;
   }
 
-  public startPolling(_customPolling?: Partial<PollingConfig>): void {}
-  public stopPolling(): void {}
 
 
   private async executeSendAction(

@@ -51,9 +51,6 @@ const driver = new KK9Driver({
     url: cdpUrl,
     pageMatch,
   },
-  polling: {
-    intervalMs: 2000,
-  },
 });
 
 async function main() {
@@ -403,7 +400,6 @@ async function main() {
 
       await driver.connect();
       console.log('✅ 已连接 KK9，启动实时 Bridge 监听 (按 Ctrl+C 退出)...');
-      driver.startPolling();
 
       process.on('SIGINT', () => {
         void (async () => {

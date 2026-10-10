@@ -300,7 +300,7 @@ export class MessageOps {
         },
         {
           currentUserId,
-          source: 'polling',
+          source: 'history',
           onDiagnostic: (diagnostic: InboundNormalizationDiagnostic) => {
             log.warn(
               {
@@ -310,7 +310,7 @@ export class MessageOps {
                 source: diagnostic.source,
                 observedAt: diagnostic.observedAt,
               },
-              'Polling 丢弃缺少入站身份字段的消息'
+              '历史查询丢弃缺少入站身份字段的消息'
             );
           },
         }

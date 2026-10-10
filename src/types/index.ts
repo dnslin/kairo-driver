@@ -304,21 +304,13 @@ export interface CdpConfig {
   heartbeatIntervalMs?: number;
 }
 
-export interface PollingConfig {
-  intervalMs: number;
-  switchDelayMs: number;
-  maxSessionsPerCycle: number;
-  maxMessagesPerSession: number;
-  /** 是否允许轮询自动在未读会话间切换（设为 false 时仅在当前激活会话监听） */
-  autoSwitchSession?: boolean;
-}
-
 export interface CompensationScanOptions {
+  /** 毫秒闭区间，范围读取只返回原生当前可见历史，不代表无界全量。 */
   fromTimestamp: number;
   toTimestamp?: number;
   sessionIds?: readonly string[];
+  /** 每会话返回范围内最近N条，默认20；必须为正整数。 */
   maxMessagesPerSession?: number;
-  switchDelayMs?: number;
 }
 
 export interface DriverConfig {
@@ -328,7 +320,6 @@ export interface DriverConfig {
   /** 共享客户端验收可显式拒绝接管其他代次的Hook。 */
   rejectExistingBridge?: boolean;
   selectors?: Partial<SelectorsConfig>;
-  polling?: Partial<PollingConfig>;
   /** Composition Root 分配的唯一启动代次。 */
   startupGenerationId?: string;
 }
@@ -476,11 +467,6 @@ export interface IKK9Driver extends EventEmitter {
   getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]>;
   getUserProfile(userId: number | string): Promise<KK9Employee | null>;
   getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null>;
-
-  // 智能轮询
-  startPolling(customPolling?: Partial<PollingConfig>): void;
-  stopPolling(): void;
-
 
   // 强类型事件监听器绑定
   on<U extends keyof DriverEvents>(event: U, listener: DriverEvents[U]): this;

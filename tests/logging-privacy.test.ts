@@ -2,9 +2,7 @@ import EventEmitter from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { KK9EventBridge } from '../src/bridge/event-bridge.js';
 import type { CdpClient } from '../src/cdp/client.js';
-import { KK9Driver } from '../src/driver.js';
-import type { ConnectionStatus, KK9Message, KK9Session } from '../src/types/index.js';
-import { getDriverTestInternals } from './helpers/driver-internals.js';
+import type { ConnectionStatus, KK9Message } from '../src/types/index.js';
 
 const { capturedLogs, createChildLogger } = vi.hoisted(() => {
   const capturedLogs: Array<{ level: string; args: unknown[] }> = [];
@@ -63,14 +61,6 @@ class MockCdpClient extends EventEmitter {
   }
 }
 
-const pollingSession: KK9Session = {
-  id: 'session-polling-213',
-  name: '隐私测试会话',
-  type: 'private',
-  nativeType: 0,
-  receiverId: 'employee-213',
-  unread: true,
-};
 
 function createMessage(content: string, overrides: Partial<KK9Message> = {}): KK9Message {
   return {
@@ -145,29 +135,6 @@ describe('Issue #213 日志隐私回归测试', () => {
     vi.clearAllMocks();
   });
 
-  it('轮询消息日志不包含消息正文', async () => {
-    const sensitiveContent = '轮询正文隐私标记-213-A';
-    const driver = new KK9Driver({
-      cdp: {
-        url: 'http://127.0.0.1:9222',
-        pageMatch: 'renderer.html',
-      },
-    });
-    const internals = getDriverTestInternals(driver);
-    const message = createMessage(sensitiveContent, {
-      id: 'polling-message-213',
-      messageId: 'polling-native-message-213',
-      sessionId: pollingSession.id,
-      messageType: 'file',
-    });
-    internals.bridgeMessageOps.getRecentMessages = vi.fn().mockResolvedValue([message]);
-
-    await internals.collectAndEmitMessages(pollingSession, 1);
-
-    const log = getLog('debug', '捕获新消息并触发事件');
-    expect(log).toBeDefined();
-    expect(serializeCapturedLogs()).not.toContain(sensitiveContent);
-  });
 
   it('EventBridge 消息日志不包含文本正文', async () => {
     const sensitiveContent = 'EventBridge 富文本隐私标记-213-B';
@@ -209,37 +176,6 @@ describe('Issue #213 日志隐私回归测试', () => {
     expect(serializeCapturedLogs()).not.toContain(rawPayload);
   });
 
-  it('debug 日志不包含消息正文', async () => {
-    const sensitiveContent = 'debug 正文隐私标记-213-D';
-    const { cdp } = await createConnectedEventBridge();
-
-    const driver = new KK9Driver({
-      cdp: {
-        url: 'http://127.0.0.1:9222',
-        pageMatch: 'renderer.html',
-      },
-    });
-    const driverInternals = getDriverTestInternals(driver);
-    driverInternals.bridgeMessageOps.getRecentMessages = vi.fn().mockResolvedValue([
-      createMessage(sensitiveContent, { id: 'debug-polling-message-213' }),
-    ]);
-    await driverInternals.collectAndEmitMessages(pollingSession, 1);
-
-    cdp.triggerBinding('__kairo_native_bridge', {
-      type: 'receive-message',
-      data: {
-        id: 'debug-event-message-213',
-        sessionId: 'debug-event-session-213',
-        sender: '测试成员',
-        content: sensitiveContent,
-        isMe: false,
-      },
-    });
-
-    const debugLogs = capturedLogs.filter(log => log.level === 'debug');
-    expect(debugLogs.length).toBeGreaterThanOrEqual(2);
-    expect(serializeCapturedLogs()).not.toContain(sensitiveContent);
-  });
 
   it('日志保留已有消息标识方向和状态', async () => {
     const { cdp } = await createConnectedEventBridge();

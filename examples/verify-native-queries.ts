@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { CdpClient, callIpcToData, KK9Driver } from '../src/index.js';
 
 const phase = process.argv[2];
-assert.ok(phase === 'a' || phase === 'b', '参数：a（组织查询）或 b（标已读），b可追加 --listen');
+assert.ok(phase === 'a' || phase === 'b' || phase === 'c', '参数：a（组织查询）、b（标已读，可追加 --listen）、c（历史范围）');
 if (phase === 'b') assert.equal(process.env['KK9_REAL_TEST_CONFIRM'], '5761:716791:793803', '标已读必须通过授权门禁');
 const config = { url: process.env['CDP_URL'] || 'http://127.0.0.1:9222', pageMatch: process.env['PAGE_MATCH'] || 'renderer.html' };
 const driver = new KK9Driver({ cdp: config, rejectExistingBridge: true });
@@ -51,6 +51,29 @@ try {
     assert.deepEqual(after, before, '组织查询改变窗口或读索引');
     assert.deepEqual(events, [], '查询重放实时事件');
     console.log(JSON.stringify({ 切片: 'T11a', 身份: '5761/0123040139', 根部门: roots.data?.map(({ id, name }) => ({ id, name })), 员工数量: employees.length, 指定档案: { uid: peer.id, login: peer.loginName }, before, after, 实时事件: events }, null, 2));
+  } else if (phase === 'c') {
+    const before = await snapshot();
+    const ranges = [];
+    for (const id of ['716791', '793803']) {
+      const native = await callIpcToData<Array<{ id: number; msgIdx: number; sendTime: number; sessionID: number }>>(cdp, 'getMessages', [{ sessionID: Number(id), count: 250, endIdx: 2147483647, sendTime: 0 }]);
+      assert.equal(native.code, 0);
+      assert.ok(Array.isArray(native.data));
+      const rows = native.data;
+      // 私聊范围越过最近200条，群范围越过最近20条；复用已有历史，不制造消息。
+      const distance = id === '716791' ? 205 : 25;
+      assert.ok(rows.length > distance, '缺少范围验收的既有历史');
+      const upper = rows[rows.length - distance]!;
+      const lower = rows[Math.max(0, rows.length - distance - 5)]!;
+      const fromTimestamp = lower.sendTime * 1000, toTimestamp = upper.sendTime * 1000;
+      const expected = rows.filter(r => r.sendTime * 1000 >= fromTimestamp && r.sendTime * 1000 <= toTimestamp).slice(-3);
+      const result = await driver.scanCompensationWindow({ sessionIds: [id], fromTimestamp, toTimestamp, maxMessagesPerSession: 3 });
+      assert.deepEqual(result.map(m => [m.id, m.msgIdx, m.sessionId]), expected.map(r => [String(r.id), r.msgIdx, String(r.sessionID)]));
+      ranges.push({ id, fromTimestamp, toTimestamp, 覆盖: '原生当前可见范围内最近3条，不代表无界全量', 原生对照: expected.map(r => ({ id: r.id, msgIdx: r.msgIdx })), SDK: result.map(m => ({ id: m.id, msgIdx: m.msgIdx })) });
+    }
+    const after = await snapshot();
+    assert.deepEqual(after, before, '范围读取改变窗口或读索引');
+    assert.deepEqual(events, [], '范围读取重放实时事件');
+    console.log(JSON.stringify({ 切片: 'T11c', ranges, before, after, 实时事件: events }, null, 2));
   } else {
     const initialWindow = (await snapshot()).windowId;
     try {

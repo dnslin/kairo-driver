@@ -91,7 +91,6 @@ export type {
   KK9Employee,
   SelectorsConfig,
   CdpConfig,
-  PollingConfig,
   CompensationScanOptions,
   DriverConfig,
   EventBridgeConfig,

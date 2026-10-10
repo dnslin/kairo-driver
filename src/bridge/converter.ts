@@ -146,7 +146,7 @@ function determineMessageType(
 }
 
 
-export type InboundNormalizationSource = 'event_bridge' | 'polling' | 'history' | 'unknown';
+export type InboundNormalizationSource = 'event_bridge' | 'history' | 'unknown';
 
 export interface InboundNormalizationDiagnostic {
   kind: 'missing_inbound_identity';
