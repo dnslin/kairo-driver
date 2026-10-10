@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CdpClient } from '../src/cdp/client.js';
 import { KK9EventBridge } from '../src/bridge/event-bridge.js';
 import { KK9Driver } from '../src/driver.js';
-import { SessionOps } from '../src/dom/session-ops.js';
-import { DEFAULT_SELECTORS } from '../src/dom/selectors.js';
 import { setDriverLogSink, type DriverLogEntry } from '../src/utils/logger.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
 import {
@@ -135,22 +133,4 @@ describe('Driver日志真实行为回归', () => {
     expect(ipc.listenerCount('message')).toBe(0);
   });
 
-  it('Vue会话读取失败保留DOM降级并仅打印固定诊断', async () => {
-    const diagnostics: unknown[][] = [];
-    const document = {
-      querySelector: () => {
-        throw new Error('测试秘密滚动列表');
-      },
-      querySelectorAll: () => [],
-    };
-    const cdp = new CdpClient(config.cdp);
-    vi.spyOn(cdp, 'evaluate').mockImplementation(script =>
-      runRendererScript(script, {
-        document,
-        console: { warn: (...args: unknown[]) => diagnostics.push(args) },
-      })
-    );
-    expect(await new SessionOps(cdp, DEFAULT_SELECTORS).getSessions()).toEqual([]);
-    expect(diagnostics).toEqual([['[KairoDriver] Vue滚动列表检查失败']]);
-  });
 });

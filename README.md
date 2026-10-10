@@ -70,7 +70,9 @@ T04 双目标SDK回显、真实新入站、本机人工本人消息、历史不�
 
 会话 `id` 是原生 `sessionID` 的字符串形式；`receiverId` 是私聊对端 UID，其他类型为原生 `typeID`；`nativeType` 保留原生类型数字。`type` 区分 `private`、`group`、`discussion`、`service` 和 `unknown`。原生会话列表不提供窗口 `active` 状态。
 
-例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。发送、撤回和窗口操作使用 `getSessions()` 返回的 `id`。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。窗口接口暂保留，不能把窗口状态当作原生查询的数据来源。
+例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。发送、撤回、历史和已读操作使用明确原生会话。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。数据查询和发送不读取当前窗口，SDK不再提供窗口切换接口。
+
+已直接删除 `getCurrentSession/selectSession`、`KK9Session.active`、`SelectorsConfig/DriverConfig.selectors`、`PreSendCheckResult`、`SessionOps/MessageOps/SendOps`、`DEFAULT_SELECTORS/resolveSelectors` 与 `DomError`，没有兼容别名。`src/dom` 已删除；保留的 `parseEmployee/parseEmployeeList` 与 `readImageAsBase64/saveImageToFile` 分别位于 `src/utils/employee.ts`、`src/utils/image.ts`，仍由包入口导出。
 
 ## 指定会话读取历史
 
@@ -153,7 +155,7 @@ await driver.sendReply(
 
 ### 原生卡片与合并转发
 
-链接、业务、应用卡片和合并转发均指定原生目标，复用本次业务回执与发送登记，不依赖编辑器、DOM 或 Vue，也不补即时气泡。语音仍保留未切换的原有显示通知，本轮不改其协议。
+链接、业务、应用卡片、合并转发及语音均指定原生目标，复用本次业务回执与发送登记，不依赖编辑器、DOM 或 Vue，也不补即时气泡。语音继续复用AMR准备与两条音频依赖补丁。
 
 `sendUrlCard({ title, summary, linkUrl, picUrl? }, options)` 使用原生链接字段；可不传图片，SDK 不伪造图片已下载或有效。`sendAppMessage({ title, content, linkUrl?, pcAppCode? }, options)` 的正文为原生 HTML；普通通知不要求应用编号，不要填造出的应用码。特定应用的打开能力须使用其真实配置。
 
@@ -175,6 +177,9 @@ await driver.sendChatRecord({
 - KK9 必须保持登录，CDP 端口只绑定 `127.0.0.1`。
 - Driver 失效或调用 `disconnect()` 后，需要创建新实例再连接。调用方负责监听 `health`、恢复连接和安排重试；Kairo 应用原有的连接监督器没有包含在本包中。
 - Driver 依赖 KK9 客户端内部接口，客户端升级后需要验证相关收发能力。
-- `pnpm test` 是自动测试，不连接真实 KK9。真机命令会读取客户端数据，部分命令还会发送消息或切换会话，操作范围见启动说明。
+- `pnpm test` 是自动测试，不连接真实 KK9。真机命令会读取客户端数据，部分命令还会发送、撤回或标已读；必须限定授权身份与原生目标，操作范围见启动说明。
+- 本机菜单撤回仍保留 `event-bridge.ts` 中已验收的Vue总线、会话撤回通知、`addRevokeMsg`及组件重建用 `MutationObserver`。这些依赖尚无已证明等价的无Vue替代；它们不用于发送、历史读取或补聊天气泡。“无DOM点击自动化”不等于“无任何Vue/DOM依赖”，也不代表C4完成。
+- 原生发送不承诺当前客户端立即显示新气泡；不通过切窗口或伪造Vue刷新掩盖差异。`unknown` 只查询原意图，不直接重发。
+- `pnpm verify` 从 `@kairo/driver` 的构建后ESM入口运行授权双目标只读烟测，先运行 `pnpm build`（或已有成功的 `pnpm check`）；不会自动构建或发送。环境与输出范围见启动说明。
 
 开发规范见 [DEVELOPMENT.md](docs/DEVELOPMENT.md)，真机检查见 [KK9-STARTUP.md](docs/KK9-STARTUP.md)。

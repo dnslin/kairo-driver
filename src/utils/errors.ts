@@ -24,12 +24,6 @@ export class CdpError extends DriverError {
   }
 }
 
-export class DomError extends DriverError {
-  constructor(message: string, originalCause?: Error) {
-    super(message, 'DOM_ERROR', originalCause);
-    this.name = 'DomError';
-  }
-}
 
 export class SendError extends DriverError {
   constructor(message: string, originalCause?: Error) {

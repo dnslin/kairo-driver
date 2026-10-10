@@ -226,13 +226,7 @@ try {
   });
 
   const sessions = await requiredStep('读取并锁定真实测试目标', async () => {
-    const actualUserId = await cdp.evaluate<string>(`
-      (() => {
-        const main = document.querySelector('.main-page')?.__vue__;
-        const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-        return String(main?.userID || editor?.userID || '');
-      })()
-    `);
+    const actualUserId = await driver.getCurrentUserId();
     if (actualUserId !== EXPECTED_USER_ID) {
       throw new Error(`登录用户不匹配: expected=${EXPECTED_USER_ID}, actual=${actualUserId}`);
     }
@@ -303,10 +297,6 @@ try {
   });
 
   await requiredStep('真实发送并精确关联私聊图片', async () => {
-    if (!(await driver.selectSession(GROUP_ID))) {
-      throw new Error('无法在图片测试前切换至授权群聊');
-    }
-    await sleep(500);
     const result = await driver.sendImage(tempImage, { targetSessionId: PRIVATE_ID });
     const candidates = await pollImageCandidates(
       imageBaselines.privateBeforeIds,

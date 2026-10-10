@@ -13,7 +13,7 @@ pnpm check
 
 | 命令              | 作用                                      |
 | ----------------- | ----------------------------------------- |
-| `pnpm build`      | 编译源码到 `dist`，生成 ESM 和类型声明    |
+| `pnpm build`      | 清除旧 `dist` 后编译源码，生成 ESM 和类型声明 |
 | `pnpm typecheck`  | 检查 TypeScript 类型                      |
 | `pnpm test`       | 运行 `tests` 中的自动测试，不连接真实 KK9 |
 | `pnpm test:watch` | 持续运行测试                              |
@@ -23,6 +23,8 @@ pnpm check
 
 `src/index.ts` 是公开入口，`src/types/index.ts` 定义接口。`examples` 保留真机诊断和回归脚本，运行方法见 [KK9-STARTUP.md](KK9-STARTUP.md)。
 
+构建先清除自身生成目录，避免已删除的DOM实现残留在产物中。`pnpm verify` 使用包的ESM公开入口而非源码，要求已有本轮构建；仅核对授权身份、双目标有限历史与档案、窗口/读索引/事件不变及监听退出。身份/目标配置见启动说明。
+
 ## 修改要求
 
 保持 Driver 的客户端 I/O 边界，应用层的重连监督、持久化和业务处理由调用方负责。对消息方向、原生消息 ID、发送状态、实例失效或去重的修改，应在 `tests` 中补充相应行为回归。
@@ -31,9 +33,11 @@ pnpm check
 
 T01/T02 的原生读取只读验收使用 `pnpm exec tsx examples/verify-native-readonly.ts <登录UID> <登录账号> <原生会话ID> <对端UID> <对端账号>`。脚本核对真实身份、目标、历史消息ID和索引，检查读索引不变；不执行聊天操作。`getRecentMessages(session, limit)` 必须显式传入原生会话实体，调用方不再先切窗口。T11已将主动范围读取切到原生分页并删除自动窗口轮询。
 
-历史中的 `C/D` 前缀标记表示原消息已撤回，返回 `isRecalled: true` 并保留原消息类型；撤回系统通知仍保留自身消息 ID。所有历史查询不重放实时事件。当前窗口会话按活动原生 ID 单独查询，不以可见会话列表缺席判断窗口不存在。Driver 的实时与历史方向都使用原生登录身份；身份为空时不沿用配置 UID。
+历史中的 `C/D` 前缀标记表示原消息已撤回，返回 `isRecalled: true` 并保留原消息类型；撤回系统通知仍保留自身消息 ID。所有历史查询不重放实时事件。T12已删除当前窗口查询与切换接口；单会话查询只接受明确原生ID，不以可见列表缺席判断原生会话不存在。Driver 的实时与历史方向都使用原生登录身份；身份为空时不沿用配置 UID。
 
-`KK9Session` 的测试实体也必须提供 `nativeType` 和 `receiverId`。`pnpm check` 的源码类型检查不覆盖全部测试；可额外运行 `pnpm exec tsc --noEmit -p tsconfig.eslint.json` 核对测试与示例。该额外检查仍存在既有的 `Promise.withResolvers` 库目标、WebSocket Buffer 类型和测试数组可空诊断，本轮不扩展修复这些无关问题。
+`KK9Session` 的测试实体也必须提供 `nativeType` 和 `receiverId`。`pnpm check` 的源码类型检查不覆盖全部测试；额外 `pnpm exec tsc --noEmit -p tsconfig.eslint.json` 仍有既有的 `Promise.withResolvers` 库目标、WebSocket Buffer 类型和测试数组可空诊断。本轮不扩展修复或重复运行这一已知无关检查。
+
+以下T03–T11为历史实施记录，旧路径和当时命令保留事实，不代表当前仍有相应窗口API；当前契约及删除项见README和文末T12记录。
 
 T03 文本发送必须指定原生会话 ID，结果为必填 `status` 的 `sent/failed/unknown`，每个结果都有 `operationId`；不再提供旧 `success` 或 `delivered` 判别。发送回归实际运行 SDK 生成的渲染脚本，测试环境没有 document/Vue；只有本次负草稿业务回执与关联正式 ID 才能确认成功。覆盖617正ID反例、普通业务失败、上传失败码-9、错草稿/错会话、回执竞态、超时/提交后失联、只移除自身监听、防重与只读查询。媒体、Fake 与示例只迁移共享结果契约，未进行后续媒体或实时协议改造。
 
@@ -222,3 +226,21 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 三项各补一项行为回归，均先失败后通过。定点命令：`pnpm exec vitest run tests/compensation-scan.test.ts`（5项）、`pnpm exec vitest run tests/bridge-org-ops.test.ts`（5项）、`pnpm exec vitest run tests/fake-driver.test.ts -t "标记当前会话已读|会话管理与组织"`（2项）。另以 `pnpm exec tsx -e` 实际调用Fake选择、标已读及两个读取接口，核对列表/当前会话均为已读、计数0、无未读提及，当前会话保持激活。
 
 修改后的 `pnpm exec tsx examples/verify-native-queries.ts c` 已核对授权身份、零UID返回值和双目标原生历史对照，窗口、读索引及事件计数不变，详见启动说明。没有在真机制造时间倒序，该边界由固定数据回归覆盖。本轮只运行一次最终 `pnpm check`，build/typecheck、33文件370项测试及lint全部通过；之后仅更新Markdown说明。未添加依赖、兼容层或其他机制，未提交或推送。
+
+## T12 清理记录
+
+T12a：员工解析迁至 `src/utils/employee.ts`，图片读取与另存迁至 `src/utils/image.ts`，保留公开工具名称。删除 `src/dom`、选择器实现及旧DOM服务导出、Driver后备服务、DomError和已移除界面功能的测试。原生媒体、AMR及两条依赖补丁未改；本机菜单撤回的已验收Vue本地通知与组件重建监听保留，不声称无任何Vue/DOM依赖。
+
+实际命令：`pnpm exec vitest run tests/org-parser.test.ts tests/message-ops.test.ts tests/bridge-org-ops.test.ts`，3文件16项通过。没有新增永久测试；图片工具原有断言改为核对完整Data URL与复制字节，原生员工与零UID边界沿用既有行为回归。LSP references初始化退出code0，未反复启动，改用全部实际调用检索补足。
+
+T12b：直接删除 `getCurrentSession/selectSession`、`KK9Session.active`、`SelectorsConfig/DriverConfig.selectors`、`PreSendCheckResult`及Fake的窗口副本、界面预检设置/计数。Driver、Bridge、Fake、全部现行示例与测试同步收口；原生单会话读取的有价值回归改用已有 `getSessionById`，不保留窗口接口别名。发送结果、主动历史范围、失效隔离与去重实现未改。
+
+实际命令：`pnpm exec vitest run tests/bridge-session-ops.test.ts tests/driver.test.ts tests/fake-driver.test.ts tests/compensation-scan.test.ts`，4文件45项通过。脚本仅独立观察窗口，显示/人工菜单场景由操作者在KK9内打开明确授权目标；不再由SDK准备或恢复界面。历史归档中的旧窗口操作保留为当时事实，不代表当前接口。
+
+T12c：删除三条过时的Vue/组件历史专用诊断，保留并迁移全部原生收发、资源、撤回、范围读取脚本。`pnpm diagnose help` 实际运行通过，不再包含switch。`pnpm verify`改从构建后包入口导入，并核对授权双目标历史、身份/档案、窗口与读索引不变、历史不重放及自身资源退出。build仅清除本工作树生成的dist再编译，旧DOM产物不进入包；没有pack、发布、依赖升级或手动重复安装。
+
+最终 `pnpm check` 通过build/typecheck、30文件336项测试及lint。首轮build/typecheck/336项已通过，仅lint报告删除界面预检后两条残留导入；删除这两条未使用导入后因该失败重跑一次通过。测试减少来自删除已移除窗口/DOM功能和mock回声，不是删除失败断言；未增加测试数量、未重跑T01–T11真机专项、媒体矩阵或T04补测，也未运行已知无关的测试全量类型检查。最终通过后仅更新Markdown记录，不重复检查。
+
+改动后真实 `pnpm verify` 通过，使用本轮清空dist后生成的 `@kairo/driver` ESM入口；登录、双目标、每目标3条ID/索引原生对照及必要档案一致，窗口511315与读索引724/153不变，实时事件0。退出后message监听仍1，自身Hook/发送观察器false、在途0，两个CDP连接disconnected且进程exit0。完整命令与元数据见启动说明T12节。
+
+保留边界：`event-bridge.ts` 未修改，仍有Vue总线、会话通知、`addRevokeMsg`、组件发现/重建监听及撤回显示名读取；它们仅服务原已验收本机菜单撤回，未作为发送或原生历史的数据源。没有已确认且经真机证明等价的无Vue本机菜单通知，本轮不尝试全局拦截或改安装包来替代。复用T05三类撤回、T03/T04实时与unknown、T06–T10媒体、T11范围/已读既有证据，不把这些旧结果称为本轮重测。T12a可达清理已交付，但彻底去除此必要依赖的条件未满足，因此T12a和C4保持未勾选；T12b/T12c完成，C2/C3与T04既有状态不变。未提交、推送、开PR、合并或发布。

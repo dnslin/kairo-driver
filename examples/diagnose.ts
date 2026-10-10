@@ -9,7 +9,6 @@
  *   status                      探测 CDP 端口与 Target 状态
  *   sessions                    读取全量会话列表 (Bridge IPC 驱动)
  *   messages <count> <target>    读取指定会话最近消息列表
- *   switch <target>             切换至指定会话
  *   send <target> <text>向目标后台发送纯文本 (不切换UI)
  *   rich <target> <text>  向目标发送整条加粗文本 (不切换UI)
  *   at <target> <uid> <name> <text>  向群聊发送指定成员提及
@@ -90,9 +89,8 @@ async function main() {
       sessions.forEach((s, i) => {
         const unreadTag = s.unread ? ` [未读${s.unreadCount ? ` (${s.unreadCount})` : ''}]` : '';
         const unreadAtTag = s.unreadAt ? ' [@提及未读]' : '';
-        const activeTag = s.active ? ' [当前激活]' : '';
         console.log(
-          `${(i + 1).toString().padStart(3)}. [${s.type.padEnd(7)}] ${s.name} (id: ${s.id})${unreadTag}${unreadAtTag}${activeTag}`
+          `${(i + 1).toString().padStart(3)}. [${s.type.padEnd(7)}] ${s.name} (id: ${s.id}, nativeType: ${s.nativeType}, receiverId: ${s.receiverId})${unreadTag}${unreadAtTag}`
         );
         if (s.lastMessage) {
           console.log(`     └─ 最新消息: ${s.lastMessage} (${s.lastMessageTime || '无时间'})`);
@@ -130,20 +128,6 @@ async function main() {
       break;
     }
 
-    case 'switch': {
-      const sessionId = requiredArgument(args[0], '目标会话');
-      await driver.connect();
-      console.log(`正在切换到会话: ${sessionId} ...`);
-      const success = await driver.selectSession(sessionId);
-      if (success) {
-        const cur = await driver.getCurrentSession();
-        console.log(`✅ 切换成功！当前激活: ${cur?.name} (${cur?.id})`);
-      } else {
-        console.error(`❌ 切换失败，未检索到目标会话`);
-      }
-      await driver.disconnect();
-      break;
-    }
 
     case 'send': {
       const target = requiredArgument(args[0], '目标会话');
@@ -423,7 +407,6 @@ async function main() {
   status                          探测 CDP 端口与 Target 状态
   sessions                        读取全量会话列表 (Bridge IPC 驱动)
   messages <count> <target>       读取指定会话最近消息列表
-  switch <target>                 切换至指定会话
   send <target> <text>            向目标会话发送纯文本 (静默后台发送，不切换UI)
   rich <target> <text>            向目标会话发送整条加粗文本，不解析Markdown
   at <target> <uid> <name> <text>  向目标群聊提及指定UID成员

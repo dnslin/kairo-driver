@@ -27,7 +27,6 @@ let phase = 'SDK';
 let targets: KK9Session[] = [];
 let installed = false;
 let connected = false;
-let initialWindow: string | null = null;
 let input: Interface | undefined;
 driver.on('recalled', event => {
   if (![privateId, groupId].includes(event.sessionId)) return;
@@ -162,7 +161,6 @@ try {
     window.__kairo_t05_capture = capture;
   })()`);
   installed = true;
-  initialWindow = (await surface()).active;
   await driver.connect(); connected = true;
   assert.equal(await driver.getCurrentUserId(), uid);
   const sdkSessions = await driver.getSessions();
@@ -170,38 +168,30 @@ try {
   const automatic: Row[] = [];
   report['SDK撤回实测'] = automatic;
   for (const target of targets) {
-    const other = targets.find(item => item.id !== target.id)!;
-    assert.equal(await driver.selectSession(other.id), true);
-    await sleep(250);
     for (const kind of ['SDK', '人工']) {
       const operationId = `${runId}:${target.id}:${kind}`;
       const result = await driver.sendText(`T05 撤回测试 ${kind} ${runId.slice(0, 8)}`, { targetSessionId: target.id, operationId });
       assert.equal(result.status, 'sent', result.error || '发送未确认，不重发');
       own.push({ id: result.messageId, sessionId: target.id, kind, operationId });
       if (kind === '人工') continue;
-      const before = await surface(); assert.equal(before.active, other.id);
+      const before = await surface();
       assert.equal(await driver.recallMessage(result.messageId, target), true);
       const after = await surface(); assert.equal(after.active, before.active);
       automatic.push({ sessionId: target.id, messageId: result.messageId, before, after });
     }
   }
-  assert.equal(await driver.selectSession(privateId), true);
-  await sleep(250);
   await setPhase('监听');
   await save();
   console.log('T05监听就绪', JSON.stringify({ runId, 人工撤回目标: own.filter(item => item.kind === '人工'), 当前窗口: await surface() }));
-  console.log('仅需：本机在私聊716791和群793803各用菜单撤回本轮“人工”文本；int2024在两目标各发一条新测试文本并自行撤回。禁止716827和旧消息。命令：private/group切换授权窗口，snapshot核对结果，finish清理本人消息并退出。');
+  console.log('仅需：本机在私聊716791和群793803各用菜单撤回本轮“人工”文本；int2024在两目标各发一条新测试文本并自行撤回。禁止716827和旧消息。请在KK9内人工打开授权窗口；snapshot核对结果，finish清理本人消息并退出。');
   input = createInterface({ input: process.stdin, output: process.stdout });
   process.once('SIGINT', () => input?.close());
   process.once('SIGTERM', () => input?.close());
   for await (const line of input) {
     const command = line.trim();
     if (command === 'finish') break;
-    if (command === 'private' || command === 'group') {
-      assert.equal(await driver.selectSession(command === 'private' ? privateId : groupId), true);
-      await sleep(250); console.log('实际组件', JSON.stringify(await surface()));
-    } else if (command === 'snapshot') await snapshot();
-    else console.log('命令：private/group/snapshot/finish');
+    if (command === 'snapshot') await snapshot();
+    else console.log('请在KK9内人工打开716791或793803；命令：snapshot/finish');
   }
   await snapshot();
 } catch (error) {
@@ -223,7 +213,6 @@ try {
         assert.ok(record && /^[CD]/.test(String(record['msgFlag'])), '清理后缺少正式撤回标记');
         return { id: message.id, sessionId: message.sessionId, msgFlag: record['msgFlag'], 已撤回: true };
       }));
-      if (initialWindow && targets.some(item => item.id === initialWindow)) await driver.selectSession(initialWindow);
     } catch (error) { report['清理错误'] = String(error); process.exitCode = 1; }
   }
   try { await driver.disconnect(); } catch (error) { report['Driver退出错误'] = String(error); process.exitCode = 1; }

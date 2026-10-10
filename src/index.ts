@@ -45,16 +45,13 @@ export type {
 // 底层 CDP 客户端
 export { CdpClient, type CdpClientOptions } from './cdp/client.js';
 
-// 后备 DOM 操作层 (保留以备极窄 UI 场景)
-export { SessionOps } from './dom/session-ops.js';
-export { MessageOps, readImageAsBase64, saveImageToFile } from './dom/message-ops.js';
-export { SendOps } from './dom/send-ops.js';
-export { parseEmployee, parseEmployeeList } from './dom/org-ops.js';
+// 纯数据解析与图片文件工具
+export { readImageAsBase64, saveImageToFile } from './utils/image.js';
+export { parseEmployee, parseEmployeeList } from './utils/employee.js';
 export { parseFormattedTextToKK } from './bridge/rich-text.js';
-export { DEFAULT_SELECTORS, resolveSelectors } from './dom/selectors.js';
 
 // 异常与日志
-export { DriverError, CdpError, DomError, SendError } from './utils/errors.js';
+export { DriverError, CdpError, SendError } from './utils/errors.js';
 export { logger, createChildLogger, setDriverLogSink } from './utils/logger.js';
 export type { DriverLogEntry, DriverLogSink } from './utils/logger.js';
 
@@ -89,7 +86,6 @@ export type {
   KK9Session,
   KK9Message,
   KK9Employee,
-  SelectorsConfig,
   CdpConfig,
   CompensationScanOptions,
   DriverConfig,
@@ -97,7 +93,6 @@ export type {
   SendResult,
   NativeSendReceipt,
   KK9RecalledEvent,
-  PreSendCheckResult,
   SendOptions,
   SendFileOptions,
   DriverEvents,

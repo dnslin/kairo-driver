@@ -594,10 +594,6 @@ async function main(): Promise<void> {
     );
     const baselineKeys = new Set(baselineMessages.map(messageKey));
 
-    ensure(
-      await primary.driver.selectSession(config.sessionId),
-      `无法切换到目标会话 ${config.sessionId}`
-    );
 
     const inboundObservation = await requiredStep('观察真实员工 inbound 消息', () =>
       waitForExpectedInbound(primary, config!, targetSession, baselineKeys)

@@ -57,7 +57,9 @@ const report: Record<string, unknown> = {
 let targets: KK9Session[] = [];
 let connected = false;
 let captureInstalled = false;
-let initialWindow: string | undefined;
+async function activeWindow(): Promise<string | null> {
+  return verification.evaluate(`(() => { const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__; return editor?.activedSes ? String(editor.activedSes.id) : null; })()`);
+}
 
 async function history(id: string): Promise<Array<Record<string, unknown>>> {
   const response = await callIpcToData<Array<Record<string, unknown>>>(
@@ -109,7 +111,6 @@ try {
   assert.equal(groupSession.receiverId, groupReceiver);
   targets = [privateSession, groupSession];
   report['身份'] = { uid, login, privateId, peerId, peerLogin, groupId, groupReceiver, groupName };
-  initialWindow = (await driver.getCurrentSession())?.id;
   await verification.evaluate(`(() => {
     const ipc = window.ipcRenderer || window.require('electron').ipcRenderer;
     const keys = ${JSON.stringify(operations.map(operation => operation.key))};
@@ -142,9 +143,7 @@ try {
   captureInstalled = true;
   for (const operation of operations) {
     const target = targets.find(session => session.id === operation.id)!;
-    const other = targets.find(session => session.id !== operation.id)!;
-    assert.equal(await driver.selectSession(other.id), true);
-    const before = (await driver.getCurrentSession())?.id;
+    const before = await activeWindow();
     await copyFile(new URL('../tests/fixtures/t07-image.png', import.meta.url), operation.file);
     const source = await decode(operation.file);
     assert.deepEqual([source.width, source.height], [640, 360]);
@@ -228,7 +227,7 @@ try {
     assert.ok(receipt['businessCode'] === null || receipt['businessCode'] === 0);
     assert.equal(receipt['draftId'], result.receipt?.draftId);
     assert.equal(receipt['msgIdx'], record['msgIdx']);
-    const after = (await driver.getCurrentSession())?.id;
+    const after = await activeWindow();
     assert.equal(after, before, '发送或只读查询改变了窗口');
     results.push({
       原生会话: target.id,
@@ -250,13 +249,11 @@ try {
   if (process.argv.includes('--inspect')) {
     const input = createInterface({ input: process.stdin, output: process.stdout });
     console.log(
-      'T07_READY：双目标已发送并重新下载解码；private/group切换查看本轮图片，finish清理退出。'
+      'T07_READY：双目标已发送并重新下载解码；请在KK9内人工打开授权目标查看本轮图片，finish清理退出。'
     );
     console.log(JSON.stringify({ 运行ID: runId, 目标: results }, null, 2));
     for await (const line of input) {
       if (line.trim() === 'finish') break;
-      if (line.trim() === 'private') await driver.selectSession(privateId);
-      if (line.trim() === 'group') await driver.selectSession(groupId);
     }
     input.close();
   }
@@ -285,13 +282,6 @@ try {
       }
     }
     report['清理'] = cleaned;
-    if (initialWindow && targets.some(target => target.id === initialWindow)) {
-      try {
-        assert.equal(await driver.selectSession(initialWindow), true);
-      } catch (error) {
-        fail('窗口恢复错误', error);
-      }
-    }
     if (captureInstalled) {
       try {
         report['独立采集'] = await verification.evaluate(

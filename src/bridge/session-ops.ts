@@ -1,13 +1,7 @@
 import type { CdpClient } from '../cdp/client.js';
 import type { KK9Session } from '../types/index.js';
-import { createChildLogger } from '../utils/logger.js';
 import { DriverError } from '../utils/errors.js';
 import { callIpcToData } from './rpc.js';
-import {
-  RENDERER_SESSION_RESOLVER_SCRIPT,
-} from './renderer-script.js';
-
-const log = createChildLogger('bridge-session-ops');
 
 interface RawConversationData {
   sessionsInfo?: Record<string, RawSessionItem>;
@@ -145,83 +139,6 @@ export class BridgeSessionOps {
     return toKK9Session(response.data, currentUserId);
   }
 
-  /**
-   * 获取当前激活会话
-   */
-  public async getCurrentSession(): Promise<KK9Session | null> {
-    const activeId = await this.cdp.evaluate<string | null>(`
-      (() => {
-        const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-        return editor?.activedSes ? String(editor.activedSes.id) : null;
-      })()
-    `);
-    if (!activeId) return null;
-    const currentUserId = await this.getCurrentUserId();
-    // KK9 主进程按单个原生 ID 返回会话行，不依赖可见列表过滤。
-    const response = await callIpcToData<RawSessionItem | null>(this.cdp, 'getSessionBySessionID', [activeId]);
-    if (response.code !== 0) {
-      throw new DriverError(`getSessionBySessionID 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
-    }
-    return response.data ? { ...toKK9Session(response.data, currentUserId), active: true } : null;
-  }
-
-  /**
-   * 切换到目标会话 (通过 Vue 状态调度 + DOM 触发)
-   */
-  public async selectSession(sessionId: string): Promise<boolean> {
-    const targetId = sessionId.trim();
-    if (!targetId) return false;
-
-    const script = `
-      (async () => {
-        const target = ${JSON.stringify(targetId)};
-        const app = document.querySelector('#app')?.__vue__;
-        const main = document.querySelector('.main-page')?.__vue__;
-        const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-        const bus = main?.$bus || app?.$bus;
-        ${RENDERER_SESSION_RESOLVER_SCRIPT}
-
-        const targetSession = resolveRendererSession(editor?.sortedSessions, target);
-        if (!targetSession) {
-          return { success: false, method: 'target_not_unique' };
-        }
-
-        const active = editor?.activedSes;
-        const isActive = Boolean(
-          active &&
-          (
-            active.sesUUID === targetSession.sesUUID ||
-            String(active.id) === String(targetSession.id)
-          )
-        );
-        if (isActive) {
-          return { success: true, method: 'already_active' };
-        }
-
-        if (bus) {
-          bus.$emit('session-click', targetSession);
-          bus.$emit('store', { type: 'commit', method: 'saveActiveSes', payload: targetSession });
-        }
-        if (typeof editor?.onActivedSesChanged === 'function') {
-          editor.onActivedSesChanged(targetSession);
-        }
-        if (!editor) {
-          return { success: false, method: 'editor_unavailable' };
-        }
-        editor.activedSes = targetSession;
-        return { success: true, method: 'vue_session_switch' };
-      })()
-    `;
-
-    try {
-      const res = await this.cdp.evaluate<{ success: boolean; method?: string }>(script);
-      log.debug({ targetId, res }, '执行 Bridge 会话切换');
-      return Boolean(res?.success);
-    } catch (err) {
-      log.warn({ targetId, err: String(err) }, 'Bridge 切换会话异常');
-      return false;
-    }
-  }
 
   /** 仅接受原生会话 ID；使用原生行的类型和最大索引，不改窗口/Vue状态。 */
   public async markSessionRead(sessionId: string): Promise<boolean> {

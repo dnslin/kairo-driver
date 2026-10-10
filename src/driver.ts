@@ -6,8 +6,6 @@ import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
 import { createMessageIdentityKey } from './bridge/converter.js';
 
-import { resolveSelectors } from './dom/selectors.js';
-import { SessionOps } from './dom/session-ops.js';
 
 import type {
   CdpConnectionLostEvent,
@@ -29,7 +27,6 @@ import type {
   KK9Session,
   KK9UrlCardOptions,
   KK9VoiceOptions,
-  SelectorsConfig,
   SendFileOptions,
   SendOptions,
   SendResult,
@@ -53,15 +50,12 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   private readonly startupGenerationId: string;
   private invalidated = false;
   private disconnectPromise?: Promise<void>;
-  private readonly selectors: SelectorsConfig;
 
-  // Bridge 优先操作服务
+  // 原生操作服务
   private readonly bridgeSessionOps: BridgeSessionOps;
   private readonly bridgeMessageOps: BridgeMessageOps;
   private readonly bridgeOrgOps: BridgeOrgOps;
 
-  // 保留旧版 DOM 操作层（作为后备回退）
-  private readonly domSessionOps: SessionOps;
 
   private readonly knownRecalledMessageKeys = new Set<string>();
   private currentUserId?: string | number;
@@ -71,7 +65,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     sendOperationStore: SendOperationStore = new InMemorySendOperationStore()
   ) {
     super();
-    this.selectors = resolveSelectors(config.selectors);
     this.cdp = new CdpClient(config.cdp, {
       startupGenerationId: config.startupGenerationId,
     });
@@ -90,8 +83,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     this.bridgeMessageOps = new BridgeMessageOps(this.cdp, sendOperationStore);
     this.bridgeOrgOps = new BridgeOrgOps(this.cdp);
 
-    // 初始化 DOM 操作层 (保留)
-    this.domSessionOps = new SessionOps(this.cdp, this.selectors);
 
     this.wireCdpEvents();
   }
@@ -165,30 +156,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.bridgeSessionOps.getSessions();
   }
 
-  private async resolveSessionTarget(target: string): Promise<KK9Session | null> {
-    const normalizedTarget = target.trim();
-    if (!normalizedTarget) return null;
-
-    const sessions = await this.getSessions();
-    const idMatch = sessions.find(session => session.id === normalizedTarget);
-    if (idMatch) return idMatch;
-
-    const nameMatches = sessions.filter(session => session.name === normalizedTarget);
-    return nameMatches.length === 1 ? nameMatches[0]! : null;
-  }
-
-  public getCurrentSession(): Promise<KK9Session | null> {
-    return this.bridgeSessionOps.getCurrentSession();
-  }
-
-  public async selectSession(sessionId: string): Promise<boolean> {
-    const targetSession = await this.resolveSessionTarget(sessionId);
-    if (!targetSession) return false;
-
-    const success = await this.bridgeSessionOps.selectSession(targetSession.id);
-    if (success) return true;
-    return this.domSessionOps.selectSession(targetSession.id);
-  }
 
   /** 指定原生会话标记已读；不按名称解析，不默认当前窗口。 */
   public markSessionRead(sessionId: string): Promise<boolean> {

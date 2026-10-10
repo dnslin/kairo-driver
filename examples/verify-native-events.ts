@@ -58,7 +58,6 @@ let targets: KK9Session[] = [];
 let captureInstalled = false;
 let connected = false;
 let phase = '自动双目标';
-let initialWindow: string | null = null;
 let queue = Promise.resolve();
 const evidenceDirectory = new URL('../tmp/', import.meta.url);
 let interrupted = false;
@@ -289,7 +288,6 @@ try {
         { id: scope.groupId, receiver: String(groupSession.typeID), name: groupSession.typeName, nativeType: groupSession.type }], baseline };
   })()`);
   captureInstalled = true;
-  initialWindow = (await snapshot()).active;
   await driver.connect(); connected = true;
   assert.equal(await driver.getCurrentUserId(), uid);
   assert.equal((await driver.getUserProfile(uid))?.loginName, login);
@@ -303,12 +301,8 @@ try {
   for (const operation of operations) {
     if (interrupted) break;
     const target = targets.find(item => item.id === operation.sessionId)!;
-    const other = targets.find(item => item.id !== target.id)!;
     const previous = await snapshot();
-    assert.equal(await driver.selectSession(other.id), true, '只在授权两目标内切换');
-    await sleep(300);
     const before = await snapshot();
-    assert.equal(before.active, other.id, '发送时必须显示另一个授权目标');
     const historyBefore = messageCount, atBefore = atCount, recallBefore = recalledCount;
     const history = await driver.getRecentMessages(target, 100);
     const native = await nativeHistory(target.id);
@@ -337,30 +331,31 @@ try {
     const repeated = await evaluate<{ requests: unknown[] }>('window.__kairo_t04_capture.snapshot()');
     assert.equal(repeated.requests.length, requestsBefore, '重复操作或只读查询增加原生提交');
     assert.equal(messageCount, eventsBefore, '重复操作或历史查询增加消息');
-    assert.equal(after.active, other.id, '原生发送擅自切窗口');
+    assert.equal(after.active, before.active, '原生发送擅自切窗口');
     automatic.push({ target: target.id, operationId: operation.operationId, result, echo: echo[0], receipt,
       previous, before, after, 历史不重放: true, 重复与查询不提交不回显: true,
+      目标未显示: before.active !== target.id,
       实际重建: previous.chats.length > 0 && before.chats.length > 0 && previous.chats[0]!.uid !== before.chats[0]!.uid });
   }
   if (automatic.length === 2) {
-    report['实测'] = ['双目标 SDK sent 与原生回执逐条关联', '双目标 outbound 自身回显一次', '目标未显示时发送与回显', '读取前后历史不重放', '重复 operationId 与只读状态查询不增加提交或回显'];
+    report['实测'] = ['双目标 SDK sent 与原生回执逐条关联', '双目标 outbound 自身回显一次', '读取前后历史不重放', '重复 operationId 与只读状态查询不增加提交或回显'];
+    if (automatic.every(row => row['目标未显示'] === true)) (report['实测'] as string[]).push('双目标未显示时发送与回显');
     if (automatic.every(row => row['实际重建'] === true)) (report['实测'] as string[]).push('授权会话切换后的实际组件重建');
   } else report['中断'] = '自动双目标尚未全部执行，保留实际已执行记录';
   await cleanupMessages();
   await save();
   if (process.argv.includes('--listen') && !interrupted) {
     phase = '协助真实来源';
-    assert.equal(await driver.selectSession(groupId), true);
     console.log('T04监听就绪', JSON.stringify({ runId, privateId, peerLogin, groupId, groupName }));
     for (const label of labels.filter(label => !label.startsWith('sdk-'))) console.log('协助标记', label, markers[label]);
-    console.log('控制命令：snapshot 记录现场；private/group 切到另一授权会话；status 准备只读状态分流观察；absent 仅在实际组件不存在时发送双目标缺席测试；cleanup 只清理本轮本人文本；finish 清理并退出。禁止删除组件或伪造IPC。');
+    console.log('控制命令：snapshot 记录现场；private/group 在人工切到另一授权会话后核对现场；status 准备只读状态分流观察；absent 仅在实际组件不存在时发送双目标缺席测试；cleanup 只清理本轮本人文本；finish 清理并退出。脚本不切窗口，禁止删除组件或伪造IPC。');
     input = createInterface({ input: process.stdin });
     try {
       for await (const command of input) {
         if (command.trim() === 'finish') break;
         if (['private', 'group'].includes(command.trim())) {
           phase = command.trim() === 'private' ? '私聊目标未显示' : '群目标未显示';
-          assert.equal(await driver.selectSession(command.trim() === 'private' ? groupId : privateId), true);
+          assert.equal((await snapshot()).active, command.trim() === 'private' ? groupId : privateId, '请先在KK9内人工切到另一个授权目标');
         } else if (command.trim() === 'cleanup') await cleanupMessages();
         else if (command.trim() === 'absent') {
           phase = '实际组件缺席';
@@ -408,7 +403,6 @@ try {
   try { await cleanupMessages(); } catch (error) { report['清理错误'] = String(error); process.exitCode = 1; }
   if (captureInstalled) {
     try {
-      if (initialWindow && [privateId, groupId].includes(initialWindow) && connected) await driver.selectSession(initialWindow);
       await sleep(300); await save();
     } catch (error) { report['末次采集错误'] = String(error); process.exitCode = 1; }
   }

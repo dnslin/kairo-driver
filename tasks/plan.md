@@ -1,6 +1,6 @@
 # 原生 SDK 改造方案
 
-状态：T01、T02、C1及T03–T10既有合并/归档状态保留，T04停止补测。T11三切片及审查修复已随PR #10合并，基线56d72b3b973f90996f1a05b11436fdae2de87a4a，最终33文件370项及build/typecheck/lint通过，完整记录见 [archive/T11.md](archive/T11.md)。当前派发 [T12](T12-handoff.md)，三批顺序收口，不补测前序，不自动勾选C2/C3/C4。
+状态：T01、T02、C1及T03–T10既有合并/归档状态保留，T04停止补测。T11三切片及审查修复已随PR #10合并，历史见 [archive/T11.md](archive/T11.md)。T12三批可达清理已交付，T12b/T12c完成，T12a因必要本机菜单Vue通知尚无等价原生替代证明不勾选；C2/C3/C4既有未完成状态不变。最终pnpm check（30文件336项及build/typecheck/lint）与本轮构建入口授权双目标只读真机通过，实际记录见 [开发说明](../docs/DEVELOPMENT.md#t12-清理记录) 和 [启动说明](../docs/KK9-STARTUP.md#t12-构建入口最小只读验收)，不补测前序、不自动提交或推进后续。
 
 ## 目标与非目标
 
