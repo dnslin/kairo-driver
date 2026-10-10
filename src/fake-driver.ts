@@ -228,6 +228,11 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     session.unread = false;
     session.unreadCount = 0;
     session.unreadAt = false;
+    if (this.currentSession?.id === session.id) {
+      this.currentSession.unread = false;
+      this.currentSession.unreadCount = 0;
+      this.currentSession.unreadAt = false;
+    }
     return Promise.resolve(true);
   }
 
