@@ -272,7 +272,7 @@ try {
     )
   );
 
-  const richText = `**${prefix} 富文本**\n字面路径 C:\\new\\notes`;
+  const richText = { text: `${prefix} 富文本\n字面路径 C:\\new\\notes`, font: { bold: true } };
   const privateRichResult = await requiredStep('真实发送私聊富文本与字面反斜杠', async () =>
     trackSendResult(
       'privateRich',
@@ -351,8 +351,6 @@ try {
         {
           messageId: groupTextResult.messageId,
           msgIdx: Number(groupTextRaw.msgIdx || 0),
-          sender: 'Kairo真实回归测试',
-          content: groupText,
         },
         replyText,
         { targetSessionId: GROUP_ID }

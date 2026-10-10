@@ -32,6 +32,7 @@ import {
 } from './send-operation.js';
 import { createNativeMessageKey, sendOperationRecordToResult } from './bridge/send-status.js';
 import { createMessageIdentityKey, normalizeNativeMessage } from './bridge/converter.js';
+import { buildMentionNodes, parseFormattedTextToKK } from './bridge/rich-text.js';
 
 export type FakeSendPayload =
   | FormattedText
@@ -215,10 +216,12 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async sendText(text: string, options?: SendOptions): Promise<SendResult> {
+    if (options?.replyTo !== undefined) return this.sendReply(options.replyTo, text, options);
     return this.executeSendAction('text', 'text', text, options);
   }
 
   public async sendRichText(content: FormattedText, options?: SendOptions): Promise<SendResult> {
+    if (options?.replyTo !== undefined) return this.sendReply(options.replyTo, content, options);
     return this.executeSendAction('rich-text', 'richText', content, options);
   }
 
@@ -330,9 +333,27 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     });
     const claim = await this.sendOperationStore.claim({ operationId, fingerprint });
     if (!claim.claimed) return sendOperationRecordToResult(claim.operation);
+    let textError: string | undefined;
+    if (['text', 'rich-text', 'reply'].includes(operationType)) {
+      try {
+        const parsed = parseFormattedTextToKK(payload as FormattedText);
+        const nodes = buildMentionNodes(mentions);
+        if (!parsed.plainText.trim() && (operationType === 'reply' || nodes.length === 0)) throw new Error('文本内容不能为空');
+        if (operationType === 'reply') {
+          const target = typeof replyTo === 'string' ? { messageId: replyTo } : replyTo;
+          if (!target || !/^[1-9]\d*$/.test(target.messageId) ||
+              Object.keys(target).some(key => key !== 'messageId' && key !== 'msgIdx')) throw new Error('引用必须指定原生消息ID及可选准确索引');
+          const message = this.messages.find(item => item.sessionId === options?.targetSessionId && item.id === target.messageId &&
+            (target.msgIdx === undefined || item.msgIdx === target.msgIdx));
+          if (!message || message.isRecalled || !message.senderId || !message.msgIdx) throw new Error('未在指定会话找到可引用的原生消息');
+        }
+      } catch (error) { textError = String(error); }
+    }
     let outcome: SendOutcome;
     if (!options?.targetSessionId?.trim()) {
       outcome = { status: 'failed', error: '发送必须指定明确原生会话ID', isPreTrigger: true };
+    } else if (textError) {
+      outcome = { status: 'failed', error: textError, isPreTrigger: true };
     } else if (!supportsReplyAndMentions && (replyTo !== undefined || mentions !== undefined)) {
       outcome = {
         status: 'failed',

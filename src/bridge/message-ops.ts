@@ -16,7 +16,7 @@ import { recallNativeMessage } from './recall-ops.js';
 import { sendNativeImage } from './image-ops.js';
 import { sendNativeStructuredMessage } from './card-ops.js';
 import { prepareVoice } from './voice-ops.js';
-import { parseFormattedTextToKK } from '../dom/rich-text.js';
+import { buildMentionNodes, parseFormattedTextToKK } from './rich-text.js';
 import {
   BridgeSendStatus,
   createNativeMessageKey,
@@ -50,96 +50,37 @@ import { createChildLogger } from '../utils/logger.js';
 const log = createChildLogger('bridge-message-ops');
 const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const FIND_REPLY_TARGET_SCRIPT = `
-  function normalizeReplyTargetMessage(message) {
-    if (!message || typeof message !== 'object') return null;
-    const normalized = { ...message };
-    if (typeof normalized.content === 'string') {
-      try {
-        normalized.content = JSON.parse(normalized.content);
-      } catch (error) {}
-    }
-    return normalized;
-  }
-
   async function findReplyTargetMessage(sessionID, targetRef) {
-    const targetMessageId = String(targetRef.messageId);
-    const targetMsgIdx = Number(targetRef.msgIdx);
-    if (Number.isFinite(targetMsgIdx) && targetMsgIdx > 0) {
-      const exactResponse = await callIpc(
-        'getMessageBySessionIDAndMsgIdx',
-        sessionID,
-        targetMsgIdx
-      );
-      const exactMessages = Array.isArray(exactResponse?.data)
-        ? exactResponse.data
-        : exactResponse?.data
-          ? [exactResponse.data]
-          : [];
-      const exactMatch = exactMessages.find(
-        message => String(message?.id) === targetMessageId
-      );
-      if (exactMatch) return normalizeReplyTargetMessage(exactMatch);
+    const matches = message => String(message?.id) === targetRef.messageId &&
+      String(message?.sessionID) === String(sessionID);
+    let target;
+    if (targetRef.msgIdx !== undefined) {
+      const response = await callIpc('getMessageBySessionIDAndMsgIdx', sessionID, targetRef.msgIdx);
+      if (response?.code !== 0) throw new Error('getMessageBySessionIDAndMsgIdx失败 (' + response?.code + '): ' + (response?.error || response?.message || ''));
+      const messages = Array.isArray(response.data) ? response.data : response.data ? [response.data] : [];
+      target = messages.find(message => matches(message) && message.msgIdx === targetRef.msgIdx);
+    } else {
+      let endIdx = 2147483647;
+      while (endIdx > 0) {
+        const response = await callIpc('getMessages', { sessionID, count: 200, endIdx, sendTime: 0 });
+        if (response?.code !== 0 || !Array.isArray(response.data)) throw new Error('getMessages引用查询失败 (' + response?.code + '): ' + (response?.error || response?.message || '无效数组'));
+        target = response.data.find(matches);
+        if (target || response.data.length < 200) break;
+        const next = Math.min(...response.data.map(message => Number(message.msgIdx))) - 1;
+        if (!Number.isSafeInteger(next) || next >= endIdx) throw new Error('getMessages引用查询未取得可继续读取的索引');
+        endIdx = next;
+      }
     }
-
-    let endIdx = 2147483647;
-    for (let page = 0; page < 10; page++) {
-      const response = await callIpc('getMessages', {
-        sessionID,
-        count: 200,
-        endIdx,
-        sendTime: 0
-      });
-      if (response?.code !== 0 || !Array.isArray(response.data)) return null;
-
-      const match = response.data.find(
-        message => String(message?.id) === targetMessageId
-      );
-      if (match) return normalizeReplyTargetMessage(match);
-      if (response.data.length < 200) return null;
-
-      const indices = response.data
-        .map(message => Number(message?.msgIdx))
-        .filter(index => Number.isFinite(index) && index > 0);
-      if (indices.length === 0) return null;
-      const nextEndIdx = Math.min(...indices) - 1;
-      if (nextEndIdx >= endIdx) return null;
-      endIdx = nextEndIdx;
+    if (!target) throw new Error('未在指定会话找到被回复的原生消息');
+    if (!Number.isSafeInteger(Number(target.sender)) || Number(target.sender) <= 0 ||
+        !Number.isSafeInteger(target.msgIdx) || target.msgIdx <= 0 || /^[CD]/.test(String(target.msgFlag))) {
+      throw new Error('引用目标缺少原生发送者/准确索引或已撤回');
     }
-    return null;
+    const content = typeof target.content === 'string' ? JSON.parse(target.content) : target.content;
+    if (!content || typeof content !== 'object') throw new Error('引用目标缺少原生内容');
+    return { ...target, content };
   }
 `;
-function buildMentionNodes(mentions?: SendOptions['mentions']): Array<Record<string, unknown>> {
-  if (!mentions) return [];
-  const list = Array.isArray(mentions) ? mentions : [mentions];
-  const nodes: Array<Record<string, unknown>> = [];
-
-  for (const m of list) {
-    if (m === 'all' || m === '全体成员' || m === '所有人') {
-      nodes.push({
-        type: 2,
-        replyMemberID: 0,
-        replyMemberType: 1,
-        replyMemberName: '全体成员',
-      });
-    } else if (typeof m === 'string') {
-      nodes.push({
-        type: 2,
-        replyMemberID: 0,
-        replyMemberType: 0,
-        replyMemberName: m.replace(/^@/, ''),
-      });
-    } else if (typeof m === 'object' && m !== null) {
-      nodes.push({
-        type: 2,
-        replyMemberID: Number(m.uid) || 0,
-        replyMemberType: 0,
-        replyMemberName: m.name.replace(/^@/, ''),
-      });
-    }
-  }
-
-  return nodes;
-}
 
 export class BridgeMessageOps {
   private readonly sendStatus: BridgeSendStatus;
@@ -291,13 +232,13 @@ export class BridgeMessageOps {
   }
 
   public sendText(text: string, options: SendOptions = {}): Promise<SendResult> {
-    if (options.replyTo) return this.sendReply(options.replyTo, text, options);
+    if (options.replyTo !== undefined) return this.sendReply(options.replyTo, text, options);
     return this.executeOperation('text', options, text, (key, bound) =>
       this.sendRichTextRaw(text, bound, key)
     );
   }
   public sendRichText(content: FormattedText, options: SendOptions = {}): Promise<SendResult> {
-    if (options.replyTo) return this.sendReply(options.replyTo, content, options);
+    if (options.replyTo !== undefined) return this.sendReply(options.replyTo, content, options);
     return this.executeOperation('rich-text', options, content, (key, bound) =>
       this.sendRichTextRaw(content, bound, key)
     );
@@ -307,8 +248,14 @@ export class BridgeMessageOps {
     options: SendOptions,
     key: string
   ): Promise<SendOutcome> {
-    const parsed = parseFormattedTextToKK(content);
-    const mentions = buildMentionNodes(options.mentions);
+    let parsed;
+    let mentions;
+    try {
+      parsed = parseFormattedTextToKK(content);
+      mentions = buildMentionNodes(options.mentions);
+    } catch (error) {
+      return Promise.resolve({ status: 'failed', error: String(error), isPreTrigger: true });
+    }
     if (!parsed.plainText.trim() && mentions.length === 0)
       return Promise.resolve({ status: 'failed', error: '文本内容不能为空', isPreTrigger: true });
     const nodes = mentions.flatMap(node => [node, { type: 0, text: ' ' }]);
@@ -327,10 +274,20 @@ export class BridgeMessageOps {
     options: SendOptions = {}
   ): Promise<SendResult> {
     return this.executeOperation('reply', { ...options, replyTo }, content, (key, bound) => {
-      const parsed = parseFormattedTextToKK(content);
+      const target = typeof replyTo === 'string' ? { messageId: replyTo } : replyTo;
+      let parsed;
+      let mentions;
+      try {
+        if (!target || !/^[1-9]\d*$/.test(target.messageId) || !Number.isSafeInteger(Number(target.messageId)) ||
+            (target.msgIdx !== undefined && (!Number.isSafeInteger(target.msgIdx) || target.msgIdx <= 0)) ||
+            Object.keys(target).some(field => field !== 'messageId' && field !== 'msgIdx')) throw new Error('引用必须指定原生消息ID及可选准确索引，不接受摘要或发送者');
+        parsed = parseFormattedTextToKK(content);
+        mentions = buildMentionNodes(bound.mentions);
+      } catch (error) {
+        return Promise.resolve({ status: 'failed', error: String(error), isPreTrigger: true });
+      }
       if (!parsed.plainText.trim())
         return Promise.resolve({ status: 'failed', error: '回复内容不能为空', isPreTrigger: true });
-      const mentions = buildMentionNodes(bound.mentions);
       const nodes = mentions.flatMap(node => [node, { type: 0, text: ' ' }]);
       nodes.push({ type: 0, text: parsed.plainText });
       return this.sendContent(
@@ -338,8 +295,8 @@ export class BridgeMessageOps {
         { content: nodes, font: parsed.font },
         bound,
         key,
-        [],
-        typeof replyTo === 'string' ? { messageId: replyTo } : replyTo
+        mentions.map(node => node['replyMemberID']),
+        target
       );
     });
   }
@@ -386,7 +343,7 @@ export class BridgeMessageOps {
     options: SendOptions | SendFileOptions,
     key: string,
     mentionIds: unknown[] = [],
-    replyTo?: Partial<KK9ReplyTarget>
+    replyTo?: KK9ReplyTarget
   ): Promise<SendOutcome> {
     const started = Date.now();
     const timeout = options.verifyTimeoutMs ?? 8000;
@@ -415,15 +372,18 @@ export class BridgeMessageOps {
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
       const { identity, session: targetSes, receiver } = context;
       let messageContent = data.content;
+      let mentionIds = data.mentionIds;
       if (data.contentType === 13) {
         ${FIND_REPLY_TARGET_SCRIPT}
-        const targetMessage = await findReplyTargetMessage(targetSes.id, data.replyTo);
-        if (!targetMessage) return { status: 'failed', error: '未在指定会话找到被回复的原生消息', isPreTrigger: true };
-        messageContent = { type: 'Reply', replyedID: targetMessage.sender || 0, replyedName: targetMessage.senderName || '', replyedNameEN: targetMessage.senderNameEN || '', replyedNameTC: targetMessage.senderNameTC || '', replyedMsgId: targetMessage.id, replyedMsgIndex: targetMessage.msgIdx, replyedContentType: targetMessage.contentType, replyedContent: targetMessage.content?.replyContent || targetMessage.content, replyContent: data.content };
+        let targetMessage;
+        try { targetMessage = await findReplyTargetMessage(targetSes.id, data.replyTo); }
+        catch (error) { return { status: 'failed', error: '引用会话 ' + targetSes.id + ' 消息 ' + data.replyTo.messageId + ': ' + String(error), isPreTrigger: true }; }
+        mentionIds = [Number(targetMessage.sender), ...mentionIds];
+        messageContent = { replyedID: Number(targetMessage.sender), replyedName: targetMessage.senderName || '', replyedNameEN: targetMessage.senderNameEN || '', replyedNameTC: targetMessage.senderNameTC || '', replyedMsgId: targetMessage.id, replyedMsgIndex: targetMessage.msgIdx, replyedContentType: targetMessage.contentType, replyedContent: targetMessage.content.replyContent || targetMessage.content, replyContent: { content: data.content.content }, font: data.content.font };
       }
       // 草稿设备列允许NULL；正式核心从CORE_DATA使用当前注册设备，不以空值冒充设备身份。
       const msgObj = { contentType: data.contentType, content: messageContent, sender: identity.id, senderName: identity.name, senderNameEN: identity.name_en || '', senderNameTC: identity.name_tc || '', receiver, sessionType: targetSes.type, sessionID: targetSes.id,
-        sendTime: Math.floor(Date.now()/1000), status: 'sending', type: 0, atState: data.mentionIds.length ? 0 : 1, atMemberIDList: data.mentionIds, msgFlag: data.key };
+        sendTime: Math.floor(Date.now()/1000), status: 'sending', type: 0, atState: data.contentType === 13 ? 2 : mentionIds.length ? 0 : 1, atMemberIDList: mentionIds, msgFlag: data.key };
       const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
       if (submission.failure) return submission.failure;
       return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };

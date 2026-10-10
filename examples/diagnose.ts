@@ -11,8 +11,8 @@
  *   messages <count> <target>    读取指定会话最近消息列表
  *   switch <target>             切换至指定会话
  *   send <target> <text>向目标后台发送纯文本 (不切换UI)
- *   rich <target> <md>  向目标后台发送富文本/Markdown (不切换UI)
- *   at <target> <text>  向群聊后台发送带 @全体成员 的消息 (不切换UI)
+ *   rich <target> <text>  向目标发送整条加粗文本 (不切换UI)
+ *   at <target> <uid> <name> <text>  向群聊发送指定成员提及
  *   reply <target> <msgId> <text>向指定消息发送引用回复
  *   image <target> <imgPath>向目标发送图片
  *   file <target> <filePath>向目标发送文件
@@ -33,7 +33,7 @@ import type {
   KK9UrlCardOptions,
   SendResult,
 } from '../src/index.js';
-import { decodeCliEscapedLineBreaks } from '../src/dom/rich-text.js';
+
 
 const cdpUrl = process.env['CDP_URL'] || 'http://127.0.0.1:9222';
 const pageMatch = process.env['PAGE_MATCH'] || 'renderer.html';
@@ -41,6 +41,9 @@ const pageMatch = process.env['PAGE_MATCH'] || 'renderer.html';
 function requiredArgument(value: string | undefined, name: string): string {
   if (!value?.trim()) throw new Error(`必须指定${name}，使用 pnpm diagnose help 查看用法`);
   return value.trim();
+}
+function decodeCliEscapedLineBreaks(text: string): string {
+  return text.replace(/\\+n/g, '\n').replace(/\\+r/g, '\r');
 }
 
 const driver = new KK9Driver({
@@ -169,12 +172,10 @@ async function main() {
 
     case 'rich': {
       const target = requiredArgument(args[0], '目标会话');
-      const md = decodeCliEscapedLineBreaks(
-        requiredArgument(args.slice(1).join(' '), 'Markdown 内容')
-      );
+      const text = decodeCliEscapedLineBreaks(requiredArgument(args.slice(1).join(' '), '文本内容'));
       await driver.connect();
-      console.log(`正在向 [${target}] 后台静默发送富文本/Markdown...`);
-      const res = await driver.sendRichText(md, { targetSessionId: target });
+      console.log(`正在向 [${target}] 后台发送整条加粗文本...`);
+      const res = await driver.sendRichText({ text, font: { bold: true } }, { targetSessionId: target });
       if (res.status === 'sent') {
         console.log(`✅ 富文本发送成功！耗时: ${res.verifyLatencyMs || 0}ms (UI保持原状)`);
       } else {
@@ -186,12 +187,14 @@ async function main() {
 
     case 'at': {
       const target = requiredArgument(args[0], '目标会话');
-      const text = decodeCliEscapedLineBreaks(args[1] || '请各位关注当前工单进展');
+      const uid = requiredArgument(args[1], '被提及UID');
+      const name = requiredArgument(args[2], '被提及显示名');
+      const text = decodeCliEscapedLineBreaks(requiredArgument(args.slice(3).join(' '), '文本内容'));
       await driver.connect();
-      console.log(`正在向群聊 [${target}] 后台发送 @全体成员 消息...`);
+      console.log(`正在向群聊 [${target}] 发送 @${name} (UID ${uid})...`);
       const res = await driver.sendRichText(text, {
         targetSessionId: target,
-        mentions: ['all'],
+        mentions: { uid, name },
       });
       if (res.status === 'sent') {
         console.log(`✅ @ 提及消息发送成功！(UI保持原状)`);
@@ -426,8 +429,8 @@ async function main() {
   messages <count> <target>       读取指定会话最近消息列表
   switch <target>                 切换至指定会话
   send <target> <text>            向目标会话发送纯文本 (静默后台发送，不切换UI)
-  rich <target> <markdown>        向目标会话发送富文本/Markdown (静默后台发送)
-  at <target> <text>              向目标群聊发送带 @全体成员 消息 (静默后台发送)
+  rich <target> <text>            向目标会话发送整条加粗文本，不解析Markdown
+  at <target> <uid> <name> <text>  向目标群聊提及指定UID成员
   reply <target> <msgId> <text>   向目标消息发送引用回复
   image <target> <path>           向目标会话发送图片
   file <target> <path>            向目标会话发送本地文件

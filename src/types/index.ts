@@ -66,52 +66,25 @@ export type MessageDirection = 'inbound' | 'outbound' | 'unknown';
 /** 发送操作最终状态；unknown 不等同于确定失败。 */
 export type SendStatus = 'sent' | 'failed' | 'unknown';
 
-/**
- * 文本样式属性
- */
-export interface TextStyle {
-  /** 16进制颜色如 "#ff4d4f" 或颜色名称 */
+/** 整条消息的字体；字号单位为pt，不支持逐段样式。 */
+export interface TextFont {
+  /** 六位十六进制颜色，如 #1890ff。 */
   color?: string;
-  /** 字号大小，如 14, 16, "16px" */
-  fontSize?: number | string;
-  /** 粗体 */
+  fontSize?: number;
+  fontFamily?: string;
   bold?: boolean;
-  /** 斜体 */
   italic?: boolean;
-  /** 下划线 */
   underline?: boolean;
-  /** 删除线 */
-  strikethrough?: boolean;
-  /** 背景高亮色 */
-  backgroundColor?: string;
 }
 
-/**
- * 富文本片段
- */
-export interface TextSegment {
-  text: string;
-  style?: TextStyle;
-}
+/** 字符串按原文发送；对象指定整条消息字体，不解析HTML或Markdown。 */
+export type FormattedText = string | { text: string; font?: TextFont };
 
-/**
- * 格式化富文本输入，支持纯文本、片段数组或原始 HTML 对象
- */
-export type FormattedText = string | TextSegment[] | { html: string };
-
-/**
- * 引用/回复目标定义
- */
+/** 只提供原生身份；发送者和引用内容必须从指定目标会话历史取得。 */
 export interface KK9ReplyTarget {
-  /** KK9 原生消息 ID，无法取得时该消息不得进入公开入站模型 */
-  messageId?: string;
-
-  /** 原生消息索引 msgIdx，不是消息 ID 或 DOM 列表位置。 */
+  messageId: string;
+  /** 可选准确索引，用于直接定位；提供后必须与消息ID匹配。 */
   msgIdx?: number;
-  /** 被引用者昵称 */
-  sender?: string;
-  /** 被引用消息摘要内容 */
-  content?: string;
 }
 
 /**
@@ -121,6 +94,8 @@ export interface KK9ReplyInfo {
   replyToSender: string;
   replyToContent: string;
   replyToId?: string;
+  replyToSenderId?: string;
+  replyToMsgIdx?: number;
 }
 
 /**
@@ -427,8 +402,8 @@ export interface SendOptions {
   verifyTimeoutMs?: number;
   /** 引用/回复目标 */
   replyTo?: string | KK9ReplyTarget;
-  /** 群聊 @ 提及目标（支持单个/多个成员或 'all' 全体成员） */
-  mentions?: KK9MentionTarget | KK9MentionTarget[] | string | string[];
+  /** 提及必须提供用户UID与显示名；全体成员只能显式使用all，不按昵称解析。 */
+  mentions?: KK9MentionTarget | 'all' | Array<KK9MentionTarget | 'all'>;
 }
 
 export interface SendFileOptions {
