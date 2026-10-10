@@ -76,8 +76,9 @@ const FIND_REPLY_TARGET_SCRIPT = `
         !Number.isSafeInteger(target.msgIdx) || target.msgIdx <= 0 || /^[CD]/.test(String(target.msgFlag))) {
       throw new Error('引用目标缺少原生发送者/准确索引或已撤回');
     }
-    const content = typeof target.content === 'string' ? JSON.parse(target.content) : target.content;
-    if (!content || typeof content !== 'object') throw new Error('引用目标缺少原生内容');
+    const isText = target.contentType === 0;
+    const content = !isText && typeof target.content === 'string' ? JSON.parse(target.content) : target.content;
+    if (isText ? typeof content !== 'string' : !content || typeof content !== 'object') throw new Error('引用目标缺少原生内容');
     return { ...target, content };
   }
 `;

@@ -47,6 +47,22 @@ describe('T08 原生文本、提及与引用', () => {
       mentions: { mentionedUsers: ['91003', '91002'] }, replyTo: { replyToSender: '作者', replyToContent: '原生正文', replyToId: '88', replyToSenderId: '91003', replyToMsgIdx: 7 } });
   });
 
+  it('原生纯文本历史按原文引用，保留消息身份而不要求JSON对象', async () => {
+    const native = createNativeSendRuntime();
+    const original = '原生纯文本\n**字面标记**';
+    native.records.push({ id: 88, msgIdx: 7, sessionID: 93001, sender: 91002, senderName: '员工甲', contentType: 0, content: original });
+    const ops = new BridgeMessageOps(native.cdp);
+    const history = await ops.getRecentMessages({ id: '93001', name: '员工甲', type: 'private', nativeType: 0, receiverId: '91002', unread: false }, 1, 91001);
+    expect(history[0]).toMatchObject({ id: '88', msgIdx: 7, content: original });
+    const result = await ops.sendReply({ messageId: '88', msgIdx: 7 }, '回复', { targetSessionId: '93001' });
+    expect(result.status).toBe('sent');
+    expect(native.drafts[0]).toMatchObject({ sessionID: 93001, contentType: 13, content: {
+      replyedID: 91002, replyedName: '员工甲', replyedMsgId: 88, replyedMsgIndex: 7,
+      replyedContentType: 0, replyedContent: original,
+      replyContent: { content: [{ type: 0, text: '回复' }] },
+    } });
+  });
+
   it('拒绝旧HTML、逐段样式及不支持字体，不静默丢弃后发送', async () => {
     const native = createNativeSendRuntime();
     const ops = new BridgeMessageOps(native.cdp);
@@ -70,6 +86,7 @@ describe('T08 原生文本、提及与引用', () => {
     const result = await new BridgeMessageOps(native.cdp).sendReply({ messageId: '88', msgIdx: 7 }, '答复', { targetSessionId: '93001' });
     expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
     expect(native.drafts).toEqual([]);
+    native.records.push({ id: 89, msgIdx: 8, sessionID: 93002, sender: 91003, contentType: 4, content: { content: [{ type: 0, text: '同会话另一条消息' }] } });
     const wrongIndex = await new BridgeMessageOps(native.cdp).sendReply({ messageId: '88', msgIdx: 8 }, '答复', { targetSessionId: '93002' });
     expect(wrongIndex).toMatchObject({ status: 'failed', isPreTrigger: true });
     expect(native.drafts).toEqual([]);
