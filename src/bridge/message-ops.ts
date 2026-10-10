@@ -210,8 +210,7 @@ export class BridgeMessageOps {
         seen.add(message.id);
         selected.push(message);
       }
-      if (page.raw.length < 200 || selected.length >= limit ||
-          page.messages.some(message => message.timestamp < fromTimestamp)) break;
+      if (page.raw.length < 200 || selected.length >= limit) break;
       const next = Math.min(...page.raw.map(row => row && typeof row === 'object' && 'msgIdx' in row ? Number(row.msgIdx) : NaN)) - 1;
       if (!Number.isSafeInteger(next) || next >= endIdx) throw new DriverError(`getMessages 会话 ${session.id} endIdx ${endIdx} 无法继续分页`, 'IPC_INVALID_RESPONSE');
       endIdx = next;

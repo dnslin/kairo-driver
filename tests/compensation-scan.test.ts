@@ -4,7 +4,7 @@ import { FakeKK9Driver } from '../src/fake-driver.js';
 import { FakeIpcRenderer, runRendererScript } from './helpers/renderer-runtime.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
 
-function rangeDriver(failOlderPage = false) {
+function rangeDriver(failOlderPage = false, sendTimes?: readonly number[]) {
   const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
   const pages: Array<{ sessionID: number; endIdx: number; count: number }> = [];
   const ipc = new FakeIpcRenderer(({ args: [method, value] }) => {
@@ -18,9 +18,9 @@ function rangeDriver(failOlderPage = false) {
     const query = value as { sessionID: number; endIdx: number; count: number };
     pages.push(query);
     if (failOlderPage && query.endIdx < 2147483647) return { code: 627, error: '历史第二页失败' };
-    const rows = Array.from({ length: 405 }, (_, i) => ({
+    const rows = Array.from({ length: sendTimes?.length ?? 405 }, (_, i) => ({
       id: i + 1000, msgIdx: i + 1, sessionID: query.sessionID,
-      sender: 3585, contentType: 0, content: '测试范围', sendTime: 1700000000 + i,
+      sender: 3585, contentType: 0, content: '测试范围', sendTime: sendTimes?.[i] ?? 1700000000 + i,
     }));
     return { code: 0, data: rows.filter(r => r.msgIdx <= query.endIdx).slice(-query.count) };
   });
@@ -42,6 +42,14 @@ describe('主动原生历史范围读取', () => {
     ]);
     expect(pages.filter(p => p.sessionID === 716791).map(p => p.endIdx)).toEqual([2147483647, 205]);
     expect(events).toEqual([]);
+  });
+
+  it('页内消息时间倒序不阻止读取下一页仍在范围内的记录', async () => {
+    const sendTimes = Array.from({ length: 201 }, (_, i) => 1700000000 + i);
+    sendTimes[1] = 1699999999;
+    const { driver } = rangeDriver(false, sendTimes);
+    const result = await driver.scanCompensationWindow({ fromTimestamp: 1700000000000, toTimestamp: 1700000200000, maxMessagesPerSession: 200, sessionIds: ['716791'] });
+    expect(result.map(m => m.msgIdx)).toEqual([1, ...Array.from({ length: 199 }, (_, i) => i + 3)]);
   });
 
   it('后页失败不返回已收集部分，保留会话、页索引和原生错误', async () => {
