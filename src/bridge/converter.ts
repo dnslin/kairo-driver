@@ -52,6 +52,9 @@ function extractTextContent(content: unknown, notifyMsg?: unknown, contentType?:
   if (content && typeof content === 'object') {
     const obj = content as Record<string, unknown>;
     const nativeContentType = Number(contentType);
+    if (nativeContentType === 13 && obj['replyContent']) {
+      return extractTextContent(obj['replyContent'], notifyMsg, 4);
+    }
     if (nativeContentType === 2) {
       const duration = Number(obj['duration']);
       return Number.isFinite(duration) && duration > 0 ? `[语音: ${duration}秒]` : '[语音]';
@@ -78,6 +81,7 @@ function extractTextContent(content: unknown, notifyMsg?: unknown, contentType?:
             const contentNode = node as Record<string, unknown>;
             if (typeof contentNode['text'] === 'string') return contentNode['text'];
             if (contentNode['type'] === 1) return '[图片]';
+            if (contentNode['type'] === 2) return '@' + toSafeString(contentNode['replyMemberName']);
           }
           return '';
         })
@@ -394,15 +398,18 @@ export function normalizeNativeMessage(
           }
         : undefined;
       let atMe = Boolean(
-        item['atMe'] || item['isAtMe'] || rawMentions?.isAtMe || item['atState'] === 2
+        item['atMe'] || item['isAtMe'] || rawMentions?.isAtMe
       );
       let atAll = Boolean(
-        item['atAll'] || item['isAtAll'] || rawMentions?.isAtAll || item['atState'] === 3
+        item['atAll'] || item['isAtAll'] || rawMentions?.isAtAll
       );
 
-      const atMemberList = Array.isArray(item['atMemberIDList'])
-        ? item['atMemberIDList']
-        : (rawMentions?.mentionedUsers ?? []);
+      let nativeAtMembers = item['atMemberIDList'];
+      if (typeof nativeAtMembers === 'string') {
+        try { nativeAtMembers = JSON.parse(nativeAtMembers); }
+        catch { nativeAtMembers = undefined; }
+      }
+      const atMemberList = Array.isArray(nativeAtMembers) ? nativeAtMembers : (rawMentions?.mentionedUsers ?? []);
       if (
         atMemberList.includes('all') ||
         atMemberList.includes(-1) ||
@@ -436,6 +443,15 @@ export function normalizeNativeMessage(
           replyToContent: toSafeString(r['content'] ?? r['text'] ?? r['replyToContent'], ''),
           replyToId:
             (r['id'] ?? r['replyToId']) ? toSafeString(r['id'] ?? r['replyToId']) : undefined,
+        };
+      }
+      if (Number(item['contentType']) === 13 && contentObj) {
+        replyTo = {
+          replyToSender: toSafeString(contentObj['replyedName']),
+          replyToSenderId: toSafeString(contentObj['replyedID']),
+          replyToContent: extractTextContent(contentObj['replyedContent'], undefined, contentObj['replyedContentType']),
+          replyToId: toSafeString(contentObj['replyedMsgId']),
+          replyToMsgIdx: Number(contentObj['replyedMsgIndex']),
         };
       }
 

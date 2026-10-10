@@ -34,12 +34,13 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
 
     const resGroup = await driver.sendRichText('群聊测试', {
       targetSessionId: 'test-group',
-      mentions: ['all'],
+      mentions: [{ uid: 91002, name: '员工甲' }],
     });
     expect(resGroup.status).toBe('sent');
     expect(driver.recordedCalls).toHaveLength(2);
+    driver.setMessages([{ id: '1001', sessionId: 'test-group', sessionName: '群甲', sessionType: 'group', sender: '员工甲', senderId: '91002', msgIdx: 7, content: '原文', time: '', isMe: false, direction: 'inbound', timestamp: 1 }]);
 
-    const resReply = await driver.sendReply('msg_1001', '回复内容', {
+    const resReply = await driver.sendReply('1001', '回复内容', {
       targetSessionId: 'test-group',
     });
     expect(resReply.status).toBe('sent');

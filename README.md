@@ -120,6 +120,29 @@ async function sendToSession(targetSessionId: string, text: string) {
 
 还支持图片、文件、富文本、引用回复、卡片、语音和撤回；完整方法见 [IKK9Driver](src/types/index.ts)。图片和文件路径属于运行 Driver 的机器，跨机器接入时由调用方传输实际文件。
 
+### 原生富文本、提及与引用
+
+`sendRichText` 接受原文字符串或 `{ text, font }`。`font` 作用于整条消息，支持 `bold/italic/underline`、`fontSize`（pt）、`fontFamily` 和 `color`（`#RRGGBB`）。不解析 HTML、Markdown 或逐段样式；旧 HTML/片段对象及删除线、高亮等字段在提交前明确失败，不静默丢失格式。旧 HTML/CSS 转换导出和 `TextStyle/TextSegment` 已删除，字体类型改为 `TextFont`。
+
+```ts
+await driver.sendRichText(
+  { text: '整条加粗\n保留换行', font: { bold: true, fontSize: 14, color: '#1890ff' } },
+  { targetSessionId: privateSession.id }
+);
+await driver.sendText('请查收', {
+  targetSessionId: groupSession.id,
+  mentions: { uid: 3585, name: 'int2024' },
+});
+await driver.sendReply(
+  { messageId: original.id, msgIdx: original.msgIdx },
+  '收到',
+  { targetSessionId: groupSession.id, mentions: { uid: 3585, name: 'int2024' } }
+);
+```
+
+提及不再接受任意昵称字符串，UID 不得用会话 ID 代替。原生全体提及保留显式 `'all'`，是否有权限由真实业务回执决定；T08 真机验收不使用它。引用目标只接受消息 ID 和可选准确索引；发送者及真实内容从指定会话原生历史取得，不能提供摘要或伪造身份。提供索引时必须同时匹配消息 ID，不退回其他记录。引用自动携带被引用作者 UID，正文提及另行加入同一原生元数据。历史及实时规范化保留引用作者 UID、原生索引和正文提及。
+
+
 ## 运行边界
 
 - KK9 必须保持登录，CDP 端口只绑定 `127.0.0.1`。

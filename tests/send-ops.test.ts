@@ -86,21 +86,6 @@ describe('原生发送保留的内容准备与失败边界', () => {
     expect(result.error).toContain('不能为空');
     expect(native.drafts).toEqual([]);
   });
-  it('富文本与群提及内容准备保持可用，业务回执确认正式ID', async () => {
-    const native = createNativeSendRuntime();
-    const result = await new BridgeMessageOps(native.cdp).sendRichText(
-      [{ text: '提醒', style: { bold: true } }, { text: '完成' }],
-      { targetSessionId: '93002', mentions: ['all'] }
-    );
-    expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
-    expect(native.records[0]?.['content']).toMatchObject({
-      content: [
-        { type: 2, replyMemberType: 1, replyMemberName: '全体成员' },
-        { type: 0, text: ' ' },
-        { type: 0, text: '提醒完成' },
-      ],
-    });
-  });
   it('引用只按指定会话正式消息ID查找，未找到不会退成普通文本', async () => {
     const native = createNativeSendRuntime();
     const ops = new BridgeMessageOps(native.cdp);
@@ -119,7 +104,6 @@ describe('原生发送保留的内容准备与失败边界', () => {
     const result = await ops.sendText('回复', { targetSessionId: '93001', replyTo: '999' });
     expect(result.status).toBe('sent');
     expect(native.records[1]?.['content']).toMatchObject({
-      type: 'Reply',
       replyedMsgId: 999,
       replyedMsgIndex: 8,
       replyedID: 91002,

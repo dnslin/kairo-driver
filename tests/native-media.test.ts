@@ -341,7 +341,7 @@ describe('原生卡片与语音发送集成', () => {
       {
         targetSessionId: String(session.id),
         operationId: 'op-card-mentions',
-        mentions: ['all'],
+        mentions: [{ uid: 91002, name: '员工甲' }],
       }
     );
     const replyResult = await operations.sendAppMessage(
@@ -528,7 +528,7 @@ describe('原生卡片与语音发送集成', () => {
     const native = createSuccessfulNativeRuntime();
     const result = await new BridgeMessageOps(native.cdp).sendVoice(
       { text: '不应上传到语音服务' },
-      { targetSessionId: String(session.id), mentions: ['all'] }
+      { targetSessionId: String(session.id), mentions: [{ uid: 91002, name: '员工甲' }] }
     );
     expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
     expect(prepareVoice).not.toHaveBeenCalled();

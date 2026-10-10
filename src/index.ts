@@ -50,15 +50,7 @@ export { SessionOps } from './dom/session-ops.js';
 export { MessageOps, readImageAsBase64, saveImageToFile } from './dom/message-ops.js';
 export { SendOps } from './dom/send-ops.js';
 export { OrgOps, parseEmployee, parseEmployeeList } from './dom/org-ops.js';
-export {
-  escapeHtml,
-  styleToCss,
-  hexToKkBgrColor,
-  formatSegmentsToHtml,
-  markdownToKKHtml,
-  formattedTextToHtml,
-  parseFormattedTextToKK,
-} from './dom/rich-text.js';
+export { parseFormattedTextToKK } from './bridge/rich-text.js';
 export { DEFAULT_SELECTORS, resolveSelectors } from './dom/selectors.js';
 
 // 异常与日志
@@ -80,8 +72,7 @@ export type {
   KK9MessageOrigin,
   MessageDirection,
   SendStatus,
-  TextStyle,
-  TextSegment,
+  TextFont,
   FormattedText,
   KK9ReplyTarget,
   KK9ReplyInfo,

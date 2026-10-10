@@ -167,30 +167,31 @@ describe('发送操作 Store port 与 FakeDriver', () => {
 
   it('同一 operationId 更换回复或提及参数时在发送前拒绝', async () => {
     const driver = new FakeKK9Driver();
+    driver.setMessages([{ id: '1001', sessionId: 'session-1', sessionName: '群甲', sessionType: 'group', sender: '员工甲', senderId: '91002', msgIdx: 7, content: '原文', time: '', isMe: false, direction: 'inbound', timestamp: 1 }]);
     await driver.sendText('回答内容', {
       targetSessionId: 'session-1',
       operationId: 'op-reply',
-      replyTo: 'message-1',
+      replyTo: '1001',
     });
 
     await expect(
       driver.sendText('回答内容', {
         targetSessionId: 'session-1',
         operationId: 'op-reply',
-        replyTo: 'message-2',
+        replyTo: '1002',
       })
     ).rejects.toThrow();
 
     await driver.sendRichText('回答内容', {
       targetSessionId: 'session-1',
       operationId: 'op-mentions',
-      mentions: ['employee-1'],
+      mentions: [{ uid: 91002, name: '员工甲' }],
     });
     await expect(
       driver.sendRichText('回答内容', {
         targetSessionId: 'session-1',
         operationId: 'op-mentions',
-        mentions: ['employee-2'],
+        mentions: [{ uid: 91003, name: '员工乙' }],
       })
     ).rejects.toThrow();
     expect(driver.recordedCalls).toHaveLength(2);
