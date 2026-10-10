@@ -382,6 +382,24 @@ cmd /c "set KK9_REAL_TEST_CONFIRM=5761:716791:793803&& set KK9_STAGE1_CONFIRM=57
 
 
 
+## T10 原生语音专项验证
+
+```cmd
+cmd /c "set KK9_REAL_TEST_CONFIRM=5761:716791:793803&& set KK9_STAGE1_CONFIRM=5761:3585:716791&& pnpm exec tsx examples/verify-native-voice.ts --inspect"
+```
+
+脚本重新核对登录0123040139/UID5761、int2024/UID3585/私聊716791及测试123/793803/29467/nativeType1，禁止同名群716827。仅私聊一条真实Edge TTS无敏感短句、群一条自建2.013秒16kHz双声道WAV（低音后接高音，末尾有声），覆盖两输入、两路由与末帧。TTS不可用保留原错误，继续本地输入，不用假音频冒充合成，不自动重试或重发unknown。
+
+原生语音`data`内联携带AMR，不走文件上传URI。正式记录的`filepath`由KK9从AMR生成播放WAV，不能传原始输入文件路径。脚本对正式AMR回解与实际播放WAV逐采样核对、检查显示秒数和本地音频有声结尾；这些只证明资源，不冒充接收端实际播放。`T10_READY`后保留现有消息，接收端一次确认有声、内容正确和结尾完整后输入`confirmed`，否则`finish`清理并保留未验收；只撤回本轮意图键与本人身份匹配的语音，只退出自有采集/Driver监听及删除自建临时文件，不动原生缓存。
+
+本轮实际使用相同双门禁的Node入口运行修改后的SDK：`node --import tsx -e "process.env.KK9_REAL_TEST_CONFIRM='5761:716791:793803';process.env.KK9_STAGE1_CONFIRM='5761:3585:716791';process.argv.push('--inspect');import('./examples/verify-native-voice.ts')"`。运行ID`7c3edebd-203c-4ac3-b794-bcab953bb28d`，身份/两目标核对通过，真实Edge TTS可用；私聊正式137587287/索引720，AMR4416字节、33600采样/4.20秒、显示5秒；群正式137587293/索引151，AMR2127字节、16160采样/2.02秒、显示3秒。群末尾150ms回解RMS为0.1779，补齐不足一帧的有效结尾未丢失；TTS末尾有自然静音，不据此判断末字听感。
+
+两条负草稿均-26，正式业务回执code0且无业务失败，正式播放WAV分别67244/32364字节，与各自AMR回解一致。每个意图一次insert和sendMessageNew，重复调用与只读查询无新增；提交未携带filepath。元数据保存在`tmp/t10-live-evidence.json`及按运行ID报告，不保存音频或私人聊天正文。用户对这两条已有消息一次明确确认“两条播放及结尾均正常”，不是以sent、AMR头、回解或播放控件替代听感；没有要求补发。
+
+本轮唯一一次最终`pnpm check`通过build/typecheck、32文件376项测试及lint。未真机制造编码器故障、服务器业务失败或上传-9；语音本身不走文件上传。没有前序专项、T04补测、即时气泡刷新修复或额外全量测试类型检查；没有提交、推送、开PR、合并或实施后续任务。
+
+接收端确认后向同一实例输入`confirmed`完成清理：仅撤回137587287与137587293，并核对原生C/D标记。采集残留false、DriverHook残留false、在途0，自建WAV/Edge TTS临时文件均已删除；原生播放缓存与旧消息未删除。验收进程exit0，T10验收完成，交付后停止。
+
 ## 卡片与语音验证
 
 ```powershell

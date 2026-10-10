@@ -260,9 +260,8 @@ async function encodeWithKk9(
 export async function prepareVoice(
   cdp: CdpClient,
   options: KK9VoiceOptions
-): Promise<{ duration: number; data: string; filepath?: string }> {
+): Promise<{ duration: number; data: string }> {
   let source: Buffer;
-  let filepath: string | undefined;
   if ((typeof options.text === 'string') === (typeof options.filePath === 'string')) {
     throw new DriverError('语音输入必须且只能提供 text 或 filePath', 'VOICE_INPUT_INVALID');
   }
@@ -283,7 +282,7 @@ export async function prepareVoice(
     if (!requestedPath) {
       throw new DriverError('语音文件路径不能为空', 'VOICE_INPUT_INVALID');
     }
-    filepath = path.resolve(requestedPath);
+    const filepath = path.resolve(requestedPath);
     try {
       source = await readFile(filepath);
     } catch (error) {
@@ -299,5 +298,6 @@ export async function prepareVoice(
   const { pcmBase64, sourceSampleCount } = toKk9Pcm(decoded);
   const encoded = await encodeWithKk9(cdp, pcmBase64, sourceSampleCount);
   const duration = Math.max(1, Math.ceil(encoded.decodedSamples / KK9_SAMPLE_RATE));
-  return filepath ? { duration, data: encoded.data, filepath } : { duration, data: encoded.data };
+  // filepath 由 KK9 从正式消息的 AMR data 生成 WAV；原始输入路径不是播放资源。
+  return { duration, data: encoded.data };
 }

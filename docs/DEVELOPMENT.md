@@ -171,3 +171,16 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 
 真实SDK完成本轮原文、回复、撤回原文及群合并，正式记录与原版详情均确认撤回占位、回复正文保留及对端名正确；三条本人消息已撤回，Driver Hook无残留、在途0。现有授权私聊由本人创建，对端创建的反向分支只由回归覆盖；没有伪造原生会话或修改数据库。详细证据及截图限制见启动说明PR #8小节。公开类型、Fake记录契约、调用方和示例无需变化；没有提交、推送或合并。
 
+
+## T10 原生语音准备与发送
+
+继续复用现有MP3/WAV解码、混为单声道、8kHz重采样、KK9内置AMR-NB编码及Edge TTS。保留`pnpm-workspace.yaml`、`@audio/decode-wav@1.5.0`与`node-edge-tts@1.2.10`两条补丁，依赖已可解析，未重新安装或升级。KK9编码器严格小于帧边界，现有额外补帧保留；时长来自回解采样数向上取整到秒，不用输入文件大小或假时长。
+
+准备结果只包含`duration/data`：`data`是随消息内联传输的AMR Base64，不走文件上传；原版收到正式消息后调用`amrnb.toWAV`写入`<正式ID>.wav`，其`filepath`供播放。移除准备结果中的原始WAV/MP3路径，避免把输入文件误当正式播放资源。删除共享结构化提交中最后的语音document/Vue通知，不整体删除DOM或改撤回捕获，不修即时气泡刷新。
+
+公开`KK9VoiceOptions`、Driver门面、Fake与`e2e-media.ts`输入契约不变，无需兼容层或调用迁移。T10使用独立`examples/verify-native-voice.ts`，不运行包含卡片的全能力e2e；固定授权身份、两目标和双确认门禁，真实TTS与自建WAV各一条。合并核对负草稿业务回执、正式ID/资源/时长、防重与只读查询；接收端播放单独确认，资源回解不能替代听感。
+
+两项现有回归先复现错误：原始路径误入准备内容、无document环境在正式业务成功后返回unknown。修正后`pnpm exec vitest run tests/voice-ops.test.ts tests/node-edge-tts-boundary.test.ts tests/native-media.test.ts -t "prepareVoice|node-edge-tts|语音"`通过32项（14项未选中），覆盖既有输入/解码/编码/合成失败、取消、固定目标与防重，不增加源码字符串、快照或回声测试。LSP references初始化退出code0，未重启，已按实际源码/测试/示例调用检索核对。真机结果见启动说明T10节。
+
+本轮唯一一次最终`pnpm check`通过build/typecheck、32文件376项测试及lint；之后仅更新Markdown记录，没有重复检查。修改后的真实SDK双目标各一条，用户一次明确确认“两条播放及结尾均正常”；正式记录、时长、确认与清理见启动说明T10节。未真机制造编码器故障、上传-9或服务器业务失败，未运行前序专项或已知无关测试全量类型检查。
+
