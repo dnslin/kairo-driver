@@ -117,8 +117,15 @@ export async function sendNativeStructuredMessage(
             const item = rows.find(row => String(row.id) === ref.messageId && row.msgIdx === ref.msgIdx && String(row.sessionID) === record.sourceSessionId);
             if (!item || /^[CDE]/.test(String(item.msgFlag))) throw new Error('合并来源消息不存在、索引不符或已撤回: ' + ref.messageId);
             if (!Number.isSafeInteger(Number(item.sender)) || Number(item.sender) <= 0 || !item.senderName?.trim() || !Number.isFinite(Number(item.sendTime))) throw new Error('合并来源消息缺少真实作者或发送时间: ' + ref.messageId);
-            const content = item.contentType === 0 ? item.content : typeof item.content === 'string' ? JSON.parse(item.content) : item.content;
+            let content = item.contentType === 0 ? item.content : typeof item.content === 'string' ? JSON.parse(item.content) : item.content;
             if (item.contentType === 0 ? typeof content !== 'string' : !content || typeof content !== 'object') throw new Error('合并来源消息内容无效: ' + ref.messageId);
+            if (item.contentType === 13) {
+              const replied = await callIpc('getMessageByMsgId', content.replyedMsgId);
+              if (replied?.code !== 0) throw new Error('getMessageByMsgId 引用目标 ' + content.replyedMsgId + ' 失败 (' + replied?.code + '): ' + (replied?.error || replied?.message || ''));
+              if (/^[CDE]/.test(String(replied.data?.msgFlag))) {
+                content = { ...content, replyedContentType: 4, replyedContent: { content: [{ type: 0, text: '消息已被撤回' }] } };
+              }
+            }
             msgArray.push({
               id: item.id, msgIdx: item.msgIdx, senderID: item.sender,
               senderName: item.senderName,
@@ -133,7 +140,9 @@ export async function sendNativeStructuredMessage(
           messageContent = {
             msgArray, sessionType: source.session.type, sessionID: source.session.id,
             senderID: myUid, senderName: myName,
-            typeID: source.receiver, typeName: source.session.typeName || source.session.name
+            typeID: source.receiver,
+            typeName: source.session.type === 0 && String(source.session.typeID) === String(myUid)
+              ? source.session.createrName : source.session.typeName || source.session.name
           };
         } catch (error) {
           return { status: 'failed', error: '合并记录准备失败: ' + String(error), isPreTrigger: true };

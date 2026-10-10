@@ -90,6 +90,11 @@ export function createNativeSendRuntime(
             message['sessionID'] === request.args[1] && message['msgIdx'] === request.args[2]
         ),
       };
+    if (method === 'getMessageByMsgId')
+      return {
+        code: config.queryCode ?? 0,
+        data: records.find(message => String(message['id']) === String(request.args[1])),
+      };
     if (method === 'cancelMessage') {
       if (config.cancelCode) return { code: config.cancelCode, error: '原生拒绝撤回' };
       const target = request.args[1];

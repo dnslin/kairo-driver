@@ -192,6 +192,62 @@ describe('原生卡片与语音发送集成', () => {
     expect(merged.msgArray.map(item => item['contentType'])).toEqual([4, 4]);
   });
 
+  it('合并引用回复时隐藏已撤回的引用正文，保留正常引用和回复正文', async () => {
+    const native = createNativeSendRuntime();
+    const reply = (messageId: number) => ({
+      replyedMsgId: messageId,
+      replyedContentType: 4,
+      replyedContent: { content: [{ type: 0, text: '引用原文' }] },
+      replyContent: { content: [{ type: 0, text: '回复正文' }] },
+    });
+    native.records.push(
+      { id: 80, msgIdx: 6, sessionID: 93001, msgFlag: 'C:op:原操作' },
+      { id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原生账号', sendTime: 1700000001, contentType: 13, content: JSON.stringify(reply(80)), msgFlag: '' },
+      { id: 82, msgIdx: 8, sessionID: 93001, msgFlag: '' },
+      { id: 83, msgIdx: 9, sessionID: 93001, sender: 91002, senderName: '员工甲', sendTime: 1700000002, contentType: 13, content: JSON.stringify(reply(82)), msgFlag: '' }
+    );
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }, { messageId: '83', msgIdx: 9 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result.status).toBe('sent');
+    const merged = native.drafts[0]?.['content'] as { msgArray: Array<{ content: { replyedContent: unknown; replyedContentType: number; replyContent: unknown } }> };
+    expect(merged.msgArray.map(item => item.content.replyedContent)).toEqual([
+      { content: [{ type: 0, text: '消息已被撤回' }] },
+      { content: [{ type: 0, text: '引用原文' }] },
+    ]);
+    expect(merged.msgArray.map(item => item.content.replyedContentType)).toEqual([4, 4]);
+    expect(merged.msgArray.map(item => item.content.replyContent)).toEqual([
+      { content: [{ type: 0, text: '回复正文' }] },
+      { content: [{ type: 0, text: '回复正文' }] },
+    ]);
+  });
+
+  it('合并引用目标查询失败时保留错误且不提交旧引用正文', async () => {
+    const native = createNativeSendRuntime({ queryCode: 627 });
+    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原生账号', sendTime: 1700000001, contentType: 13,
+      content: { replyedMsgId: 80, replyedContentType: 4, replyedContent: { content: [{ type: 0, text: '旧引用正文' }] }, replyContent: { content: [{ type: 0, text: '回复正文' }] } }, msgFlag: '' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringMatching(/getMessageByMsgId.*627/) });
+    expect(native.drafts).toEqual([]);
+  });
+
+  it('对端创建私聊的合并标题使用与对端UID对应的创建者名称', async () => {
+    const native = createNativeSendRuntime();
+    Object.assign(native.sessions[0]!, { typeID: 91001, typeName: '原生账号', creater: 91002, createrName: '实际对端' });
+    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 91002, senderName: '实际对端', sendTime: 1700000001, contentType: 0, content: '测试正文', msgFlag: '' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result.status).toBe('sent');
+    expect(native.drafts[0]?.['content']).toMatchObject({ typeID: 91002, typeName: '实际对端' });
+    expect(normalizeNativeMessage(native.drafts[0])[0]?.content).toBe('原生账号与实际对端的聊天记录');
+  });
+
   it('合并索引指向另一消息时在创建草稿前失败，不借另一会话或假ID补齐', async () => {
     const native = createNativeSendRuntime();
     native.records.push({ id: 82, msgIdx: 8, sessionID: 93001, sender: 91001, senderName: '本人', sendTime: 1700000000, contentType: 0, content: '不是请求的消息' });
