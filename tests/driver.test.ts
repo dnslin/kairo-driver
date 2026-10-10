@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { KK9Driver } from '../src/driver.js';
 import type { KK9EventBridge } from '../src/bridge/event-bridge.js';
-import type { IKK9Driver, KK9Employee, KK9Message, KK9Session } from '../src/types/index.js';
+import type { IKK9Driver, KK9Session } from '../src/types/index.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
 import { FakeIpcRenderer, runRendererScript } from './helpers/renderer-runtime.js';
 import { CdpError } from '../src/utils/errors.js';
@@ -128,7 +128,7 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     }
   });
 
-  it('轮询跳过历史撤回记录与通知，普通文本和其他系统通知仍正常派发', async () => {
+  it('历史保留撤回记录与通知及普通系统记录，但不派发实时事件', async () => {
     const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
     const internals = getDriverTestInternals(driver);
     const session: KK9Session = {
@@ -178,104 +178,8 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     const history = await driver.getRecentMessages(session, 10);
     expect(history.map(message => message.id)).toEqual(['1001', '1002', '1003', '1004']);
     expect(events).toEqual([]);
-    await internals.collectAndEmitMessages(session, 10);
-    await internals.collectAndEmitMessages(session, 10);
-    expect(events).toEqual(['消息:1003', '消息:1004']);
   });
 
-  it('startPolling 与 stopPolling 应正确切换轮询状态', () => {
-    const driver = new KK9Driver({
-      cdp: {
-        url: 'http://127.0.0.1:9222',
-        pageMatch: 'renderer.html',
-      },
-      polling: {
-        intervalMs: 100,
-      },
-    });
-
-    driver.startPolling();
-    // 重复调用不应抛错
-    driver.startPolling();
-    driver.stopPolling();
-    expect(driver.getStatus()).toBe('disconnected');
-  });
-
-  it('collectAndEmitMessages 应触发 message 与专用的 at 事件', async () => {
-    const driver = new KK9Driver({
-      cdp: {
-        url: 'http://127.0.0.1:9222',
-        pageMatch: 'renderer.html',
-      },
-    });
-    const internals = getDriverTestInternals(driver);
-
-    const receivedMessages: KK9Message[] = [];
-    const receivedAtMessages: KK9Message[] = [];
-
-    driver.on('message', msg => {
-      receivedMessages.push(msg);
-    });
-
-    driver.on('at', msg => {
-      receivedAtMessages.push(msg);
-    });
-
-    const mockMessages: KK9Message[] = [
-      {
-        id: 'fp_1',
-        sessionId: '0-91002',
-        sessionName: 'test-employee',
-        sessionType: 'private',
-        sender: 'test-employee',
-        content: '私聊咨询',
-        time: '12:01',
-        isMe: false,
-        direction: 'inbound',
-        atMe: false,
-        timestamp: Date.now(),
-      },
-      {
-        id: 'fp_2',
-        sessionId: '1-92001',
-        sessionName: 'test-group',
-        sessionType: 'group',
-        sender: '群员B',
-        content: '@机器人 请查一下数据',
-        time: '12:02',
-        isMe: false,
-        direction: 'inbound',
-        atMe: true,
-        mentions: {
-          isAtMe: true,
-          isAtAll: false,
-          mentionedUsers: ['机器人'],
-        },
-        timestamp: Date.now() + 1000,
-      },
-    ];
-
-    Object.assign(internals.bridgeMessageOps, {
-      getRecentMessages: vi.fn().mockResolvedValue(mockMessages),
-    });
-
-    await internals.collectAndEmitMessages(
-      {
-        id: '93002',
-        name: 'test-group',
-        type: 'group',
-        nativeType: 1,
-        receiverId: '92001',
-        unread: true,
-      },
-      10
-    );
-
-    expect(receivedMessages).toHaveLength(2);
-    expect(receivedAtMessages).toHaveLength(1);
-    expect(receivedAtMessages[0]?.content).toContain('@机器人');
-    expect(receivedAtMessages[0]?.sessionName).toBe('test-group');
-  });
 
   it('确认发送提供正式回执和快捷撤回，unknown不提供成功标记', async () => {
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
@@ -374,7 +278,7 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     }
   );
 
-  it('Driver 顶层必须拒绝全局重名会话的 select 与 markRead', async () => {
+  it('Driver 顶层拒绝重名会话的 select', async () => {
     const driver = new KK9Driver({
       cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
     });
@@ -385,13 +289,10 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     ]);
     internals.bridgeSessionOps.selectSession = vi.fn().mockResolvedValue(true);
     internals.domSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-    internals.bridgeSessionOps.markSessionRead = vi.fn().mockResolvedValue(true);
 
     expect(await driver.selectSession('test-group')).toBe(false);
-    expect(await driver.markSessionRead('test-group')).toBe(false);
     expect(internals.bridgeSessionOps.selectSession).not.toHaveBeenCalled();
     expect(internals.domSessionOps.selectSession).not.toHaveBeenCalled();
-    expect(internals.bridgeSessionOps.markSessionRead).not.toHaveBeenCalled();
   });
 
   it('会话管理应优先调用 Bridge 会话服务', async () => {
@@ -423,7 +324,6 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     internals.bridgeSessionOps.getSessions = vi.fn().mockResolvedValue(mockSessions);
     internals.bridgeSessionOps.getCurrentSession = vi.fn().mockResolvedValue(mockSessions[0]);
     internals.bridgeSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-    internals.bridgeSessionOps.markSessionRead = vi.fn().mockResolvedValue(true);
 
     const sessions = await driver.getSessions();
     expect(sessions).toHaveLength(2);
@@ -435,57 +335,29 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     expect(switched).toBe(true);
     expect(internals.bridgeSessionOps.selectSession).toHaveBeenCalledWith('93002');
 
-    const markRes = await driver.markSessionRead('test-group');
-    expect(markRes).toBe(true);
   });
 
-  it('Bridge 已读失败时不得通过 DOM 隐藏红点并伪报成功', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
-    });
-    const internals = getDriverTestInternals(driver);
-    driver.getSessions = vi
-      .fn()
-      .mockResolvedValue([
-        { id: '0-91002', name: 'test-employee', type: 'private', unread: false },
-      ]);
-    internals.bridgeSessionOps.markSessionRead = vi.fn().mockResolvedValue(false);
-    internals.domSessionOps.markSessionRead = vi.fn().mockResolvedValue(true);
-
-    const result = await driver.markSessionRead('0-91002');
-
-    expect(result).toBe(false);
-    expect(internals.domSessionOps.markSessionRead).not.toHaveBeenCalled();
+  it('已读名称不解析为原生目标，原生失败保留错误', async () => {
+    const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
+    const ipc = new FakeIpcRenderer(({ args: [method] }) => method === 'getSessionBySessionID'
+      ? { code: 0, data: { id: 93001, type: 0, maxMessageIndex: 12 } }
+      : { code: 627, error: '已读失败' });
+    getDriverTestInternals(driver).cdp.evaluate = (script: string) => runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout });
+    expect(await driver.markSessionRead('test-group')).toBe(false);
+    await expect(driver.markSessionRead('93001')).rejects.toThrow(/readMessage.*93001.*627.*已读失败/);
   });
 
-  it('组织架构查询应优先调用 Bridge 组织架构服务', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
+  it('原生正常空组织与缺席档案不触发窗口回退', async () => {
+    const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
+    const ipc = new FakeIpcRenderer(({ args: [method] }) => {
+      if (method === 'getDepartmentVisible') return { code: 0, data: [] };
+      if (method === 'getMemberDetail') return { code: 0, data: null };
+      throw new Error('不应降级查询');
     });
-    const internals = getDriverTestInternals(driver);
-
-    const mockEmployee: KK9Employee = {
-      id: 91001,
-      loginName: 'TEST-EMP-001',
-      name: '测试员工',
-      position: 'IT开发工程师',
-      deptPaths: [
-        { id: 15, name: '测试公司' },
-        { id: 29, name: 'IT组' },
-      ],
-      updatedAt: Date.now(),
-    };
-
-    internals.bridgeOrgOps.getOrgEmployees = vi.fn().mockResolvedValue([mockEmployee]);
-    internals.bridgeOrgOps.getUserProfile = vi.fn().mockResolvedValue(mockEmployee);
-
-    const employees = await driver.getOrgEmployees(5000);
-    expect(employees).toHaveLength(1);
-    expect(employees[0]?.name).toBe('测试员工');
-
-    const profile = await driver.getUserProfile(91001);
-    expect(profile).not.toBeNull();
-    expect(profile?.loginName).toBe('TEST-EMP-001');
+    getDriverTestInternals(driver).cdp.evaluate = (script: string) =>
+      runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout });
+    await expect(driver.getOrgEmployees()).resolves.toEqual([]);
+    await expect(driver.getUserProfile(9999)).resolves.toBeNull();
   });
 
 

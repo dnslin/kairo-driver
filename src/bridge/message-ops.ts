@@ -188,28 +188,58 @@ export class BridgeMessageOps {
     limit = 20,
     currentUserId?: string | number
   ): Promise<KK9Message[]> {
+    return (await this.getHistoryPage(session, limit, 2147483647, currentUserId)).messages;
+  }
+
+  /** 按原生索引向前读取，返回范围内最近的有限条记录；不承诺不可见历史全量。 */
+  public async getMessagesInRange(
+    session: KK9Session,
+    fromTimestamp: number,
+    toTimestamp: number,
+    limit: number,
+    currentUserId?: string | number
+  ): Promise<KK9Message[]> {
+    let endIdx = 2147483647;
+    const selected: KK9Message[] = [];
+    const seen = new Set<string>();
+    while (endIdx > 0 && selected.length < limit) {
+      const page = await this.getHistoryPage(session, 200, endIdx, currentUserId);
+      for (let i = page.messages.length - 1; i >= 0 && selected.length < limit; i--) {
+        const message = page.messages[i]!;
+        if (message.timestamp < fromTimestamp || message.timestamp > toTimestamp || seen.has(message.id)) continue;
+        seen.add(message.id);
+        selected.push(message);
+      }
+      if (page.raw.length < 200 || selected.length >= limit) break;
+      const next = Math.min(...page.raw.map(row => row && typeof row === 'object' && 'msgIdx' in row ? Number(row.msgIdx) : NaN)) - 1;
+      if (!Number.isSafeInteger(next) || next >= endIdx) throw new DriverError(`getMessages 会话 ${session.id} endIdx ${endIdx} 无法继续分页`, 'IPC_INVALID_RESPONSE');
+      endIdx = next;
+    }
+    return selected.reverse();
+  }
+
+  private async getHistoryPage(
+    session: KK9Session, limit: number, endIdx: number, currentUserId?: string | number
+  ): Promise<{ raw: unknown[]; messages: KK9Message[] }> {
     const sessionId = session?.id?.trim();
     if (!sessionId || !/^-?[0-9]+$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId))) {
       throw new DriverError('历史读取必须指定原生会话 ID', 'INVALID_SESSION_ID');
     }
     const response = await callIpcToData<unknown[]>(this.cdp, 'getMessages', [
-      {
-        sessionID: Number(sessionId),
-        count: Math.max(1, limit),
-        endIdx: 2147483647,
-        sendTime: 0,
-      },
-    ]);
+      { sessionID: Number(sessionId), count: Math.max(1, limit), endIdx, sendTime: 0 },
+    ]).catch((err: unknown) => {
+      throw new DriverError(`getMessages 会话 ${sessionId} endIdx ${endIdx}: ${String(err)}`, 'IPC_QUERY_FAILED', err instanceof Error ? err : undefined);
+    });
     if (response.code !== 0) {
       throw new DriverError(
-        `getMessages 会话 ${sessionId} 失败 (${response.code}): ${response.error || response.message || ''}`,
+        `getMessages 会话 ${sessionId} endIdx ${endIdx} 失败 (${response.code}): ${response.error || response.message || ''}`,
         'IPC_QUERY_FAILED'
       );
     }
     if (!Array.isArray(response.data)) {
-      throw new DriverError(`getMessages 会话 ${sessionId} 未返回有效数组`, 'IPC_INVALID_RESPONSE');
+      throw new DriverError(`getMessages 会话 ${sessionId} endIdx ${endIdx} 未返回有效数组`, 'IPC_INVALID_RESPONSE');
     }
-    return normalizeNativeMessage(
+    const messages = normalizeNativeMessage(
       {
         messages: response.data,
         session: { id: sessionId, name: session.name, type: session.type },
@@ -230,6 +260,7 @@ export class BridgeMessageOps {
         },
       }
     );
+    return { raw: response.data, messages };
   }
 
   public sendText(text: string, options: SendOptions = {}): Promise<SendResult> {

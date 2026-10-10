@@ -49,7 +49,7 @@ export { CdpClient, type CdpClientOptions } from './cdp/client.js';
 export { SessionOps } from './dom/session-ops.js';
 export { MessageOps, readImageAsBase64, saveImageToFile } from './dom/message-ops.js';
 export { SendOps } from './dom/send-ops.js';
-export { OrgOps, parseEmployee, parseEmployeeList } from './dom/org-ops.js';
+export { parseEmployee, parseEmployeeList } from './dom/org-ops.js';
 export { parseFormattedTextToKK } from './bridge/rich-text.js';
 export { DEFAULT_SELECTORS, resolveSelectors } from './dom/selectors.js';
 
@@ -91,7 +91,6 @@ export type {
   KK9Employee,
   SelectorsConfig,
   CdpConfig,
-  PollingConfig,
   CompensationScanOptions,
   DriverConfig,
   EventBridgeConfig,

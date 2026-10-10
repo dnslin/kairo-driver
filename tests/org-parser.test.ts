@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { CdpClient } from '../src/cdp/client.js';
-import { OrgOps, parseEmployee, parseEmployeeList } from '../src/dom/org-ops.js';
+import { describe, expect, it } from 'vitest';
+import { parseEmployee, parseEmployeeList } from '../src/dom/org-ops.js';
 
-describe('OrgOps 与员工档案解析清洗测试 (TDD Red -> Green)', () => {
+describe('员工档案解析清洗', () => {
   describe('parseEmployee: 单个员工对象字段映射与清洗', () => {
     it('应正确解析包含完整字段的标准员工对象 (驼峰与下划线混合兼容)', () => {
       const raw = {
@@ -144,98 +143,4 @@ describe('OrgOps 与员工档案解析清洗测试 (TDD Red -> Green)', () => {
     });
   });
 
-  describe('OrgOps: 基于 CDP 客户端的通讯录抽取与单点查询', () => {
-    it('getEmployees 应通过 CDP evaluate 抽取通讯录数据并返回标准化 KK9Employee 列表', async () => {
-      const mockRawList = [
-        {
-          id: 101,
-          login_name: 'A0101',
-          name: '孙七',
-          pos: '安全运维工程师',
-          region: '深圳研发部',
-          phone: '13500000001',
-        },
-        {
-          id: 102,
-          login_name: 'A0102',
-          name: '周八',
-          pos: '产品经理',
-          region: '北京总部',
-          email: 'zhouba@example.com',
-        },
-      ];
-
-      const mockCdp = {
-        evaluate: vi.fn().mockResolvedValue(mockRawList),
-      } as unknown as CdpClient;
-
-      const orgOps = new OrgOps(mockCdp);
-      const employees = await orgOps.getEmployees();
-
-      expect(mockCdp.evaluate).toHaveBeenCalledOnce();
-      expect(employees).toHaveLength(2);
-      expect(employees[0]?.name).toBe('孙七');
-      expect(employees[0]?.loginName).toBe('A0101');
-      expect(employees[1]?.name).toBe('周八');
-      expect(employees[1]?.email).toBe('zhouba@example.com');
-    });
-
-    it('getEmployees 当 CDP 返回空或异常结构时应安全返回空数组', async () => {
-      const mockCdp = {
-        evaluate: vi.fn().mockResolvedValue(null),
-      } as unknown as CdpClient;
-
-      const orgOps = new OrgOps(mockCdp);
-      const employees = await orgOps.getEmployees();
-
-      expect(employees).toEqual([]);
-    });
-
-    it('getUserProfile 应支持按 UID (数字或字符串) 精确单点查询员工档案', async () => {
-      const mockProfile = {
-        id: 888,
-        login_name: 'BOSS888',
-        name: '总监',
-        pos: '研发总监',
-        region: '杭州 A 区',
-        sig: 'All in AI',
-      };
-
-      const mockCdp = {
-        evaluate: vi.fn().mockImplementation((script: string) => {
-          if (script.includes('888')) {
-            return Promise.resolve(mockProfile);
-          }
-          return Promise.resolve(null);
-        }),
-      } as unknown as CdpClient;
-
-      const orgOps = new OrgOps(mockCdp);
-
-      // 查询存在的用户
-      const profile1 = await orgOps.getUserProfile(888);
-      expect(profile1).not.toBeNull();
-      expect(profile1?.id).toBe(888);
-      expect(profile1?.name).toBe('总监');
-      expect(profile1?.position).toBe('研发总监');
-
-      // 查询不存在的用户
-      const profile2 = await orgOps.getUserProfile(99999);
-      expect(profile2).toBeNull();
-    });
-
-    it('getUserProfile 对非法参数 (空字符串、空白、null、undefined) 应直接返回 null 而无需调用 CDP', async () => {
-      const mockCdp = {
-        evaluate: vi.fn(),
-      } as unknown as CdpClient;
-
-      const orgOps = new OrgOps(mockCdp);
-
-      expect(await orgOps.getUserProfile('')).toBeNull();
-      expect(await orgOps.getUserProfile('   ')).toBeNull();
-      expect(await orgOps.getUserProfile(null as unknown as string)).toBeNull();
-      expect(await orgOps.getUserProfile(undefined as unknown as string)).toBeNull();
-      expect(mockCdp.evaluate).not.toHaveBeenCalled();
-    });
-  });
 });

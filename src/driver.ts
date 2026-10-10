@@ -1,13 +1,11 @@
 import EventEmitter from 'node:events';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { CdpClient } from './cdp/client.js';
 import { KK9EventBridge } from './bridge/event-bridge.js';
 import { BridgeSessionOps } from './bridge/session-ops.js';
 import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
-import { createMessageIdentityKey, extractRecalledEventsFromPayload } from './bridge/converter.js';
+import { createMessageIdentityKey } from './bridge/converter.js';
 
-import { OrgOps } from './dom/org-ops.js';
 import { resolveSelectors } from './dom/selectors.js';
 import { SessionOps } from './dom/session-ops.js';
 
@@ -31,7 +29,6 @@ import type {
   KK9Session,
   KK9UrlCardOptions,
   KK9VoiceOptions,
-  PollingConfig,
   SelectorsConfig,
   SendFileOptions,
   SendOptions,
@@ -65,16 +62,12 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
   // 保留旧版 DOM 操作层（作为后备回退）
   private readonly domSessionOps: SessionOps;
-  private readonly domOrgOps: OrgOps;
 
-  private isPolling = false;
-  private pollTimer: NodeJS.Timeout | null = null;
-  private readonly knownMessageKeys = new Set<string>();
   private readonly knownRecalledMessageKeys = new Set<string>();
   private currentUserId?: string | number;
 
   constructor(
-    private readonly config: DriverConfig,
+    config: DriverConfig,
     sendOperationStore: SendOperationStore = new InMemorySendOperationStore()
   ) {
     super();
@@ -99,7 +92,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
     // 初始化 DOM 操作层 (保留)
     this.domSessionOps = new SessionOps(this.cdp, this.selectors);
-    this.domOrgOps = new OrgOps(this.cdp);
 
     this.wireCdpEvents();
   }
@@ -158,7 +150,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   public disconnect(): Promise<void> {
     if (this.disconnectPromise) return this.disconnectPromise;
     this.invalidated = true;
-    this.stopPolling();
     this.disconnectPromise = (async (): Promise<void> => {
       try {
         await this.bridgeMessageOps.cancelPendingSends();
@@ -199,12 +190,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.domSessionOps.selectSession(targetSession.id);
   }
 
-  /**
-   * 显式消除指定会话的未读红点（优先通过 IPC readMessage 同步到服务端）
-   */
-  public async markSessionRead(sessionId: string): Promise<boolean> {
-    const targetSession = await this.resolveSessionTarget(sessionId);
-    return targetSession ? this.bridgeSessionOps.markSessionRead(targetSession.id) : false;
+  /** 指定原生会话标记已读；不按名称解析，不默认当前窗口。 */
+  public markSessionRead(sessionId: string): Promise<boolean> {
+    return this.bridgeSessionOps.markSessionRead(sessionId);
   }
 
 
@@ -250,12 +238,14 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
   public async scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]> {
     const toTimestamp = options.toTimestamp ?? Date.now();
-    if (options.fromTimestamp > toTimestamp) {
+    if (!Number.isFinite(options.fromTimestamp) || !Number.isFinite(toTimestamp) || options.fromTimestamp > toTimestamp) {
       throw new DriverError(
         `补偿扫描时间窗口无效: from=${options.fromTimestamp}, to=${toTimestamp}`,
         'COMPENSATION_SCAN_INVALID_WINDOW'
       );
     }
+    const maxMessages = options.maxMessagesPerSession ?? 20;
+    if (!Number.isSafeInteger(maxMessages) || maxMessages <= 0) throw new DriverError(`补偿扫描数量必须为正整数: ${maxMessages}`, 'COMPENSATION_SCAN_INVALID_LIMIT');
     if (this.getStatus() !== 'connected') {
       throw new DriverError(
         `补偿扫描需要已连接的 CDP (当前状态: ${this.getStatus()})`,
@@ -264,33 +254,22 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     }
 
     try {
-      const allSessions = await this.getSessions();
-      const requestedIds = options.sessionIds ? new Set(options.sessionIds) : null;
-      const sessions = requestedIds
-        ? allSessions.filter(session => requestedIds.has(session.id))
-        : allSessions;
-      const maxMessages = options.maxMessagesPerSession ?? 20;
-      const switchDelayMs = options.switchDelayMs ?? this.config.polling?.switchDelayMs ?? 500;
+      const sessions: KK9Session[] = [];
+      if (options.sessionIds) {
+        for (const id of new Set(options.sessionIds)) {
+          const session = await this.bridgeSessionOps.getSessionById(id);
+          if (!session) throw new DriverError(`补偿扫描原生会话不存在: ${id}`, 'COMPENSATION_SCAN_SESSION_NOT_FOUND');
+          sessions.push(session);
+        }
+      } else {
+        sessions.push(...await this.getSessions());
+      }
       const seen = new Set<string>();
       const recovered: KK9Message[] = [];
 
       for (const session of sessions) {
-        const switched = await this.selectSession(session.id);
-        if (!switched) {
-          throw new DriverError(
-            `补偿扫描切换会话失败: ${session.id}`,
-            'COMPENSATION_SCAN_SESSION_SWITCH_FAILED'
-          );
-        }
-        if (switchDelayMs > 0) {
-          await sleep(switchDelayMs);
-        }
-
-        const messages = await this.getRecentMessages(session, maxMessages);
+        const messages = await this.bridgeMessageOps.getMessagesInRange(session, options.fromTimestamp, toTimestamp, maxMessages, this.currentUserId);
         for (const message of messages) {
-          if (message.timestamp < options.fromTimestamp || message.timestamp > toTimestamp) {
-            continue;
-          }
           const messageId = message.messageId || message.id;
           const key = createMessageIdentityKey(message.sessionId, messageId);
 
@@ -462,26 +441,16 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     this.emit('recalled', event);
   }
 
-  /**
-   * 优先通过 Bridge / IPC 递归遍历企业全量员工档案
-   */
-  public async getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]> {
-    const employees = await this.bridgeOrgOps.getOrgEmployees(timeoutMs);
-    if (employees.length > 0) {
-      return employees;
-    }
-    return this.domOrgOps.getEmployees(timeoutMs);
+  /** 原生可见组织查询；正常空不切换实现，失败抛错。 */
+  public getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]> {
+    return this.bridgeOrgOps.getOrgEmployees(timeoutMs);
   }
 
   /**
    * 按 UID 精确单点查询员工档案
    */
-  public async getUserProfile(userId: number | string): Promise<KK9Employee | null> {
-    const profile = await this.bridgeOrgOps.getUserProfile(userId);
-    if (profile) {
-      return profile;
-    }
-    return this.domOrgOps.getUserProfile(userId);
+  public getUserProfile(userId: number | string): Promise<KK9Employee | null> {
+    return this.bridgeOrgOps.getUserProfile(userId);
   }
 
   /** 通过原生会话 ID 或实体查询私聊对端档案；用户 UID 请使用 getUserProfile。 */
@@ -496,131 +465,6 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       : null;
   }
 
-  public startPolling(customPolling?: Partial<PollingConfig>): void {
-    if (this.isPolling) return;
-
-    const pollConfig: PollingConfig = {
-      intervalMs: customPolling?.intervalMs ?? this.config.polling?.intervalMs ?? 3000,
-      switchDelayMs: customPolling?.switchDelayMs ?? this.config.polling?.switchDelayMs ?? 500,
-      maxSessionsPerCycle:
-        customPolling?.maxSessionsPerCycle ?? this.config.polling?.maxSessionsPerCycle ?? 10,
-      maxMessagesPerSession:
-        customPolling?.maxMessagesPerSession ?? this.config.polling?.maxMessagesPerSession ?? 20,
-      autoSwitchSession:
-        customPolling?.autoSwitchSession ?? this.config.polling?.autoSwitchSession ?? true,
-    };
-
-    this.isPolling = true;
-    log.info(pollConfig, '启动消息智能轮询器');
-
-    const pollLoop = async (): Promise<void> => {
-      if (!this.isPolling) return;
-
-      try {
-        if (this.getStatus() === 'connected') {
-          await this.executePollCycle(pollConfig);
-        }
-      } catch (err) {
-        log.warn({ err: String(err) }, '轮询周期异常，等待下一周期');
-      }
-
-      if (this.isPolling) {
-        this.pollTimer = setTimeout(() => {
-          void pollLoop();
-        }, pollConfig.intervalMs);
-      }
-    };
-
-    void pollLoop();
-  }
-
-  public stopPolling(): void {
-    this.isPolling = false;
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-    }
-    log.info('已停止消息轮询器');
-  }
-
-  private async executePollCycle(config: PollingConfig): Promise<void> {
-    if (config.autoSwitchSession === false) {
-      const current = await this.getCurrentSession();
-      if (current) {
-        await this.collectAndEmitMessages(current, config.maxMessagesPerSession);
-      }
-      return;
-    }
-
-    const sessions = await this.getSessions();
-    const unreadSessions = sessions
-      .filter(s => s.unread || s.unreadAt)
-      .sort((a, b) => {
-        if (a.unreadAt && !b.unreadAt) return -1;
-        if (!a.unreadAt && b.unreadAt) return 1;
-        return (b.unreadCount || 0) - (a.unreadCount || 0);
-      });
-
-    if (unreadSessions.length > 0) {
-      const batch = unreadSessions.slice(0, config.maxSessionsPerCycle);
-      for (const session of batch) {
-        if (!this.isPolling) break;
-
-        const switched = await this.selectSession(session.id);
-        if (switched) {
-          await sleep(config.switchDelayMs);
-          await this.collectAndEmitMessages(session, config.maxMessagesPerSession);
-        }
-      }
-    } else {
-      const current = await this.getCurrentSession();
-      if (current) {
-        await this.collectAndEmitMessages(current, config.maxMessagesPerSession);
-      }
-    }
-  }
-
-  private async collectAndEmitMessages(session: KK9Session, limit: number): Promise<void> {
-    const messages = await this.getRecentMessages(session, limit);
-    for (const msg of messages) {
-      // 历史撤回只供查询，不能经轮询重放为新的消息、提及或撤回事件。
-      if (
-        msg.isRecalled ||
-        (msg.messageType === 'system' &&
-          extractRecalledEventsFromPayload(msg.raw, session).length > 0)
-      ) {
-        continue;
-      }
-      const messageKey = createMessageIdentityKey(msg.sessionId, msg.id);
-
-      if (!this.knownMessageKeys.has(messageKey)) {
-        this.knownMessageKeys.add(messageKey);
-        if (this.knownMessageKeys.size > 10000) {
-          const firstKey = this.knownMessageKeys.values().next().value;
-          if (firstKey) this.knownMessageKeys.delete(firstKey);
-        }
-
-        log.debug(
-          {
-            id: msg.id,
-            messageId: msg.messageId ?? msg.id,
-            sessionId: msg.sessionId,
-            sender: msg.sender,
-            direction: msg.direction,
-            origin: msg.origin,
-            status: 'received',
-          },
-          '捕获新消息并触发事件'
-        );
-        this.emit('message', msg);
-
-        if (msg.atMe || msg.atAll || msg.mentions?.isAtMe || msg.mentions?.isAtAll) {
-          log.info({ id: msg.id, sender: msg.sender, mentions: msg.mentions }, '捕获到 @ 提及事件');
-          this.emit('at', msg);
-        }
-      }
-    }
-  }
 
   private wireCdpEvents(): void {
     this.cdp.on('status', (status: ConnectionStatus) => this.emit('status', status));

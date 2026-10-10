@@ -8,11 +8,7 @@ import {
 
 import { KK9EventBridge } from '../src/bridge/event-bridge.js';
 import type { CdpClient } from '../src/cdp/client.js';
-import { KK9Driver } from '../src/driver.js';
 import type { ConnectionStatus, KK9Message } from '../src/types/index.js';
-import { getDriverTestInternals } from './helpers/driver-internals.js';
-import { MessageOps } from '../src/dom/message-ops.js';
-import { DEFAULT_SELECTORS } from '../src/dom/selectors.js';
 
 class MockCdpClient extends EventEmitter {
   private status: ConnectionStatus = 'connected';
@@ -42,10 +38,10 @@ class MockCdpClient extends EventEmitter {
 describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)', () => {
   const currentUserId = 'emp_bot_001';
 
-  describe('1. 稳定身份与 EventBridge / Polling 同构测试', () => {
-    it('EventBridge 与 Polling 缺少 sessionId 或 native messageId 时拒绝入站并报告事实诊断', () => {
+  describe('1. 稳定身份与实时/历史规范化', () => {
+    it('实时与历史缺少 sessionId 或 native messageId 时拒绝入站并报告事实诊断', () => {
       const diagnostics: InboundNormalizationDiagnostic[] = [];
-      const contextFor = (source: 'event_bridge' | 'polling'): NormalizeNativeMessageContext => ({
+      const contextFor = (source: 'event_bridge' | 'history'): NormalizeNativeMessageContext => ({
         currentUserId,
         source,
         onDiagnostic: diagnostic => diagnostics.push(diagnostic),
@@ -64,7 +60,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         },
         contextFor('event_bridge')
       );
-      const pollingMessages = normalizeNativeMessage(
+      const historyMessages = normalizeNativeMessage(
         {
           sessionId: 'group_project_room',
           sessionName: '项目周报大群',
@@ -75,7 +71,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
           timestamp: 1787640000000,
           isMe: false,
         },
-        contextFor('polling')
+        contextFor('history')
       );
       const missingSessionMessages = normalizeNativeMessage(
         {
@@ -90,7 +86,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       );
 
       expect(eventMessages).toHaveLength(0);
-      expect(pollingMessages).toHaveLength(0);
+      expect(historyMessages).toHaveLength(0);
       expect(missingSessionMessages).toHaveLength(0);
       expect(diagnostics).toHaveLength(3);
       expect(diagnostics[0]).toMatchObject({
@@ -104,7 +100,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         kind: 'missing_inbound_identity',
         missingFields: ['nativeMessageId'],
         sessionId: 'group_project_room',
-        source: 'polling',
+        source: 'history',
         observedAt: expect.any(Number),
       });
       expect(diagnostics[2]).toMatchObject({
@@ -141,7 +137,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       expect(msg.origin).toBe('external');
       expect(msg.direction).toBe('inbound');
     });
-    it('相同原生输入在 EventBridge 与 Polling 来源下产生相同 direction', () => {
+    it('相同原生输入在实时与历史来源下产生相同 direction', () => {
       const payload = {
         sessionId: 'session-source-parity',
         id: 'native-source-parity',
@@ -156,13 +152,13 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
         currentUserId,
         source: 'event_bridge',
       })[0];
-      const pollingMessage = normalizeNativeMessage(payload, {
+      const historyMessage = normalizeNativeMessage(payload, {
         currentUserId,
-        source: 'polling',
+        source: 'history',
       })[0];
 
       expect(eventMessage?.direction).toBe('outbound');
-      expect(pollingMessage?.direction).toBe(eventMessage?.direction);
+      expect(historyMessage?.direction).toBe(eventMessage?.direction);
     });
   });
 
@@ -397,7 +393,7 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
     });
   });
 
-  describe('5. EventBridge 与 Polling 离线 emit 派发与全身份覆盖测试', () => {
+  describe('5. EventBridge 离线派发与全身份覆盖测试', () => {
     it('EventBridge 派发他人、本人、系统消息，不推断业务角色', async () => {
       const mockCdp = new MockCdpClient();
       const bridge = new KK9EventBridge(
@@ -484,162 +480,6 @@ describe('Driver 入站消息标准化与身份收敛测试 (TDD Red -> Green)',
       expect(emittedMessages[3].direction).toBe('unknown');
     });
 
-    it('旧窗口轮询保留他人、本人、系统消息，不推断 SDK 关联', async () => {
-      const mockCdp = new MockCdpClient();
-      const driver = new KK9Driver({
-        cdp: { url: 'http://127.0.0.1:9222', pageMatch: 'renderer.html' },
-        currentUserId,
-      });
-      const internals = getDriverTestInternals<{ cdp: MockCdpClient }>(driver);
-      const domMessageOps = new MessageOps(mockCdp as unknown as CdpClient, DEFAULT_SELECTORS);
-
-      // 将 driver 内部的 cdpClient 替换为 MockCdpClient 进行底层 evaluate 拦截
-      internals.cdp = mockCdp;
-
-      const emittedMessages: KK9Message[] = [];
-      driver.on('message', msg => emittedMessages.push(msg));
-
-      // 模拟 MessageOps 内部 CDP evaluate 返回的原生消息列表
-      const rawMessagesList = [
-        {
-          sender: '外部员工',
-          senderId: 'user_other',
-          time: '12:00',
-          content: '请协助处理单据',
-          isMe: false,
-          messageType: 'text',
-          raw: { msgID: 'poll-ext-1' },
-        },
-        {
-          sender: '我',
-          senderId: currentUserId,
-          time: '12:01',
-          content: '我正在看',
-          isMe: true,
-          messageType: 'text',
-          raw: { msgID: 'poll-op-1' },
-        },
-        {
-          sender: 'Kairo 助手',
-          senderId: currentUserId,
-          time: '12:02',
-          content: '单据已生成',
-          isMe: true,
-          messageType: 'text',
-          raw: {
-            msgID: 'poll_bot_echo_1',
-          },
-        },
-        {
-          sender: '系统通知',
-          time: '12:03',
-          content: '系统例行维护提醒',
-          isMe: false,
-          messageType: 'system',
-          raw: { msgID: 'poll-system-1' },
-        },
-      ];
-      mockCdp.evaluateMock.mockImplementation((script: string) => {
-        if (script.includes('extractContent')) {
-          return Promise.resolve(rawMessagesList);
-        }
-        return Promise.resolve([]);
-      });
-
-      const pollingSession = {
-        id: 'ses_poll_all',
-        name: '轮询综合会话',
-        type: 'private' as const,
-        nativeType: 0,
-        receiverId: '91002',
-        unread: true,
-      };
-      const parsedMessages = await domMessageOps.getRecentMessages(
-        10,
-        pollingSession,
-        currentUserId
-      );
-      Object.assign(internals.bridgeMessageOps, {
-        getRecentMessages: vi.fn().mockResolvedValue(parsedMessages),
-      });
-
-      await internals.collectAndEmitMessages(pollingSession, 10);
-
-      expect(emittedMessages).toHaveLength(4);
-      expect(emittedMessages[0].origin).toBe('external');
-      expect(emittedMessages[0].direction).toBe('inbound');
-      expect(emittedMessages[0].messageId).toBeDefined();
-      expect(emittedMessages[0].id).toBe(emittedMessages[0].messageId);
-
-      expect(emittedMessages[1].origin).toBe('unknown');
-      expect(emittedMessages[1].direction).toBe('outbound');
-      expect(emittedMessages[1].messageId).toBeDefined();
-
-      // 原生 ID 验证
-      expect(emittedMessages[2].id).toBe('poll_bot_echo_1');
-      expect(emittedMessages[2].messageId).toBe('poll_bot_echo_1');
-      expect(emittedMessages[2].origin).toBe('unknown');
-      expect(emittedMessages[2]?.sdkSendKey).toBeUndefined();
-      expect(emittedMessages[2].direction).toBe('outbound');
-
-      expect(emittedMessages[3].origin).toBe('system');
-      expect(emittedMessages[3].direction).toBe('unknown');
-      expect(emittedMessages[3].messageId).toBeDefined();
-    });
-    it('Polling 按 sessionId 隔离相同 native messageId', async () => {
-      const mockCdp = new MockCdpClient();
-      const driver = new KK9Driver({
-        cdp: { url: 'http://127.0.0.1:9222', pageMatch: 'renderer.html' },
-        currentUserId,
-      });
-      const internals = getDriverTestInternals<{ cdp: MockCdpClient }>(driver);
-      const domMessageOps = new MessageOps(mockCdp as unknown as CdpClient, DEFAULT_SELECTORS);
-
-      internals.cdp = mockCdp;
-
-      mockCdp.evaluateMock.mockImplementation((script: string) =>
-        script.includes('extractContent')
-          ? Promise.resolve([
-              {
-                sender: '员工',
-                time: '12:30',
-                content: '同一 native ID 的消息',
-                isMe: false,
-                messageType: 'text',
-                raw: { msgID: 'shared-native-id' },
-              },
-            ])
-          : Promise.resolve([])
-      );
-
-      const emittedMessages: KK9Message[] = [];
-      driver.on('message', message => emittedMessages.push(message));
-      const sessionA = { id: 'session-a', name: '会话 A', type: 'private' as const, nativeType: 0, receiverId: '91002', unread: true };
-      const sessionB = { id: 'session-b', name: '会话 B', type: 'private' as const, nativeType: 0, receiverId: '91003', unread: true };
-      const messagesA = await domMessageOps.getRecentMessages(
-        10,
-        sessionA,
-        currentUserId
-      );
-      const messagesB = await domMessageOps.getRecentMessages(
-        10,
-        sessionB,
-        currentUserId
-      );
-      Object.assign(internals.bridgeMessageOps, {
-        getRecentMessages: vi
-          .fn()
-          .mockResolvedValueOnce(messagesA)
-          .mockResolvedValueOnce(messagesB),
-      });
-
-      await internals.collectAndEmitMessages(sessionA, 10);
-      await internals.collectAndEmitMessages(sessionB, 10);
-
-      expect(emittedMessages).toHaveLength(2);
-      expect(emittedMessages.map(message => message.sessionId)).toEqual(['session-a', 'session-b']);
-      expect(emittedMessages.every(message => message.messageId === 'shared-native-id')).toBe(true);
-    });
   });
 
   describe('6. 私聊会话 ID 归一化与防指向 Bot 自身测试', () => {

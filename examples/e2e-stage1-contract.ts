@@ -598,13 +598,6 @@ async function main(): Promise<void> {
       await primary.driver.selectSession(config.sessionId),
       `无法切换到目标会话 ${config.sessionId}`
     );
-    primary.driver.startPolling({
-      autoSwitchSession: false,
-      intervalMs: 500,
-      switchDelayMs: 0,
-      maxSessionsPerCycle: 1,
-      maxMessagesPerSession: 100,
-    });
 
     const inboundObservation = await requiredStep('观察真实员工 inbound 消息', () =>
       waitForExpectedInbound(primary, config!, targetSession, baselineKeys)
@@ -751,7 +744,6 @@ async function main(): Promise<void> {
       );
     });
 
-    primary.driver.stopPolling();
     await requiredStep('断开首个 Driver 连接以准备中断场景', async () => {
       await primary.driver.disconnect();
     });

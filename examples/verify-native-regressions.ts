@@ -204,24 +204,20 @@ try {
     message => message.id === ownedMessageId || message.id === notice.id
   ).length;
   const recallCountBefore = recalls.filter(event => event.messageId === ownedMessageId).length;
-  // 验证真实采集边界并等待查询结束，不启动另属 T11 范围的调度计时器。
-  const polling = driver as unknown as {
-    collectAndEmitMessages(session: KK9Session, limit: number): Promise<void>;
-  };
-  await polling.collectAndEmitMessages(authorizedSession, 20);
-  await polling.collectAndEmitMessages(authorizedSession, 20);
+  // 主动历史查询只返回记录，不重放实时消息或撤回事件。
+  await driver.getRecentMessages(authorizedSession, 20);
   assert.equal(
     messages.filter(message => message.id === ownedMessageId || message.id === notice.id).length,
     messageCountBefore,
-    '轮询重放了已撤回原记录或系统通知'
+    '历史查询重放了已撤回原记录或系统通知'
   );
   assert.equal(
     recalls.filter(event => event.messageId === ownedMessageId).length,
     recallCountBefore,
-    '轮询重放了历史撤回'
+    '历史查询重放了历史撤回'
   );
   assert.deepEqual(errors, [], '真机运行产生连接或桥接错误');
-  report['轮询'] = { 采集次数: 2, 已撤回记录重放: false, 撤回通知重放: false };
+  report['主动历史'] = { 已撤回记录重放: false, 撤回通知重放: false };
   report['通过'] = true;
 } catch (error) {
   report['错误'] = error instanceof Error ? error.message : String(error);
@@ -242,7 +238,7 @@ try {
       process.exitCode = 1;
     }
   }
-  report['清理'] = { 本轮消息ID: ownedMessageId, 已撤回: recalled, 在途轮询: false };
+  report['清理'] = { 本轮消息ID: ownedMessageId, 已撤回: recalled };
   try {
     await Promise.all([driver.disconnect(), verificationCdp.disconnect()]);
   } catch (error) {

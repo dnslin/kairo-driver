@@ -4,7 +4,6 @@ import { createChildLogger } from '../utils/logger.js';
 import { DriverError } from '../utils/errors.js';
 import { callIpcToData } from './rpc.js';
 import {
-  RENDERER_IPC_HELPERS_SCRIPT,
   RENDERER_SESSION_RESOLVER_SCRIPT,
 } from './renderer-script.js';
 
@@ -135,6 +134,17 @@ export class BridgeSessionOps {
     return Object.values(response.data.sessionsInfo).map(item => toKK9Session(item, currentUserId));
   }
 
+  /** 按原生 ID 读取会话，不受当前窗口和可见会话列表影响。 */
+  public async getSessionById(sessionId: string): Promise<KK9Session | null> {
+    if (!/^-?[0-9]+$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId))) throw new DriverError(`原生会话 ID 无效: ${sessionId}`, 'INVALID_SESSION_ID');
+    const currentUserId = await this.getCurrentUserId();
+    const response = await callIpcToData<RawSessionItem | null>(this.cdp, 'getSessionBySessionID', [sessionId]);
+    if (response.code !== 0) throw new DriverError(`getSessionBySessionID 会话 ${sessionId} 失败 (${response.code}): ${response.error || response.message || ''}`, 'IPC_QUERY_FAILED');
+    if (!response.data) return null;
+    if (String(response.data.id) !== sessionId) throw new DriverError(`getSessionBySessionID 会话 ${sessionId} 返回其他会话`, 'IPC_INVALID_RESPONSE');
+    return toKK9Session(response.data, currentUserId);
+  }
+
   /**
    * 获取当前激活会话
    */
@@ -213,63 +223,24 @@ export class BridgeSessionOps {
     }
   }
 
-  /**
-   * 通过原生 IPC toData('readMessage') 消除会话未读红点（真·已读同步到多端与服务端）
-   */
+  /** 仅接受原生会话 ID；使用原生行的类型和最大索引，不改窗口/Vue状态。 */
   public async markSessionRead(sessionId: string): Promise<boolean> {
     const targetId = sessionId.trim();
-    if (!targetId) return false;
-
+    if (!/^[0-9]+$/.test(targetId) || !Number.isSafeInteger(Number(targetId)) || Number(targetId) <= 0) return false;
     try {
-      const script = `
-        (async () => {
-          const target = ${JSON.stringify(targetId)};
-          const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
-          const app = document.querySelector('#app')?.__vue__;
-          const main = document.querySelector('.main-page')?.__vue__;
-          const bus = main?.$bus || app?.$bus;
-          const electron = window.require ? window.require('electron') : null;
-          const ipc = window.ipcRenderer || electron?.ipcRenderer;
-          ${RENDERER_SESSION_RESOLVER_SCRIPT}
-          ${RENDERER_IPC_HELPERS_SCRIPT}
-
-          const targetSession = resolveRendererSession(editor?.sortedSessions, target);
-
-          if (targetSession) {
-            const sessionID = targetSession.id;
-            const maxMsgIdx = targetSession.maxMessageIndex || 0;
-            const type = targetSession.type || 0;
-
-            const readRes = await callKairoIpc('readMessage', {
-              type,
-              sessionID,
-              maxMsgIdx
-            });
-
-            if (!readRes || readRes.code !== 0) {
-              return { success: false };
-            }
-
-            // native ack 成功后再更新客户端 Vuex 与本地状态
-            targetSession.userReadIndex = maxMsgIdx;
-            targetSession.atState = 0;
-            if (bus) {
-              bus.$emit('set-message-read', targetSession);
-              bus.$emit('reload-atMsg-list');
-              bus.$emit('flush-unread-total');
-            }
-            return { success: true };
-          }
-
-          return { success: false };
-        })()
-      `;
-
-      const res = await this.cdp.evaluate<{ success: boolean }>(script, 6000);
-      return Boolean(res?.success);
+      const response = await callIpcToData<RawSessionItem | null>(this.cdp, 'getSessionBySessionID', [Number(targetId)]);
+      if (response.code !== 0) throw new Error(`getSessionBySessionID 失败 (${response.code}): ${response.error || response.message || ''}`);
+      if (!response.data) return false;
+      const row = response.data;
+      if (String(row.id) !== targetId || !Number.isInteger(row.type) || row.type < 0 || row.type > 6 ||
+          !Number.isSafeInteger(row.maxMessageIndex) || row.maxMessageIndex! < 0) {
+        throw new Error('getSessionBySessionID 未返回匹配的会话、真实类型或最大索引');
+      }
+      const read = await callIpcToData(this.cdp, 'readMessage', [{ type: row.type, sessionID: row.id, maxMsgIdx: row.maxMessageIndex }]);
+      if (read.code !== 0) throw new Error(`失败 (${read.code}): ${read.error || read.message || ''}`);
+      return true;
     } catch (err) {
-      log.warn({ targetId, err: String(err) }, 'Bridge 标记已读失败');
-      return false;
+      throw new DriverError(`readMessage 会话 ${targetId}: ${String(err)}`, 'IPC_QUERY_FAILED', err instanceof Error ? err : undefined);
     }
   }
 }
