@@ -132,7 +132,7 @@ async function sendToSession(targetSessionId: string, text: string) {
 
 ### 按工号首次联系与文本通知
 
-`sendTextToUser(loginName, text, options?)` 接受准确 `login_name`，不是显示名、UID或会话名称；只去掉工号首尾空白，大小写必须准确。无需对方已在会话列表，也无需先手动聊天。选项 `SendToUserOptions` 只包含 `operationId` 和 `verifyTimeoutMs`；本接口仅发送纯文本，不支持引用、提及或本人设备会话。
+`sendTextToUser(loginName, text, options?)` 接受准确 `login_name`，不是显示名、UID或会话名称；只去掉工号首尾空白，大小写必须准确。无需对方已在会话列表，也无需先手动聊天。选项 `SendToUserOptions` 只包含 `operationId` 和 `verifyTimeoutMs`；入口只复制这两个字段，复用普通发送选项不会产生引用、提及或会话目标，空正文仍前置失败。本接口不支持本人设备会话。
 
 ```ts
 async function notifyUser(loginName: string, text: string, operationId: string) {
@@ -145,9 +145,13 @@ async function notifyUser(loginName: string, text: string, operationId: string) 
 
 原生人员搜索分页后按准确工号匹配并核对档案、私聊权限；找不到、歧义或查询失败均在提交前明确失败，不改投相似账号。KK9按双方UID解析或建立私聊，零值只用于原生首次提交，不作为公开会话ID。成功结果额外提供正式 `sessionId`；只有本次负草稿业务回执、双方UID和正式记录匹配才能判为 `sent`。
 
-同一 `operationId` 不能更换工号或正文；重复与 `getSendStatus()` 不再次找人或发送。查询仅使用本次已采集的业务回执和正式历史，不能拿任意正ID记录补判成功。Fake按注入人员建立或复用模拟私聊，但不从发送请求制造消息历史或实时回声。
+人员候选每页200人串行查询，必须查完后排除同工号不同UID，不能看到首个匹配就发送。工号发送的渲染任务设有 `verifyTimeoutMs + 18000ms` 整轮截止（默认26秒），比外层CDP期限提前2秒；超时中止后续IPC并清理本次登记。尚未提交时返回前置失败；已提交但证据不足时保持unknown，不重发。此限制防止超时任务继续发送，不代表人员搜索本身被加速。
+
+同一 `operationId` 不能更换工号或正文；重复与 `getSendStatus()` 不再次找人或发送。工号状态恢复使用已采集成功回执中的正式消息ID精确查询，核对本次标记、会话与双方UID，不受最新100条历史窗口限制，也不能拿任意正ID记录补判成功。Fake按注入人员建立或复用模拟私聊；自定义成功结果提供正式会话ID时保留该ID及回执，不另行覆盖，不从发送请求制造消息历史或实时回声。
 
 构建后真机命令、确认门禁和实测边界见 [按工号文本通知验收](docs/KK9-STARTUP.md#按工号文本通知验收)。
+
+专项示例的Driver连接单独失联时，独立采集连接会先取消并等候本次消息键的任务退出，再清理本代Hook与绑定，不清理其他代资源。业务回执等待器属于发送任务；Hook关闭仅解除自己的观察登记，不移除其他任务的回执监听。
 
 
 ### 原生富文本、提及与引用

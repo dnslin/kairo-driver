@@ -816,8 +816,7 @@ export class KK9EventBridge extends EventEmitter {
         window.__kairo_native_send_observer = onNativeSend;
         unbindFns.push(() => {
           pendingSends.clear(); pendingMessages.clear();
-          for (const [channel, listeners] of receiptWaiters)
-            for (const listener of listeners) ipc.removeListener(channel, listener);
+          // 回执监听由发送任务创建并在其finish中移除；Hook只借用登记，不能取消其他发送。
           receiptWaiters.clear();
           if (window.__kairo_native_send_observer === onNativeSend) delete window.__kairo_native_send_observer;
         });

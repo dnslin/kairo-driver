@@ -323,6 +323,55 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     expect(await driver.getSessions()).toHaveLength(3);
   });
 
+  it.each([false, true])('自定义成功保留正式会话和回执，准确定位注入历史与撤回目标（已有私聊：%s）', async hasSession => {
+    const store = new InMemorySendOperationStore();
+    const sender = new FakeKK9Driver(store);
+    sender.setCurrentUserId('91001');
+    sender.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    const session: KK9Session = { id: '93003', name: '目标员工', type: 'private', nativeType: 0, receiverId: '91003', unread: false };
+    const otherSession: KK9Session = { ...session, id: '93002', name: '其他人', receiverId: '91002' };
+    sender.setSessions(hasSession ? [otherSession, session] : [otherSession]);
+    const message: KK9Message = { id: '1001', sessionId: session.id, sessionName: session.name, sessionType: 'private', sender: '本人', senderId: '91001', direction: 'outbound', isMe: true, content: '注入的正式历史', time: '12:00', timestamp: 100 };
+    const otherMessage: KK9Message = { ...message, sessionId: otherSession.id, sessionName: otherSession.name, content: '另一会话同号历史' };
+    sender.setMessages([message, otherMessage]);
+    const receipt = { draftId: '-1', sessionId: '93003', code: 0, messageId: '1001' };
+    sender.setSendBehavior({ mode: 'custom', handler: () => ({ status: 'sent', sessionId: '93003', messageId: '1001', receipt, isPreTrigger: false }) });
+    const events: KK9Message[] = [];
+    const recalled: Array<{ messageId: string; sessionId: string }> = [];
+    sender.on('message', item => events.push(item));
+    sender.on('recalled', item => recalled.push(item));
+
+    const result = await sender.sendTextToUser('EMP-003', '发送请求不生成历史', { operationId: '自定义正式会话' });
+
+    expect(result).toMatchObject({ status: 'sent', sessionId: '93003', messageId: '1001', receipt });
+    expect(await store.get(result.operationId)).toMatchObject({ status: 'sent', sessionId: '93003', messageId: '1001', receipt });
+    expect(await sender.getSendStatus(result.operationId)).toEqual(result);
+    expect(await sender.getSessions()).toEqual([otherSession, session]);
+    const resolvedSession = (await sender.getSessions()).find(item => item.id === result.sessionId)!;
+    expect(await sender.getRecentMessages(resolvedSession)).toEqual([message]);
+    expect(await sender.scanCompensationWindow({ fromTimestamp: 0 })).toHaveLength(2);
+    expect(events).toEqual([]);
+    expect(await sender.recallMessage(result.messageId!, result.sessionId!)).toBe(true);
+    expect(message.isRecalled).toBe(true);
+    expect(otherMessage.isRecalled).toBeUndefined();
+    expect(recalled).toMatchObject([{ messageId: '1001', sessionId: '93003' }]);
+    expect(events).toEqual([]);
+  });
+
+  it.each(['unknown', 'failed'] as const)('自定义%s即使注入会话号与回执也不建立私聊', async status => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    const receipt = { draftId: '-1', sessionId: '93003', code: status === 'failed' ? 617 : 0, messageId: '1001' };
+    driver.setSendBehavior({ mode: 'custom', handler: () => ({ status, sessionId: '93003', receipt, error: '注入未成功结果', isPreTrigger: false }) });
+
+    const result = await driver.sendTextToUser('EMP-003', '未成功的请求');
+
+    expect(result).toMatchObject({ status, receipt, error: '注入未成功结果', isPreTrigger: false });
+    expect(result.sessionId).toBeUndefined();
+    expect(await driver.getSessions()).toEqual([]);
+    expect(await driver.getSendStatus(result.operationId)).toEqual(result);
+  });
+
   it.each([
     ['空工号', '   ', '91001', []],
     ['不存在工号', 'EMP-404', '91001', [{ id: 91003, loginName: 'EMP-003', name: '员工乙', updatedAt: 1 }]],

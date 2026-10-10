@@ -93,11 +93,18 @@ export class BridgeSendStatus {
       const sessionId = data.targetLoginName ? receipt.sessionId : data.target;
       if (!/^[1-9]\\d*$/.test(String(sessionId))) return null;
       let messageId = receipt.messageId;
-      if (data.targetLoginName || !/^[1-9]\\d*$/.test(String(messageId))) {
+      if (data.targetLoginName) {
+        if (!/^[1-9]\\d*$/.test(String(messageId))) return null;
+        const response = await callKairoIpc('getMessageByMsgId', Number(messageId));
+        if (response?.code !== 0) throw new Error('getMessageByMsgId状态查询失败 (' + response?.code + '): ' + (response?.error || response?.message || '无回包'));
+        const found = response.data;
+        if (!found || String(found.id) !== String(messageId) || String(found.sessionID) !== String(sessionId) ||
+            found.msgFlag !== data.nativeKey || String(found.sender) !== entry.senderId || String(found.receiver) !== entry.receiverId) return null;
+        receipt.msgIdx = Number(found.msgIdx);
+      } else if (!/^[1-9]\\d*$/.test(String(messageId))) {
         const response = await callKairoIpc('getMessages', { sessionID: Number(sessionId), count: 100, endIdx: 2147483647, sendTime: 0 });
         if (response?.code !== 0 || !Array.isArray(response.data)) throw new Error('getMessages状态查询失败 (' + response?.code + '): ' + (response?.error || response?.message || '无效数组'));
-        const found = response.data.find(message => message.msgFlag === data.nativeKey && String(message.sessionID) === String(sessionId) && /^[1-9]\\d*$/.test(String(message.id)) &&
-          (!data.targetLoginName || (String(message.id) === String(messageId) && String(message.sender) === entry.senderId && String(message.receiver) === entry.receiverId)));
+        const found = response.data.find(message => message.msgFlag === data.nativeKey && String(message.sessionID) === String(sessionId) && /^[1-9]\\d*$/.test(String(message.id)));
         if (!found) return null;
         messageId = String(found.id);
         receipt.msgIdx = Number(found.msgIdx);

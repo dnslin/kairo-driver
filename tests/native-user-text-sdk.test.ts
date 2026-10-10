@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BridgeMessageOps } from '../src/bridge/message-ops.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
+import type { SendOptions, SendResult } from '../src/types/index.js';
 import { createNativeSendRuntime } from './helpers/native-send-runtime.js';
 
 // 执行SDK实际生成的渲染脚本；原生IPC提供人员查询、权限和正式会话分配。
@@ -230,5 +231,94 @@ describe('按准确工号首次发送文本SDK', () => {
     const pendingSends = native.window['__kairo_pending_sends'] as Map<string, unknown>;
     expect(pendingSends.size).toBe(0);
     native.ipc.removeListener('0-91003-sendMsgCallback', otherListener);
+  });
+
+  it.each(['人员搜索', '正式记录'] as const)('整轮超时中止%s，迟到回复不能恢复提交且释放在途任务', async stage => {
+    vi.useFakeTimers();
+    const users = Array.from({ length: 2001 }, (_, index) => ({
+      id: 92000 + index, login_name: 'int2023-' + index, name: '候选',
+    }));
+    users[0] = { id: 91003, login_name: 'int2023', name: '准确接收者' };
+    const native = createNativeSendRuntime(stage === '人员搜索' ? { searchUsers: users } : {});
+    const send = native.ipc.send.bind(native.ipc);
+    native.ipc.send = (channel, request) => {
+      if (stage === '人员搜索' && request.args[0] === 'unionSearch') {
+        setTimeout(() => send(channel, request), 3500);
+      } else if (stage === '正式记录' && request.args[0] === 'getMessages') {
+        // 正式回执已到，但模拟查询尚不可见本次记录。
+        const query = request.args[1];
+        if (!query || typeof query !== 'object') throw new Error('历史查询缺少参数');
+        setTimeout(() => send(channel, { ...request, args: ['getMessages', { ...query, endIdx: 0 }] }), 3500);
+      } else send(channel, request);
+    };
+    const ops = new BridgeMessageOps(native.cdp);
+    let observed: SendResult | undefined;
+    const pending = ops.sendTextToUser('int2023', '整轮截止', { operationId: 'user-deadline-' + stage })
+      .then(result => { observed = result; return result; });
+    try {
+      await vi.advanceTimersByTimeAsync(28000);
+      expect(observed).toMatchObject(stage === '人员搜索'
+        ? { status: 'failed', isPreTrigger: true }
+        : { status: 'unknown', isPreTrigger: false });
+      expect(observed?.error).toContain('整轮超时');
+      const pendingSends = native.window['__kairo_pending_sends'] as Map<string, unknown>;
+      expect(pendingSends.size).toBe(0);
+    } finally {
+      await ops.cancelPendingSends();
+      await vi.runAllTimersAsync();
+      await pending;
+    }
+    expect(native.drafts).toHaveLength(stage === '人员搜索' ? 0 : 1);
+    expect(native.records).toHaveLength(stage === '人员搜索' ? 0 : 1);
+    expect(native.ipc.listenerCount('0-91003-sendMsgCallback')).toBe(0);
+  });
+
+  it('成功回执的正式记录被后续消息挤出最新历史后仍只读恢复', async () => {
+    const native = createNativeSendRuntime({ responseLost: true });
+    const store = new InMemorySendOperationStore();
+    const ops = new BridgeMessageOps(native.cdp, store);
+    const options = { operationId: 'user-busy-history' };
+    expect(await ops.sendTextToUser('int2023', '恢复原意图', options)).toMatchObject({ status: 'unknown' });
+    const original = native.records[0]!;
+    for (let index = 0; index < 101; index++) native.records.push({
+      ...original, id: 135700001 + index, msgIdx: index + 2, msgFlag: '其他意图-' + index,
+    });
+    const recovered = await new BridgeMessageOps(native.cdp, store).getSendStatus(options.operationId);
+    expect(recovered).toMatchObject({ status: 'sent', sessionId: '94001', messageId: '135700000', receipt: { msgIdx: 1 } });
+    expect(await ops.sendTextToUser('int2023', '恢复原意图', options)).toEqual(recovered);
+    expect(native.ipc.sent.filter(request => request.args[0] === 'sendMessageNew')).toHaveLength(1);
+  });
+
+  it('精确状态查询不接受另一接收者记录，原生错误保留方法与原因', async () => {
+    const config = { responseLost: true, queryCode: 0 };
+    const native = createNativeSendRuntime(config);
+    const ops = new BridgeMessageOps(native.cdp);
+    expect(await ops.sendTextToUser('int2023', '只认本次记录', { operationId: 'user-exact-evidence' })).toMatchObject({ status: 'unknown' });
+    native.records[0]!['receiver'] = 91999;
+    expect(await ops.getSendStatus('user-exact-evidence')).toMatchObject({ status: 'unknown' });
+    config.queryCode = 627;
+    await expect(ops.getSendStatus('user-exact-evidence')).rejects.toThrow(/getMessageByMsgId.*627/);
+    expect(native.ipc.sent.filter(request => request.args[0] === 'sendMessageNew')).toHaveLength(1);
+  });
+
+  it('复用普通发送选项仍仅发纯文本，重复最小选项不发生意图冲突', async () => {
+    const native = createNativeSendRuntime();
+    const ops = new BridgeMessageOps(native.cdp);
+    const options: SendOptions = { operationId: 'user-options-only', targetSessionId: '93001', mentions: 'all', replyTo: '其他引用' };
+    const result = await ops.sendTextToUser('int2023', '准确纯文本', options);
+    expect(result).toMatchObject({ status: 'sent', sessionId: '94001' });
+    expect(native.records).toMatchObject([{
+      content: { content: [{ type: 0, text: '准确纯文本' }] }, atMemberIDList: [], atState: 1,
+    }]);
+    expect(await ops.sendTextToUser('int2023', '准确纯文本', { operationId: options.operationId })).toEqual(result);
+    expect(native.records).toHaveLength(1);
+  });
+
+  it('普通选项的提及不能把工号发送的空正文变成可发送消息', async () => {
+    const native = createNativeSendRuntime();
+    const options: SendOptions = { operationId: 'user-empty-with-mention', mentions: 'all' };
+    expect(await new BridgeMessageOps(native.cdp).sendTextToUser('int2023', '', options)).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(native.drafts).toEqual([]);
+    expect(native.records).toEqual([]);
   });
 });

@@ -39,7 +39,7 @@ export const RENDERER_IPC_HELPERS_SCRIPT = `
       const onReply = (_event, payload) => {
         finish(payload || { code: 0 });
       };
-      const onAbort = () => finish({ code: -4, error: '本轮发送已取消' });
+      const onAbort = () => finish({ code: -4, error: typeof signal?.reason === 'string' ? signal.reason : '本轮发送已取消' });
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) { onAbort(); return; }
 
@@ -139,11 +139,12 @@ export const CONFIRM_SENT_MESSAGE_SCRIPT = `
 // 订阅只属于本次负草稿；原生数据请求完成与业务回执是两件事。
 export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
   const observeNativeSend = window.__kairo_native_send_observer;
-  function beginNativeSend(key) {
+  function beginNativeSend(key, timeoutMs) {
     const controller = new AbortController();
     const pending = window.__kairo_pending_sends || (window.__kairo_pending_sends = new Map());
+    const timer = timeoutMs === undefined ? undefined : setTimeout(() => controller.abort('原生发送整轮超时 (' + timeoutMs + 'ms)'), timeoutMs);
     pending.set(key, () => controller.abort());
-    return { signal: controller.signal, finish: () => { controller.abort(); pending.delete(key); } };
+    return { signal: controller.signal, finish: () => { clearTimeout(timer); controller.abort(); pending.delete(key); } };
   }
   async function submitNativeMessage(msgObj, targetSession, timeoutMs = 8000, signal, targetLoginName) {
     const insertRes = await callIpc('insertSendBefoeMsg', msgObj);
@@ -199,7 +200,7 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
     };
     ipc.on(channel, onReceipt);
     if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'subscribe', channel, listener: onReceipt });
-    const onAbort = () => finish({ failure: { status: 'unknown', error: '本轮发送等待已取消', isPreTrigger: false } });
+    const onAbort = () => finish({ failure: { status: 'unknown', error: typeof signal?.reason === 'string' ? signal.reason : '本轮发送等待已取消', isPreTrigger: false } });
     signal?.addEventListener('abort', onAbort, { once: true });
     timer = setTimeout(() => finish({ failure: { status: 'unknown', error: '本次原生业务回执超时' + (requestError ? '；' + requestError : ''), isPreTrigger: false } }), timeoutMs);
     try {

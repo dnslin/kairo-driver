@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { CdpClient, KK9Driver, callIpcToData, createNativeMessageKey } from '@kairo/driver';
+import { cleanupNativeUserText } from './native-user-text-cleanup.js';
 
 const [uid, login, peerUid, peerLogin] = process.argv.slice(2);
 assert.ok(uid && login && peerUid && peerLogin,
@@ -139,13 +140,16 @@ try {
   try { await driver.disconnect(); }
   catch (error) { report['Driver退出错误'] = String(error); report['通过'] = false; process.exitCode = 1; }
   if (connected) {
+    try { await cleanupNativeUserText(cdp, key, driver.getStartupGenerationId()); }
+    catch (error) { report['远端退出错误'] = String(error); report['通过'] = false; process.exitCode = 1; }
     try {
       if (probeInstalled) await cdp.evaluate('window.__kairo_user_text_probe.cleanup()');
       const after = await surface();
       report['退出资源'] = after;
       assert.deepEqual(after, report['初始资源'], '退出资源或窗口没有回到初始状态');
     } catch (error) { report['采集退出错误'] = String(error); report['通过'] = false; process.exitCode = 1; }
-    await cdp.disconnect();
+    try { await cdp.disconnect(); }
+    catch (error) { report['CDP退出错误'] = String(error); report['通过'] = false; process.exitCode = 1; }
   }
   await mkdir('tmp', { recursive: true });
   await writeFile('tmp/native-user-text-evidence.json', JSON.stringify(report, null, 2));

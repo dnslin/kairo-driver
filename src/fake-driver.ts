@@ -407,11 +407,16 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     if (targetEmployee) {
       if (outcome.status === 'sent') {
         const receiverId = String(targetEmployee.id);
-        let session = this.sessions.find(item => item.type === 'private' && item.receiverId === receiverId && /^[1-9]\d*$/.test(item.id));
+        let sessionId = outcome.sessionId && /^[1-9]\d*$/.test(outcome.sessionId) ? outcome.sessionId : undefined;
+        let session = this.sessions.find(item => item.type === 'private' && item.receiverId === receiverId && /^[1-9]\d*$/.test(item.id) &&
+          (sessionId === undefined || item.id === sessionId));
         if (!session) {
-          let sessionId = 1;
-          while (this.sessions.some(item => item.id === String(sessionId))) sessionId++;
-          session = { id: String(sessionId), name: targetEmployee.name, type: 'private', nativeType: 0, receiverId, unread: false };
+          if (!sessionId) {
+            let nextId = 1;
+            while (this.sessions.some(item => item.id === String(nextId))) nextId++;
+            sessionId = String(nextId);
+          }
+          session = { id: sessionId, name: targetEmployee.name, type: 'private', nativeType: 0, receiverId, unread: false };
           this.sessions.push(session);
         }
         outcome = { ...outcome, sessionId: session.id };

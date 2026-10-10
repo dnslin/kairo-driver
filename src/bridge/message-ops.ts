@@ -279,7 +279,8 @@ export class BridgeMessageOps {
     options: SendToUserOptions = {}
   ): Promise<SendResult> {
     const target = typeof loginName === 'string' ? loginName.trim() : '';
-    return this.executeOperation('text-to-user', options, text, (key, bound) =>
+    const userOptions = { operationId: options.operationId, verifyTimeoutMs: options.verifyTimeoutMs };
+    return this.executeOperation('text-to-user', userOptions, text, (key, bound) =>
       this.sendRichTextRaw(text, bound, key, target), target
     );
   }
@@ -397,6 +398,7 @@ export class BridgeMessageOps {
   ): Promise<SendOutcome> {
     const started = Date.now();
     const timeout = options.verifyTimeoutMs ?? 8000;
+    const cdpTimeoutMs = timeout + (targetLoginName ? 20000 : 12000);
     const encoded = encodeRendererPayload({
       target: options.targetSessionId,
       targetLoginName,
@@ -406,6 +408,7 @@ export class BridgeMessageOps {
       mentionIds,
       replyTo,
       timeout,
+      deadlineMs: targetLoginName ? cdpTimeoutMs - 2000 : undefined,
     });
     const script = `(async () => {
       const electron = window.require ? window.require('electron') : null;
@@ -415,7 +418,8 @@ export class BridgeMessageOps {
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
-      const cancellation = beginNativeSend(data.key);
+      // 渲染任务比外层CDP提前两秒结束，避免宿主超时后留下可继续发送的任务。
+      const cancellation = beginNativeSend(data.key, data.deadlineMs);
       const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
       try {
       let context;
@@ -441,7 +445,7 @@ export class BridgeMessageOps {
       } finally { cancellation.finish(); }
     })()`;
     try {
-      const outcome = await this.cdp.evaluate<SendOutcome>(script, timeout + (targetLoginName ? 20000 : 12000));
+      const outcome = await this.cdp.evaluate<SendOutcome>(script, cdpTimeoutMs);
       if (!outcome || !['sent', 'failed', 'unknown'].includes(outcome.status))
         return { status: 'unknown', error: '原生发送未返回有效结果', isPreTrigger: false };
       return { ...outcome, verifyLatencyMs: Date.now() - started };

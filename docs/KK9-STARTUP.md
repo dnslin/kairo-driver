@@ -523,3 +523,22 @@ cmd /c "set KK9_USER_TEXT_CONFIRM=5761:3583:int2023&& pnpm exec tsx examples/ver
 
 前序同一用户授权的首次调查通过 `unionSearch` 找到3583/int2023；`getSessionInfo6({sessionType:0,typeID:3583})` 返回610，原版首次发送参数sessionID0的单次提交建立816219，正式137621731/索引1，业务code0。该证据保存在 `tmp/int2023-first-contact-evidence.json`。本轮SDK发送时会话已存在，因此只记复用通过，不删除数据或换用未授权目标制造新的首次联系场景。接收端展示、系统通知及已读尚未验证，不能由sent替代。
 
+### PR #13 修复后的只读验收
+
+本轮没有重跑上面的真实发送命令。实际执行过两个临时诊断命令（诊断脚本在验收后删除，JSON报告保留）：
+
+```bash
+pnpm exec tsx tmp/pr13-fix-readonly.ts
+pnpm exec tsx tmp/pr13-fix-dist-smoke.ts
+```
+
+源码只读诊断核对实际5761/0123040139后，连续读取int2023人员搜索第一页三次，耗时9.07–21.78ms，均只有准确3583一人且已是末页。精确查询原消息137624619，核对816219及双方UID；使用当前渲染页前序真实业务回执与本地临时操作Store，执行 `getSendStatus()` 恢复sent。没有注入或伪造回执，没有调用发送入口。窗口、读索引和监听前后不变，连接退出；报告为 `tmp/pr13-fix-readonly-evidence.json`。
+
+最终 `pnpm check` 已通过build/typecheck、32文件395项与lint，再用其生成的 `@kairo/driver` dist运行构建入口烟测，退出码0：
+
+- 真实业务回执与精确记录恢复sent，正式816219/137624619；无最新历史窗口依赖，无重新找人或发送。
+- 只关闭本轮Driver自己的CDP连接，独立连接仍可用；确认本代Hook及观察器确实残留，再调用专项示例实际清理函数。
+- 清理后窗口仍为50981，816219读索引/最大索引均为2；message监听1、目标回执监听0、Hook/观察器/binding均不存在、在途0，完整回到读取前基线。Driver及核对连接均disconnected；报告为 `tmp/pr13-fix-dist-smoke-evidence.json`。
+
+本轮真机证明搜索样本、精确状态恢复和无发送的自有连接失联清理。慢分页超时、真实在途发送取消和同Hook并发回执仅通过执行实际生成脚本的受控回归验证，没有在真机制造慢查询或额外消息。接收端展示、通知和已读仍未验证，前序消息保留，不把这些边界写成通过。
+
