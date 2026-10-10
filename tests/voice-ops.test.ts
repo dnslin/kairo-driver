@@ -154,7 +154,7 @@ describe('prepareVoice 语音输入与 KK9 AMR-NB 转换', () => {
 
     expect(payload.duration).toBe(1);
     expect(Buffer.from(payload.data, 'base64').subarray(0, 6)).toEqual(AMR_HEADER);
-    expect(payload.filepath).toBe(path.resolve(filePath));
+    expect(payload).not.toHaveProperty('filepath');
     expect(captured?.pcm).toHaveLength(8160);
     expect(Array.from(captured?.pcm.subarray(8000) ?? [])).toEqual(new Array(160).fill(0));
     expect(Math.max(...Array.from(captured?.pcm.subarray(0, 8000) ?? []))).toBeGreaterThan(0.1);
@@ -234,7 +234,7 @@ describe('prepareVoice 语音输入与 KK9 AMR-NB 转换', () => {
     });
     expect(Array.from(captured?.pcm ?? []).some(sample => Math.abs(sample) > 0.01)).toBe(true);
     expect(Buffer.from(payload.data, 'base64').subarray(0, 6)).toEqual(AMR_HEADER);
-    expect(payload.filepath).toBeUndefined();
+    expect(payload).not.toHaveProperty('filepath');
   });
 
   it('拒绝空文本、空音频和不存在的本地文件', async () => {

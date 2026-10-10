@@ -170,17 +170,6 @@ export async function sendNativeStructuredMessage(
       const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
       if (submission.failure) return submission.failure;
       const confirmedMessage = submission.confirmedMessage;
-      // 未切换的语音仍保留原有通知；四类卡片不读取界面，也不补气泡。
-      if (data.contentType === 2) {
-        const app = document.querySelector('#app')?.__vue__;
-        const main = document.querySelector('.main-page')?.__vue__;
-        const bus = main?.$bus || app?.$bus || window.vueBus;
-        const store = app?.$store || window.$store;
-        try { store?.commit('updateSesLastMsg', { sesUUID: targetSes.sesUUID, message: confirmedMessage }); }
-        catch { console.warn('[KairoDriver] 会话摘要更新失败'); }
-        try { bus?.$emit(targetSes.sesUUID + '-msg', [confirmedMessage]); }
-        catch { console.warn('[KairoDriver] 聊天窗口推送失败'); }
-      }
 
       return { status: 'sent', messageId: String(confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
       } finally { cancellation.finish(); }

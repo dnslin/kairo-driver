@@ -374,8 +374,8 @@ describe('原生卡片与语音发送集成', () => {
     expect(native.ipc.sent).toHaveLength(0);
   });
 
-  it('同一语音 operationId 重放直接复用 sent，不重复准备音频', async () => {
-    const native = createSuccessfulNativeRuntime();
+  it('无聊天组件的语音按业务回执确认且重放和查询不重复准备提交', async () => {
+    const native = createNativeSendRuntime();
     vi.mocked(prepareVoice).mockResolvedValue({ duration: 2, data: 'IyFBTVIK' });
     const operations = new BridgeMessageOps(native.cdp, new InMemorySendOperationStore());
     const input = { text: '只合成一次' } as const;
@@ -383,9 +383,10 @@ describe('原生卡片与语音发送集成', () => {
 
     const first = await operations.sendVoice(input, options);
     const replay = await operations.sendVoice(input, options);
-
+    const queried = await operations.getSendStatus(options.operationId);
     expect(first).toMatchObject({ status: 'sent', messageId: '135700000' });
     expect(replay).toEqual(first);
+    expect(queried).toEqual(first);
     expect(prepareVoice).toHaveBeenCalledOnce();
     expect(
       native.ipc.sent.filter(request => request.args[0] === 'insertSendBefoeMsg')
@@ -415,7 +416,7 @@ describe('原生卡片与语音发送集成', () => {
 
     expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
     expect(native.sent[0]?.['sessionID']).toBe(session.id);
-    expect(native.runtime.events[0]?.event).toBe(`${session.sesUUID}-msg`);
+    expect(native.runtime.events).toEqual([]);
   });
 
   it('直接 Bridge 无 operationId 且无当前会话时不准备音频并明确触发前失败', async () => {
