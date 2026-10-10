@@ -196,12 +196,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.domSessionOps.selectSession(targetSession.id);
   }
 
-  /**
-   * 显式消除指定会话的未读红点（优先通过 IPC readMessage 同步到服务端）
-   */
-  public async markSessionRead(sessionId: string): Promise<boolean> {
-    const targetSession = await this.resolveSessionTarget(sessionId);
-    return targetSession ? this.bridgeSessionOps.markSessionRead(targetSession.id) : false;
+  /** 指定原生会话标记已读；不按名称解析，不默认当前窗口。 */
+  public markSessionRead(sessionId: string): Promise<boolean> {
+    return this.bridgeSessionOps.markSessionRead(sessionId);
   }
 
 

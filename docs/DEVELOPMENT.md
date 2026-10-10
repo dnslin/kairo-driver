@@ -189,3 +189,9 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 组织遍历从 `getDepartmentVisible` 的真实可见根开始，复用 `getChildDeptsAndMembers` 每页200成员、部门遍历与UID去重。正常空组织返回 `[]`，档案 `getMemberDetail` 正常缺席返回 `null`；原生错误、期限耗尽、部门上限或无效页抛出带方法/部门/页/原因的 `DriverError`，不返回部分全量。移除DOM/Vue身份发现、Vuex补集、Driver回退及旧 `OrgOps` 导出/实现，纯解析工具仍保留。
 
 实际回归：`pnpm exec vitest run tests/bridge-org-ops.test.ts tests/driver.test.ts -t "原生组织与员工查询|原生正常空组织|getEmployeeBySession"`，8项通过。组织专项先复现4项失败；修正后发现并补回部门路径。LSP references初始化退出code0，未重启，已检索实际调用补足。真机命令和结果见启动说明；最终完整检查等待三切片完成后只运行一次。
+
+## T11b 指定原生会话已读
+
+`markSessionRead` 仅接受原生会话ID，先 `getSessionBySessionID` 取得真实类型和 `maxMessageIndex`，再调用 `readMessage`；不按名称或当前窗口选目标，不猜索引、不改Vue/总线。不存在返回false，原生失败抛带会话/方法/码/原因的DriverError。删除旧DOM视觉已读方法及旧回归，Fake按明确会话更新未读状态。
+
+实际命令：`pnpm exec vitest run tests/bridge-session-ops.test.ts tests/driver.test.ts tests/fake-driver.test.ts -t "指定原生会话已读|已读名称|会话管理与组织|历史查询返回历史撤回"`，6项通过；专项先复现2项失败。真机双目标真实未读推进、已读幂等与历史只读已验收，详见启动说明；不重复前序真机或逐片全量check。

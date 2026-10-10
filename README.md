@@ -86,9 +86,11 @@ const history = await driver.getRecentMessages(session, 10);
 
 这里只切换主动历史读取；现有自动轮询和补偿扫描的窗口操作尚未在本轮移除，不应将它们用于只读验收。
 
-## 组织与员工查询
+## 组织查询与标记已读
 
 `getOrgEmployees(timeoutMs?)` 从原生可见根部门分页遍历并按UID去重；正常空返回 `[]`，任何部门/页错误或遍历中断抛错，不返回部分全量。`getUserProfile(uid)` 使用原生档案，正常缺席返回 `null`；已删除旧 `OrgOps` 及DOM回退，纯数据解析工具保留。
+
+`markSessionRead(nativeSessionId)` 只接受明确原生ID；使用原生会话真实类型与最大消息索引调用 `readMessage`。不存在返回false，原生失败抛错，已读目标可幂等。不默认当前窗口、不按名称选择，也不手改Vue红点。该方法有真实已读副作用，必须由调用方限定已获授权的账号与目标；查询历史不会代为调用它。
 
 ## 指定会话撤回
 

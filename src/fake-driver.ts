@@ -204,8 +204,13 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     return Promise.resolve(this.currentSession);
   }
 
-  public markSessionRead(_sessionId: string): Promise<boolean> {
+  public markSessionRead(sessionId: string): Promise<boolean> {
     this.markSessionReadCallsCount++;
+    const session = this.sessions.find(item => item.id === sessionId.trim());
+    if (!session) return Promise.resolve(false);
+    session.unread = false;
+    session.unreadCount = 0;
+    session.unreadAt = false;
     return Promise.resolve(true);
   }
 

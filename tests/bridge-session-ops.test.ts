@@ -225,138 +225,42 @@ describe('BridgeSessionOps 纯数据会话管理测试', () => {
     expect(runtime.editor.activedSes?.sesUUID).toBe('1-92001');
   });
 
-  it('markSessionRead 对同名名称必须拒绝且不得调用 native IPC', async () => {
-    const firstGroup = {
-      id: 93002,
-      sesUUID: '1-92001',
-      typeName: 'test-group',
-      name: 'test-group',
-      type: 1,
-      maxMessageIndex: 20,
-      userReadIndex: 10,
-      atState: 2,
-    };
-    const secondGroup = {
-      id: 765432,
-      sesUUID: '1-92002',
-      typeName: 'test-group',
-      name: 'test-group',
-      type: 1,
-      maxMessageIndex: 30,
-      userReadIndex: 15,
-      atState: 2,
-    };
-    const ipc = new FakeIpcRenderer(() => ({ code: 0 }));
-    const runtime = createRendererRuntime({
-      ipc,
-      sessions: [firstGroup, secondGroup],
-      activeSession: firstGroup,
+  describe('指定原生会话已读', () => {
+    function readOps(code = 0, missing = false) {
+      const row = { id: 93001, type: 1, maxMessageIndex: 10, userReadIndex: 4 };
+      const ipc = new FakeIpcRenderer(({ args: [method, value] }) => {
+        if (method === 'getSessionBySessionID') return { code: 0, data: missing || String(value) !== '93001' ? null : row };
+        if (method === 'readMessage') {
+          if (!code) row.userReadIndex = 10;
+          return { code, error: code ? '原生拒绝已读' : undefined };
+        }
+        throw new Error('错误原生入口');
+      });
+      const cdp = { evaluate: (script: string) => runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout }) } as unknown as CdpClient;
+      return { ops: new BridgeSessionOps(cdp), ipc, row };
+    }
+
+    it('无窗口按指定原生 ID、真实类型与最大索引标已读，已读目标可幂等', async () => {
+      const { ops, ipc, row } = readOps();
+      expect(await ops.markSessionRead('93001')).toBe(true);
+      expect(row.userReadIndex).toBe(10);
+      expect(ipc.sent.find(r => r.args[0] === 'readMessage')?.args).toEqual(['readMessage', { sessionID: 93001, type: 1, maxMsgIdx: 10 }]);
+      expect(await ops.markSessionRead('93001')).toBe(true);
+      expect(row.userReadIndex).toBe(10);
     });
-    const mockCdp = {
-      evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
-    } as unknown as CdpClient;
 
-    const result = await new BridgeSessionOps(mockCdp).markSessionRead('test-group');
-
-    expect(result).toBe(false);
-    expect(ipc.sent).toHaveLength(0);
-    expect(firstGroup.userReadIndex).toBe(10);
-    expect(secondGroup.userReadIndex).toBe(15);
-  });
-
-  it('markSessionRead 仅在 native ack 成功后更新本地未读状态', async () => {
-    const session = {
-      id: 93001,
-      sesUUID: '0-91002',
-      typeName: 'test-employee',
-      type: 0,
-      maxMessageIndex: 10,
-      userReadIndex: 4,
-      atState: 2,
-    };
-    const ipc = new FakeIpcRenderer(() => ({ code: 0 }));
-    const runtime = createRendererRuntime({ ipc, sessions: [session], activeSession: session });
-    const mockCdp = {
-      evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
-    } as unknown as CdpClient;
-
-    const result = await new BridgeSessionOps(mockCdp).markSessionRead('0-91002');
-
-    expect(result).toBe(true);
-    expect(session.userReadIndex).toBe(10);
-    expect(session.atState).toBe(0);
-  });
-
-  it('markSessionRead 缺少 ipcRenderer 时不得伪造本地已读成功', async () => {
-    const session = {
-      id: 93001,
-      sesUUID: '0-91002',
-      typeName: 'test-employee',
-      type: 0,
-      maxMessageIndex: 10,
-      userReadIndex: 4,
-      atState: 2,
-    };
-    const runtime = createRendererRuntime({ sessions: [session], activeSession: session });
-    const mockCdp = {
-      evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
-    } as unknown as CdpClient;
-
-    const result = await new BridgeSessionOps(mockCdp).markSessionRead('0-91002');
-
-    expect(result).toBe(false);
-    expect(session.userReadIndex).toBe(4);
-    expect(session.atState).toBe(2);
-    expect(runtime.events).toHaveLength(0);
-  });
-
-  it('markSessionRead 收到业务失败 ack 时不得更新本地状态', async () => {
-    const session = {
-      id: 93001,
-      sesUUID: '0-91002',
-      typeName: 'test-employee',
-      type: 0,
-      maxMessageIndex: 10,
-      userReadIndex: 4,
-      atState: 2,
-    };
-    const ipc = new FakeIpcRenderer(() => ({ code: 1, message: 'read rejected' }));
-    const runtime = createRendererRuntime({ ipc, sessions: [session], activeSession: session });
-    const mockCdp = {
-      evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
-    } as unknown as CdpClient;
-
-    const result = await new BridgeSessionOps(mockCdp).markSessionRead('0-91002');
-
-    expect(result).toBe(false);
-    expect(session.userReadIndex).toBe(4);
-    expect(session.atState).toBe(2);
-    expect(runtime.events).toHaveLength(0);
-  });
-
-  it('markSessionRead 的 ipc.send 抛错后必须移除本次 listener', async () => {
-    const session = {
-      id: 93001,
-      sesUUID: '0-91002',
-      typeName: 'test-employee',
-      type: 0,
-      maxMessageIndex: 10,
-      userReadIndex: 4,
-      atState: 2,
-    };
-    const ipc = new FakeIpcRenderer(() => {
-      throw new Error('read send failed');
+    it('名称和不存在 ID 不能作用到其他会话', async () => {
+      const { ops, ipc, row } = readOps();
+      expect(await ops.markSessionRead('群名')).toBe(false);
+      expect(await ops.markSessionRead('99999')).toBe(false);
+      expect(ipc.sent.filter(r => r.args[0] === 'readMessage')).toEqual([]);
+      expect(row.userReadIndex).toBe(4);
     });
-    const runtime = createRendererRuntime({ ipc, sessions: [session], activeSession: session });
-    const mockCdp = {
-      evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
-    } as unknown as CdpClient;
 
-    const result = await new BridgeSessionOps(mockCdp).markSessionRead('0-91002');
-    const request = ipc.sent[0];
-
-    expect(result).toBe(false);
-    expect(request).toBeDefined();
-    expect(ipc.listenerCount(`data-${request?.id}`)).toBe(0);
+    it('原生失败保留会话、方法与错误码，不返回假成功', async () => {
+      const { ops, row } = readOps(627);
+      await expect(ops.markSessionRead('93001')).rejects.toThrow(/readMessage.*93001.*627.*原生拒绝已读/);
+      expect(row.userReadIndex).toBe(4);
+    });
   });
 });

@@ -374,7 +374,7 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     }
   );
 
-  it('Driver 顶层必须拒绝全局重名会话的 select 与 markRead', async () => {
+  it('Driver 顶层拒绝重名会话的 select', async () => {
     const driver = new KK9Driver({
       cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
     });
@@ -385,13 +385,10 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     ]);
     internals.bridgeSessionOps.selectSession = vi.fn().mockResolvedValue(true);
     internals.domSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-    internals.bridgeSessionOps.markSessionRead = vi.fn().mockResolvedValue(true);
 
     expect(await driver.selectSession('test-group')).toBe(false);
-    expect(await driver.markSessionRead('test-group')).toBe(false);
     expect(internals.bridgeSessionOps.selectSession).not.toHaveBeenCalled();
     expect(internals.domSessionOps.selectSession).not.toHaveBeenCalled();
-    expect(internals.bridgeSessionOps.markSessionRead).not.toHaveBeenCalled();
   });
 
   it('会话管理应优先调用 Bridge 会话服务', async () => {
@@ -423,7 +420,6 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     internals.bridgeSessionOps.getSessions = vi.fn().mockResolvedValue(mockSessions);
     internals.bridgeSessionOps.getCurrentSession = vi.fn().mockResolvedValue(mockSessions[0]);
     internals.bridgeSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-    internals.bridgeSessionOps.markSessionRead = vi.fn().mockResolvedValue(true);
 
     const sessions = await driver.getSessions();
     expect(sessions).toHaveLength(2);
@@ -435,27 +431,16 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     expect(switched).toBe(true);
     expect(internals.bridgeSessionOps.selectSession).toHaveBeenCalledWith('93002');
 
-    const markRes = await driver.markSessionRead('test-group');
-    expect(markRes).toBe(true);
   });
 
-  it('Bridge 已读失败时不得通过 DOM 隐藏红点并伪报成功', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
-    });
-    const internals = getDriverTestInternals(driver);
-    driver.getSessions = vi
-      .fn()
-      .mockResolvedValue([
-        { id: '0-91002', name: 'test-employee', type: 'private', unread: false },
-      ]);
-    internals.bridgeSessionOps.markSessionRead = vi.fn().mockResolvedValue(false);
-    internals.domSessionOps.markSessionRead = vi.fn().mockResolvedValue(true);
-
-    const result = await driver.markSessionRead('0-91002');
-
-    expect(result).toBe(false);
-    expect(internals.domSessionOps.markSessionRead).not.toHaveBeenCalled();
+  it('已读名称不解析为原生目标，原生失败保留错误', async () => {
+    const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });
+    const ipc = new FakeIpcRenderer(({ args: [method] }) => method === 'getSessionBySessionID'
+      ? { code: 0, data: { id: 93001, type: 0, maxMessageIndex: 12 } }
+      : { code: 627, error: '已读失败' });
+    getDriverTestInternals(driver).cdp.evaluate = (script: string) => runRendererScript(script, { window: { ipcRenderer: ipc }, setTimeout, clearTimeout });
+    expect(await driver.markSessionRead('test-group')).toBe(false);
+    await expect(driver.markSessionRead('93001')).rejects.toThrow(/readMessage.*93001.*627.*已读失败/);
   });
 
   it('原生正常空组织与缺席档案不触发窗口回退', async () => {

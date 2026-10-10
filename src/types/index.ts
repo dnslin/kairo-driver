@@ -445,6 +445,7 @@ export interface IKK9Driver extends EventEmitter {
   getSessions(): Promise<KK9Session[]>;
   getCurrentSession(): Promise<KK9Session | null>;
   selectSession(sessionId: string): Promise<boolean>;
+  /** 仅接受原生 ID；不存在返回 false，原生操作失败抛 DriverError。 */
   markSessionRead(sessionId: string): Promise<boolean>;
 
   // 消息读取与补偿

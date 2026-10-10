@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { CdpClient, callIpcToData, KK9Driver } from '../src/index.js';
 
 const phase = process.argv[2];
-assert.equal(phase, 'a', '参数：a（组织查询）');
+assert.ok(phase === 'a' || phase === 'b', '参数：a（组织查询）或 b（标已读），b可追加 --listen');
+if (phase === 'b') assert.equal(process.env['KK9_REAL_TEST_CONFIRM'], '5761:716791:793803', '标已读必须通过授权门禁');
 const config = { url: process.env['CDP_URL'] || 'http://127.0.0.1:9222', pageMatch: process.env['PAGE_MATCH'] || 'renderer.html' };
 const driver = new KK9Driver({ cdp: config, rejectExistingBridge: true });
 const cdp = new CdpClient(config);
@@ -37,18 +38,68 @@ try {
   assert.equal(groupSession?.nativeType, 1);
   assert.equal(groupSession?.receiverId, '29467');
   assert.equal(groupSession?.name, '测试123');
-  const before = await snapshot();
-  const roots = await callIpcToData<Array<{ id: number; name: string }>>(cdp, 'getDepartmentVisible');
-  assert.equal(roots.code, 0);
-  const employees = await driver.getOrgEmployees();
-  assert.equal(new Set(employees.map(e => String(e.id))).size, employees.length, '组织重复 UID');
-  assert.ok(employees.some(e => String(e.id) === '5761'), '原生组织缺少已确认登录成员');
-  const peer = await driver.getUserProfile(3585);
-  assert.equal(peer?.loginName, 'int2024');
-  const after = await snapshot();
-  assert.deepEqual(after, before, '组织查询改变窗口或读索引');
-  assert.deepEqual(events, [], '查询重放实时事件');
-  console.log(JSON.stringify({ 切片: 'T11a', 身份: '5761/0123040139', 根部门: roots.data?.map(({ id, name }) => ({ id, name })), 员工数量: employees.length, 指定档案: { uid: peer.id, login: peer.loginName }, before, after, 实时事件: events }, null, 2));
+  if (phase === 'a') {
+    const before = await snapshot();
+    const roots = await callIpcToData<Array<{ id: number; name: string }>>(cdp, 'getDepartmentVisible');
+    assert.equal(roots.code, 0);
+    const employees = await driver.getOrgEmployees();
+    assert.equal(new Set(employees.map(e => String(e.id))).size, employees.length, '组织重复 UID');
+    assert.ok(employees.some(e => String(e.id) === '5761'), '原生组织缺少已确认登录成员');
+    const peer = await driver.getUserProfile(3585);
+    assert.equal(peer?.loginName, 'int2024');
+    const after = await snapshot();
+    assert.deepEqual(after, before, '组织查询改变窗口或读索引');
+    assert.deepEqual(events, [], '查询重放实时事件');
+    console.log(JSON.stringify({ 切片: 'T11a', 身份: '5761/0123040139', 根部门: roots.data?.map(({ id, name }) => ({ id, name })), 员工数量: employees.length, 指定档案: { uid: peer.id, login: peer.loginName }, before, after, 实时事件: events }, null, 2));
+  } else {
+    const initialWindow = (await snapshot()).windowId;
+    try {
+      for (const id of ['716791', '793803']) {
+        const other = id === '716791' ? '793803' : '716791';
+        assert.equal(await driver.selectSession(other), true, '仅用另一授权会话准备目标未显示场景');
+        const before = await snapshot();
+        assert.equal(before.windowId, other);
+        const row = before.rows.find(s => String(s.id) === id)!;
+        assert.equal(await driver.markSessionRead(id), true);
+        const after = await snapshot();
+        assert.equal(after.windowId, other);
+        assert.equal(after.rows.find(s => String(s.id) === id)!.read, row.max);
+        console.log(JSON.stringify({ 切片: 'T11b', 阶段: '既有未读或幂等', id, before, after }));
+      }
+      if (process.argv.includes('--listen')) {
+        for (const id of ['716791', '793803']) {
+          const other = id === '716791' ? '793803' : '716791';
+          assert.equal(await driver.selectSession(other), true);
+          const incoming = new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => { driver.off('message', listener); reject(new Error(`等待授权目标${id}新入站超时；未证明未读推进`)); }, 180000);
+            const listener = (message: { sessionId: string; senderId?: string }) => {
+              if (message.sessionId !== id || message.senderId !== '3585') return;
+              clearTimeout(timer); driver.off('message', listener); resolve();
+            };
+            driver.on('message', listener);
+          });
+          console.log(id === '716791' ? 'T11B_PRIVATE_READY：等待int2024私聊一条文本' : 'T11B_GROUP_READY：等待int2024在测试123/793803一条文本');
+          await incoming;
+          const before = await snapshot();
+          const row = before.rows.find(s => String(s.id) === id)!;
+          assert.equal(before.windowId, other);
+          assert.ok(row.read < row.max, '没有真实未读前提，不能声称推进');
+          const target = sessions.find(s => s.id === id)!;
+          const eventCount = events.length;
+          await driver.getRecentMessages(target, 2);
+          assert.deepEqual(await snapshot(), before, '历史读取不能改变读索引/窗口');
+          assert.equal(events.length, eventCount, '历史不得重放事件');
+          assert.equal(await driver.markSessionRead(id), true);
+          const after = await snapshot();
+          assert.equal(after.windowId, other);
+          assert.equal(after.rows.find(s => String(s.id) === id)!.read, row.max);
+          console.log(JSON.stringify({ 切片: 'T11b', 阶段: '真实未读推进', id, before, after, 历史新增事件: events.length - eventCount }));
+        }
+      }
+    } finally {
+      if (initialWindow === '716791' || initialWindow === '793803') assert.equal(await driver.selectSession(initialWindow), true);
+    }
+  }
 } finally {
   await Promise.all([driver.disconnect(), cdp.disconnect()]);
   console.log('本轮 Driver 与核对连接已退出');

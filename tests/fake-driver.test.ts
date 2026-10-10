@@ -194,9 +194,10 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     expect(switched).toBe(true);
     expect(driver.selectSessionCallsCount).toBe(1);
 
-    const markRead = await driver.markSessionRead('test-group');
-    expect(markRead).toBe(true);
-    expect(driver.markSessionReadCallsCount).toBe(1);
+    expect(await driver.markSessionRead('test-group')).toBe(false);
+    expect(await driver.markSessionRead('93002')).toBe(true);
+    expect((await driver.getSessions()).find(s => s.id === '93002')).toMatchObject({ unread: false, unreadCount: 0, unreadAt: false });
+    expect((await driver.getCurrentSession())?.id).toBe('93001');
 
     const mockEmployees: KK9Employee[] = [
       {
