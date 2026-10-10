@@ -90,6 +90,24 @@ PR #5审计修复：`examples/verify-native-file.ts`的观测Hook不再让损坏
 对应回归位于`tests/native-send-receipt.test.ts`，直接执行文件专项中的实际采集注入与原生提交脚本。`pnpm exec vitest run tests/native-send-receipt.test.ts -t "文件专项采集"`修复前复现原生回执被阻断、SDK最终超时；修复后`pnpm exec vitest run tests/native-send-receipt.test.ts`的9项通过，确认原始损坏字段仍送达、解析错误可诊断、SDK按既有错误边界结束。本次实现改动后仅执行一次最终`pnpm check`，build/typecheck、32文件381项与lint通过。未重新发送或撤回真机文件，沿用此前双目标附件证据。
 
 
+## T07 原生图片准备与发送
+
+`sendImage(imagePath, { targetSessionId, operationId })` 保持既有公开契约。图片准备改在KK9的Electron环境内执行：复用其现有`file-type`按文件内容识别格式，以[`nativeImage.createFromBuffer`](https://www.electronjs.org/docs/latest/api/native-image)实际解码和取得尺寸。不可读、损坏、不支持、目录和超过既有20MB限制的图片在提交前返回`failed/isPreTrigger:true`，错误保留源路径和具体原因。不新增图片依赖或扩大未经验证的格式承诺。
+
+缩略图沿用KK9原版最长边300像素、不放大小图、PNG规则，使用`nativeImage.resize/toPNG`，不使用编辑器、DOM或canvas。`sendingImgBeforeHandle`写入缩略图并复制真实源文件，但其catch会吞掉写入/复制错误后仍返回路径；因此SDK实际读取并解码两个生成文件，核对缩略图尺寸/格式及原图尺寸/格式/实际字节数后才提交。原图与base64不跨CDP复制，CDP载荷只携带源路径和发送参数。
+
+原生`sendMessageNew`分别上传`filepath`缩略图和`filepath_h`原图，形成`uri/uri_h`，最终`size`来自原图上传字节数。上传-9、业务失败、正式ID关联、unknown不重发、取消、固定目标及Store终态继续使用已有发送登记和回执；重复operationId与只读查询不再准备或提交。删除图片发送后的Vue/DOM通知，不承诺即时刷新当前聊天气泡。Driver门面、公开类型、Fake及既有图片调用的接口未变化，保持原样，不增兼容路径或重做其他媒体。
+
+图片回归集中于`tests/native-media.test.ts`，执行实际生成脚本，覆盖真实原生解码结果的使用、独立缩略图、损坏/读取/文件限制、缺失或损坏生成文件、原生准备失败、取消、上传及617业务失败、慢回执和unknown防重。Electron边界使用固定真实素材的解码结果替身；不把替身当作真实解码或上传验收。原有图片回声/等待矩阵已被上述具体图片行为替代，其他媒体不改。首次`pnpm exec vitest run tests/native-media.test.ts -t "有PNG头"`复现损坏图片已进入提交、随后因界面依赖返回unknown的错误；修正后的图片准备10项通过，补充准备取消后，受影响三文件共60项通过。
+
+本轮仅一次最终`pnpm check`，build/typecheck、32文件388项测试及lint全部通过。修改后真实SDK双目标各一张640×360测试图，服务器原图和缩略图均重新下载解码、四色采样正确；KK9查看器实际打开双目标原图，用户另行确认接收端两处气泡显示且原图能打开。两条本人图片已撤回，采集及Driver Hook无残留、在途0。命令、尺寸、正式ID和即时气泡刷新边界见[启动说明](KK9-STARTUP.md#t07-原生图片专项验证)。未重跑T03–T06真机或补测T04。
+
+工作树已有依赖直接可用，未再次安装或修改锁文件。LSP references本轮初始化退出code0，未反复重启；结合实际调用路径和受影响回归核对。jshookmcp按实际schema核对KK9图片协议，没有重试旧ASAR完整性失败或修改安装包。辅助浏览器附着不支持Electron的Target.createTarget，改用已有CDP连接采集查看器实际图像；没有为工具失败重发图片。
+
+PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建草稿前失败」回归。预处理边界把真实640×360 PNG原图作为缩略图返回，验证SDK拒绝这一有效但未缩小的产物，保留缩略图路径及具体错误，且不创建草稿。未扩展格式矩阵或修改生产逻辑。
+
+为确认新增回归能捕获审计缺口，临时将缩略图尺寸检查的`||`改为`&&`，执行`pnpm exec vitest run tests/native-media.test.ts -t "可解码但尺寸错误"`，新用例按预期失败（错误结果为sent）。恢复源码并核对与实验前一致后，图片准备专项12项通过；本次唯一一次最终`pnpm check`的build/typecheck、32文件389项测试及lint全部通过。没有真机重发图片，原双目标验收证据继续保留。
+
 ## 依赖与打包
 
 提交并保留 `pnpm-lock.yaml`、`pnpm-workspace.yaml` 和 `patches`。两条音频依赖补丁属于运行所需配置，升级相关依赖时需重新核对补丁及语音处理行为。

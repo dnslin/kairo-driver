@@ -1,6 +1,3 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CdpClient } from '../src/cdp/client.js';
 import { BridgeMessageOps } from '../src/bridge/message-ops.js';
@@ -285,43 +282,4 @@ describe('BridgeMessageOps 原生消息操作', () => {
       ])
     );
   });
-  it.each([
-    [0, 0, 8000, 'sent'],
-    [627, 0, 8000, 'failed'],
-    [0, 200, 100, 'unknown'],
-    [0, 4500, 6000, 'sent'],
-  ] as const)(
-    '图片业务码%s、处理%s毫秒、等待%s毫秒返回%s',
-    async (code, sendDelayMs, verifyTimeoutMs, status) => {
-      vi.useFakeTimers();
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kairo-t03-img-'));
-      const file = path.join(dir, '图片.png');
-      fs.writeFileSync(
-        file,
-        Buffer.from(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-          'base64'
-        )
-      );
-      try {
-        const native = createNativeSendRuntime({ code, sendDelayMs });
-        native.context['document'] = { querySelector: () => null };
-        const pending = new BridgeMessageOps(native.cdp).sendImage(file, {
-          targetSessionId: '93001',
-          verifyTimeoutMs,
-        });
-        await vi.advanceTimersByTimeAsync(sendDelayMs);
-        const result = await pending;
-        expect(result.status).toBe(status);
-        expect(native.drafts[0]?.['content']).toMatchObject({
-          content: [
-            { type: 1, width: 1, height: 1, filepath: '原生缩略图', filepath_h: '原生原图' },
-          ],
-        });
-        if (code !== 0) expect(result.nativeCode).toBe(code);
-      } finally {
-        fs.rmSync(dir, { recursive: true });
-      }
-    }
-  );
 });

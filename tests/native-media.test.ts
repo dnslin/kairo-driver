@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createNativeSendRuntime } from './helpers/native-send-runtime.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CdpClient } from '../src/cdp/client.js';
 import { BridgeMessageOps } from '../src/bridge/message-ops.js';
@@ -668,5 +672,257 @@ describe('KK9Driver 五类原生媒体门面', () => {
     expect(result.status).toBe('sent');
     expect(native.sent[0]?.['sessionID']).toBe(session.id);
     expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: result.messageId });
+  });
+});
+
+describe('原生图片准备与提交', () => {
+  const source = fs.readFileSync(new URL('./fixtures/t07-image.png', import.meta.url));
+  const thumbnail = fs.readFileSync(new URL('./fixtures/t07-thumb.png', import.meta.url));
+  const directories: string[] = [];
+
+  afterEach(() => {
+    for (const directory of directories.splice(0))
+      fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  function imageRuntime(
+    config: {
+      code?: number;
+      businessCode?: number;
+      callback?: boolean;
+      sendDelayMs?: number;
+      preparation?: '缺失原图' | '损坏缩略图' | '尺寸错误缩略图' | '原生失败';
+    } = {}
+  ) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kairo-t07-'));
+    directories.push(directory);
+    const file = path.join(directory, '实际PNG.jpg');
+    fs.writeFileSync(file, source);
+    const thumbPath = path.join(directory, 'thumb');
+    const artworkPath = path.join(directory, 'artwork');
+    const native = createNativeSendRuntime({
+      ...config,
+      prepareImage: (thumb, original) => {
+        if (config.preparation === '原生失败') return { code: 627, error: '图片准备拒绝' };
+        if (config.preparation === '尺寸错误缩略图') {
+          fs.copyFileSync(original, thumbPath);
+        } else {
+          fs.writeFileSync(
+            thumbPath,
+            config.preparation === '损坏缩略图'
+              ? '损坏图片'
+              : Buffer.from(thumb.replace('data:image/png;base64,', ''), 'base64')
+          );
+        }
+        if (config.preparation !== '缺失原图') fs.copyFileSync(original, artworkPath);
+        return { code: 0, data: { thumbPath, artworkPath } };
+      },
+    });
+    // Electron是外部运行时边界；固定素材的真实解码结果由KK9生成，发送脚本实际执行。
+    const resized = vi.fn(() => ({ toPNG: () => thumbnail }));
+    native.window['require'] = (name: string) => {
+      if (name === 'fs') return fs;
+      if (name === 'file-type')
+        return (bytes: Buffer) =>
+          bytes.subarray(0, 8).equals(source.subarray(0, 8)) ? { mime: 'image/png' } : undefined;
+      if (name === 'electron')
+        return {
+          nativeImage: {
+            createFromBuffer: (bytes: Buffer) => ({
+              isEmpty: () => !bytes.equals(source) && !bytes.equals(thumbnail),
+              getSize: () =>
+                bytes.equals(source) ? { width: 640, height: 360 } : { width: 300, height: 168 },
+              resize: resized,
+            }),
+          },
+        };
+      throw new Error('未声明的原生依赖 ' + name);
+    };
+    return {
+      ...native,
+      file,
+      resized,
+      thumbPath,
+      artworkPath,
+      ops: new BridgeMessageOps(native.cdp),
+    };
+  }
+
+  it('真实解码尺寸和格式入草稿，缩略图独立缩小，重复及查询不再准备', async () => {
+    const native = imageRuntime();
+    const options = { targetSessionId: '93001', operationId: 't07-image' };
+    const result = await native.ops.sendImage(native.file, options);
+    expect(native.drafts[0]?.['content']).toMatchObject({
+      content: [
+        {
+          type: 1,
+          width: 640,
+          height: 360,
+          size: source.length,
+          mimetype: 'image/png',
+          filepath: native.thumbPath,
+          filepath_h: native.artworkPath,
+        },
+      ],
+    });
+    expect(native.resized).toHaveBeenCalledWith({ width: 300, height: 168, quality: 'best' });
+    expect(fs.readFileSync(native.thumbPath)).toEqual(thumbnail);
+    expect(fs.readFileSync(native.artworkPath)).toEqual(source);
+    await native.ops.sendImage(native.file, options);
+    await native.ops.getSendStatus(options.operationId);
+    expect(native.resized).toHaveBeenCalledTimes(1);
+    expect(native.drafts).toHaveLength(1);
+    expect(result.receipt?.draftId).toBe('-1');
+  });
+
+  it('有PNG头但无法解码的损坏图片不准备或提交', async () => {
+    const native = imageRuntime();
+    fs.writeFileSync(native.file, source.subarray(0, 32));
+    const result = await native.ops.sendImage(native.file, { targetSessionId: '93001' });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(result.error).toContain('解码');
+    expect(native.ipc.sent.filter(request => request.args[0] === 'sendingImgBeforeHandle')).toEqual(
+      []
+    );
+    expect(native.drafts).toEqual([]);
+  });
+
+  it('不存在、目录、超过20MB及非图片各在提交前失败', async () => {
+    const native = imageRuntime();
+    const options = { targetSessionId: '93001' };
+    fs.unlinkSync(native.file);
+    expect(await native.ops.sendImage(native.file, options)).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('ENOENT'),
+    });
+    expect(await native.ops.sendImage(path.dirname(native.file), options)).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('非普通文件'),
+    });
+    fs.writeFileSync(native.file, '');
+    fs.truncateSync(native.file, 20 * 1024 * 1024 + 1);
+    expect(await native.ops.sendImage(native.file, options)).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('20MB'),
+    });
+    fs.writeFileSync(native.file, '不是图片');
+    expect(await native.ops.sendImage(native.file, options)).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('不支持的图片格式'),
+    });
+    expect(native.drafts).toEqual([]);
+  });
+
+  it('实际读取错误保留路径和EIO，不提交图片', async () => {
+    const native = imageRuntime();
+    const read = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw new Error('EIO: 图片读取失败');
+    });
+    try {
+      const result = await native.ops.sendImage(native.file, { targetSessionId: '93001' });
+      expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+      expect(result.error).toContain(native.file);
+      expect(result.error).toContain('EIO');
+      expect(native.drafts).toEqual([]);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it('原生准备等待期间取消，不在迟到准备结果后提交', async () => {
+    const native = imageRuntime();
+    const send = native.ipc.send.bind(native.ipc);
+    let prepared!: () => void;
+    const started = new Promise<void>(resolve => {
+      prepared = resolve;
+    });
+    let release!: () => void;
+    native.ipc.send = (channel, request) => {
+      if (request.args[0] === 'sendingImgBeforeHandle') {
+        release = () => send(channel, request);
+        prepared();
+      } else send(channel, request);
+    };
+    const pending = native.ops.sendImage(native.file, { targetSessionId: '93001' });
+    await started;
+    await native.ops.cancelPendingSends();
+    release();
+    expect(await pending).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(native.drafts).toEqual([]);
+    expect(native.window['__kairo_pending_sends']).toHaveProperty('size', 0);
+  });
+
+  it.each(['缺失原图', '损坏缩略图', '原生失败'] as const)(
+    '%s不能凭返回路径继续正式提交',
+    async preparation => {
+      const native = imageRuntime({ preparation });
+      const result = await native.ops.sendImage(native.file, { targetSessionId: '93001' });
+      expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+      expect(result.error).toContain(
+        preparation === '缺失原图'
+          ? native.artworkPath
+          : preparation === '损坏缩略图'
+            ? native.thumbPath
+            : '627'
+      );
+      expect(native.drafts).toEqual([]);
+    }
+  );
+
+  it('可解码但尺寸错误的缩略图在创建草稿前失败', async () => {
+    const native = imageRuntime({ preparation: '尺寸错误缩略图' });
+    const result = await native.ops.sendImage(native.file, { targetSessionId: '93001' });
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(result.error).toContain('缩略图生成结果不符');
+    expect(result.error).toContain(native.thumbPath);
+    expect(native.drafts).toEqual([]);
+  });
+
+  it.each([
+    { code: -9, expected: -9 },
+    { code: 0, businessCode: 617, expected: 617 },
+  ])('图片上传/业务错误$expected保留失败，重复操作不重新准备', async config => {
+    const native = imageRuntime(config);
+    const options = { targetSessionId: '93001', operationId: 't07-image-failure' };
+    const result = await native.ops.sendImage(native.file, options);
+    expect(result).toMatchObject({
+      status: 'failed',
+      nativeCode: config.expected,
+      isPreTrigger: false,
+    });
+    expect(await native.ops.sendImage(native.file, options)).toEqual(result);
+    expect(await native.ops.getSendStatus(options.operationId)).toEqual(result);
+    expect(native.resized).toHaveBeenCalledTimes(1);
+    expect(native.drafts).toHaveLength(1);
+  });
+
+  it('图片业务等待可超过四秒；无回执的unknown不重新准备或提交', async () => {
+    vi.useFakeTimers();
+    const native = imageRuntime({ sendDelayMs: 4500 });
+    const pending = native.ops.sendImage(native.file, {
+      targetSessionId: '93001',
+      verifyTimeoutMs: 6000,
+    });
+    await vi.advanceTimersByTimeAsync(4500);
+    expect(await pending).toMatchObject({ status: 'sent' });
+    const unknown = imageRuntime({ callback: false });
+    const options = {
+      targetSessionId: '93001',
+      operationId: 't07-image-unknown',
+      verifyTimeoutMs: 100,
+    };
+    const waiting = unknown.ops.sendImage(unknown.file, options);
+    await vi.advanceTimersByTimeAsync(101);
+    expect(await waiting).toMatchObject({ status: 'unknown', isPreTrigger: false });
+    expect(await unknown.ops.sendImage(unknown.file, options)).toMatchObject({ status: 'unknown' });
+    expect(await unknown.ops.getSendStatus(options.operationId)).toMatchObject({
+      status: 'unknown',
+    });
+    expect(unknown.resized).toHaveBeenCalledTimes(1);
+    expect(unknown.drafts).toHaveLength(1);
   });
 });
