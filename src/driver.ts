@@ -30,6 +30,7 @@ import type {
   SendFileOptions,
   SendOptions,
   SendResult,
+  SendToUserOptions,
 } from './types/index.js';
 import { DriverError } from './utils/errors.js';
 import { InMemorySendOperationStore, type SendOperationStore } from './send-operation.js';
@@ -267,6 +268,16 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       await this.bridgeMessageOps.sendText(text, options),
       targetSessionId
     );
+  }
+
+  /** 按准确工号发送，不依赖最近会话列表或当前窗口。 */
+  public async sendTextToUser(
+    loginName: string,
+    text: string,
+    options: SendToUserOptions = {}
+  ): Promise<SendResult> {
+    const result = await this.bridgeMessageOps.sendTextToUser(loginName, text, options);
+    return this.attachNativeRecall(result, result.sessionId);
   }
 
   /**

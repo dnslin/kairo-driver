@@ -95,5 +95,6 @@ export type {
   KK9RecalledEvent,
   SendOptions,
   SendFileOptions,
+  SendToUserOptions,
   DriverEvents,
 } from './types/index.js';

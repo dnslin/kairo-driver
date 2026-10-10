@@ -88,6 +88,38 @@ export const NATIVE_SEND_CONTEXT_SCRIPT = `
   }
 `;
 
+export const NATIVE_USER_SEND_CONTEXT_SCRIPT = `
+  async function readNativeUserSendContext(loginName) {
+    const requireSuccess = (response, method) => {
+      if (response?.code !== 0) throw new Error(method + '失败 (' + response?.code + '): ' + (response?.error || response?.message || '无回包'));
+      return response.data;
+    };
+    const identity = requireSuccess(await callIpc('getMemberDetail'), 'getMemberDetail当前身份');
+    if (!Number.isSafeInteger(Number(identity?.id)) || Number(identity.id) <= 0) throw new Error('getMemberDetail未取得实际登录身份');
+    const candidates = new Set();
+    for (let pageNo = 1; ; pageNo++) {
+      const result = requireSuccess(await callIpc('unionSearch', { type: 'user', kwd: loginName, pageNo, pageSize: 200 }), 'unionSearch工号 ' + loginName + ' 页 ' + pageNo);
+      if (!Array.isArray(result?.users)) throw new Error('unionSearch未返回人员数组；工号 ' + loginName);
+      for (const user of result.users) {
+        if (user?.login_name !== loginName) continue;
+        if (!Number.isSafeInteger(Number(user.id)) || Number(user.id) <= 0) throw new Error('unionSearch准确工号缺少有效UID；工号 ' + loginName);
+        candidates.add(String(user.id));
+      }
+      if (result.users.length < 200) break;
+    }
+    if (candidates.size !== 1) throw new Error('unionSearch准确工号 ' + loginName + (candidates.size ? '对应多个UID，拒绝歧义目标' : '不存在或当前账号不可见'));
+    const receiver = Number(candidates.keys().next().value);
+    if (receiver === Number(identity.id)) throw new Error('按工号通知不支持本人设备会话；原生会覆盖本次消息标记');
+    const profile = requireSuccess(await callIpc('getMemberDetail', receiver), 'getMemberDetail工号 ' + loginName + ' UID ' + receiver);
+    if (String(profile?.id) !== String(receiver) || profile?.login_name !== loginName) throw new Error('getMemberDetail档案与准确工号或UID不符；工号 ' + loginName + ' UID ' + receiver);
+    const limited = requireSuccess(await callIpc('getUsersSessionLimit', receiver), 'getUsersSessionLimit工号 ' + loginName);
+    if (!Array.isArray(limited)) throw new Error('getUsersSessionLimit未返回限制UID数组；工号 ' + loginName);
+    if (limited.length) throw new Error('getUsersSessionLimit禁止向工号 ' + loginName + ' 发起私聊');
+    // 零仅是KK9原版首次发送参数；正式会话ID必须来自本次业务回执。
+    return { identity, receiver, session: { id: 0, type: 0 }, loginName };
+  }
+`;
+
 export const CONFIRM_SENT_MESSAGE_SCRIPT = `
   async function waitForPersistedMessage(sessionID, msgFlag) {
     for (let attempt = 0; attempt < 12; attempt++) {
@@ -113,7 +145,7 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
     pending.set(key, () => controller.abort());
     return { signal: controller.signal, finish: () => { controller.abort(); pending.delete(key); } };
   }
-  async function submitNativeMessage(msgObj, targetSession, timeoutMs = 8000, signal) {
+  async function submitNativeMessage(msgObj, targetSession, timeoutMs = 8000, signal, targetLoginName) {
     const insertRes = await callIpc('insertSendBefoeMsg', msgObj);
     if (insertRes?.code !== 0 || !Number.isSafeInteger(Number(insertRes?.data?.id)) || Number(insertRes.data.id) >= 0) {
       const definite = Boolean(insertRes && insertRes.code !== 0 && insertRes.code !== -2);
@@ -125,7 +157,7 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
     const draftId = String(msgObj.id);
     const channel = msgObj.sessionType + '-' + msgObj.receiver + '-sendMsgCallback';
     const receipts = window.__kairo_send_receipts || (window.__kairo_send_receipts = new Map());
-    if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'pending', key: msgObj.msgFlag, sessionID: String(msgObj.sessionID) });
+    if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'pending', key: msgObj.msgFlag, sessionID: String(msgObj.sessionID), receiver: String(msgObj.receiver), sessionType: msgObj.sessionType });
     let settle;
     let timer;
     let settled = false;
@@ -146,20 +178,23 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
       const value = payload?.args;
       if (!value || String(value.msgID) !== draftId) return;
       const data = value.data;
-      if (data?.sessionID !== undefined && String(data.sessionID) !== String(msgObj.sessionID)) return;
+      if (targetLoginName) {
+        if (data && (String(data.sender) !== String(msgObj.sender) || String(data.receiver) !== String(msgObj.receiver) || data.sessionType !== 0 || data.msgFlag !== msgObj.msgFlag)) return;
+        if (value.code === 0 && (!Number.isSafeInteger(Number(data?.sessionID)) || Number(data.sessionID) <= 0)) return;
+      } else if (data?.sessionID !== undefined && String(data.sessionID) !== String(msgObj.sessionID)) return;
       let ext = data?.ext;
       try { if (typeof ext === 'string') ext = JSON.parse(ext); }
       catch { finish({ failure: { status: 'unknown', error: '本次业务ext无法解析', isPreTrigger: false } }); return; }
-      const receipt = { draftId, sessionId: String(msgObj.sessionID), code: value.code,
+      const receipt = { draftId, sessionId: String(targetLoginName && data?.sessionID !== undefined ? data.sessionID : msgObj.sessionID), code: value.code,
         ...(typeof ext?.status === 'number' ? { businessCode: ext.status } : {}),
         ...(data?.id !== undefined ? { messageId: String(data.id) } : {}),
         ...(data?.msgIdx !== undefined ? { msgIdx: Number(data.msgIdx) } : {}) };
       if (typeof value.code !== 'number') { finish({ failure: { status: 'unknown', error: '本次业务回执缺code', isPreTrigger: false } }); return; }
       const failedCode = value.code !== 0 ? value.code : ext?.status !== undefined && ext.status !== 0 ? ext.status : undefined;
       callback = { receipt, ...(failedCode !== undefined ? { failure: { status: 'failed', nativeCode: failedCode,
-        error: '原生发送业务失败 (' + failedCode + ')；会话 ' + msgObj.sessionID + '；草稿 ' + draftId,
+        error: '原生发送业务失败 (' + failedCode + ')；会话 ' + receipt.sessionId + '；草稿 ' + draftId,
         isPreTrigger: false, receipt } } : { data }) };
-      receipts.set(msgObj.msgFlag, { receipt, ...(callback.failure ? { failure: callback.failure } : {}) });
+      receipts.set(msgObj.msgFlag, { receipt, ...(targetLoginName ? { targetLoginName, senderId: String(msgObj.sender), receiverId: String(msgObj.receiver) } : {}), ...(callback.failure ? { failure: callback.failure } : {}) });
       finish(callback);
     };
     ipc.on(channel, onReceipt);
@@ -176,18 +211,29 @@ export const SUBMIT_NATIVE_MESSAGE_SCRIPT = `
       const observation = await received;
       if (observation.failure) return observation;
       let confirmedMessage = observation.data;
-      if (!/^[1-9]\\d*$/.test(String(confirmedMessage?.id))) {
-        confirmedMessage = await waitForPersistedMessage(msgObj.sessionID, msgObj.msgFlag);
+      const sessionID = Number(observation.receipt.sessionId);
+      if (targetLoginName || !/^[1-9]\\d*$/.test(String(confirmedMessage?.id))) {
+        confirmedMessage = await waitForPersistedMessage(sessionID, msgObj.msgFlag);
       }
-      if (!confirmedMessage || String(confirmedMessage.sessionID) !== String(msgObj.sessionID)) {
-        return { receipt: observation.receipt, failure: { status: 'unknown', error: '成功业务回执尚未关联本次正式消息ID', isPreTrigger: false, receipt: observation.receipt } };
+      if (!confirmedMessage || String(confirmedMessage.sessionID) !== String(sessionID) ||
+          (targetLoginName && (String(confirmedMessage.id) !== observation.receipt.messageId || String(confirmedMessage.sender) !== String(msgObj.sender) || String(confirmedMessage.receiver) !== String(msgObj.receiver)))) {
+        return { receipt: observation.receipt, failure: { status: 'unknown', error: '成功业务回执尚未关联本次准确正式记录', isPreTrigger: false, receipt: observation.receipt } };
       }
       const receipt = { ...observation.receipt, messageId: String(confirmedMessage.id), msgIdx: Number(confirmedMessage.msgIdx) };
-      receipts.set(msgObj.msgFlag, { receipt });
-      if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'confirmed', key: msgObj.msgFlag, sessionID: String(msgObj.sessionID), session: targetSession, message: [confirmedMessage] });
+      receipts.set(msgObj.msgFlag, { receipt, ...(targetLoginName ? { targetLoginName, senderId: String(msgObj.sender), receiverId: String(msgObj.receiver) } : {}) });
+      let confirmedSession = targetSession;
+      if (targetLoginName) {
+        const response = await callIpc('getSessionBySessionID', sessionID);
+        confirmedSession = response?.data;
+        const receiver = String(confirmedSession?.typeID) === String(msgObj.sender) ? confirmedSession?.creater : confirmedSession?.typeID;
+        if (response?.code !== 0 || String(confirmedSession?.id) !== String(sessionID) || confirmedSession?.type !== 0 || String(receiver) !== String(msgObj.receiver)) {
+          throw new Error('getSessionBySessionID未取得本次准确私聊 ' + sessionID + ' (' + response?.code + '): ' + (response?.error || response?.message || '无效会话'));
+        }
+      }
+      if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'confirmed', key: msgObj.msgFlag, sessionID: String(sessionID), session: confirmedSession, message: [confirmedMessage] });
       return { confirmedMessage, receipt };
     } catch (error) {
-      return { failure: { status: 'unknown', error: String(error), isPreTrigger: false }, ...(callback?.receipt ? { receipt: callback.receipt } : {}) };
+      return { failure: { status: 'unknown', error: String(error), isPreTrigger: false, ...(callback?.receipt ? { receipt: callback.receipt } : {}) } };
     } finally {
       finish({ failure: { status: 'unknown', error: '本轮发送结束', isPreTrigger: false } });
       if (typeof observeNativeSend === 'function') observeNativeSend({ stage: 'settled', key: msgObj.msgFlag });

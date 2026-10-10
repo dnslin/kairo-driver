@@ -9,6 +9,7 @@ import {
   encodeRendererPayload,
   CONFIRM_SENT_MESSAGE_SCRIPT,
   NATIVE_SEND_CONTEXT_SCRIPT,
+  NATIVE_USER_SEND_CONTEXT_SCRIPT,
   RENDERER_IPC_HELPERS_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
@@ -43,6 +44,7 @@ import type {
   SendOptions,
   SendOutcome,
   SendResult,
+  SendToUserOptions,
 } from '../types/index.js';
 import { DriverError, SendError } from '../utils/errors.js';
 import { createChildLogger } from '../utils/logger.js';
@@ -122,11 +124,12 @@ export class BridgeMessageOps {
     kind: SendOperationMessageType,
     options: T,
     content: unknown,
-    action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>
+    action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>,
+    targetLoginName?: string
   ): Promise<SendResult> {
     const controller = new AbortController();
     if (this.sendsCancelled) controller.abort();
-    const result = this.runOperation(kind, options, content, action, controller);
+    const result = this.runOperation(kind, options, content, action, controller, targetLoginName);
     this.inFlight.set(controller, { result });
     try {
       return await result;
@@ -140,20 +143,21 @@ export class BridgeMessageOps {
     options: T,
     content: unknown,
     action: (key: string, options: T, signal: AbortSignal) => Promise<SendOutcome>,
-    controller: AbortController
+    controller: AbortController,
+    targetLoginName?: string
   ): Promise<SendResult> {
     const operationId =
       options.operationId === undefined ? randomUUID() : options.operationId.trim();
     if (!operationId) throw new SendError('operationId不能为空');
     const targetSessionId = options.targetSessionId?.trim();
-    const effectiveOptions =
-      targetSessionId &&
-      /^-?[0-9]+$/.test(targetSessionId) &&
-      Number.isSafeInteger(Number(targetSessionId))
+    const effectiveOptions = kind === 'text-to-user'
+      ? targetLoginName ? { ...options, operationId } : null
+      : targetSessionId && /^-?[0-9]+$/.test(targetSessionId) && Number.isSafeInteger(Number(targetSessionId))
         ? { ...options, operationId, targetSessionId }
         : null;
     const fingerprint = createSendOperationFingerprint({
       targetSessionId: options.targetSessionId?.trim(),
+      targetLoginName,
       messageType: kind,
       content: {
         payload: content,
@@ -167,7 +171,7 @@ export class BridgeMessageOps {
     const key = createNativeMessageKey(kind, operationId);
     this.inFlight.get(controller)!.key = key;
     if (!effectiveOptions)
-      outcome = { status: 'failed', error: '发送必须指定明确原生会话ID', isPreTrigger: true };
+      outcome = { status: 'failed', error: kind === 'text-to-user' ? '按工号发送必须提供准确非空工号' : '发送必须指定明确原生会话ID', isPreTrigger: true };
     else if (controller.signal.aborted)
       outcome = { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
     else if (isCdpUnavailableBeforeSend(this.cdp))
@@ -269,6 +273,16 @@ export class BridgeMessageOps {
       this.sendRichTextRaw(text, bound, key)
     );
   }
+  public sendTextToUser(
+    loginName: string,
+    text: string,
+    options: SendToUserOptions = {}
+  ): Promise<SendResult> {
+    const target = typeof loginName === 'string' ? loginName.trim() : '';
+    return this.executeOperation('text-to-user', options, text, (key, bound) =>
+      this.sendRichTextRaw(text, bound, key, target), target
+    );
+  }
   public sendRichText(content: FormattedText, options: SendOptions = {}): Promise<SendResult> {
     if (options.replyTo !== undefined) return this.sendReply(options.replyTo, content, options);
     return this.executeOperation('rich-text', options, content, (key, bound) =>
@@ -278,7 +292,8 @@ export class BridgeMessageOps {
   private sendRichTextRaw(
     content: FormattedText,
     options: SendOptions,
-    key: string
+    key: string,
+    targetLoginName?: string
   ): Promise<SendOutcome> {
     let parsed;
     let mentions;
@@ -297,7 +312,9 @@ export class BridgeMessageOps {
       { content: nodes, font: parsed.font },
       options,
       key,
-      mentions.map(node => node['replyMemberID'])
+      mentions.map(node => node['replyMemberID']),
+      undefined,
+      targetLoginName
     );
   }
   public sendReply(
@@ -375,12 +392,14 @@ export class BridgeMessageOps {
     options: SendOptions | SendFileOptions,
     key: string,
     mentionIds: unknown[] = [],
-    replyTo?: KK9ReplyTarget
+    replyTo?: KK9ReplyTarget,
+    targetLoginName?: string
   ): Promise<SendOutcome> {
     const started = Date.now();
     const timeout = options.verifyTimeoutMs ?? 8000;
     const encoded = encodeRendererPayload({
       target: options.targetSessionId,
+      targetLoginName,
       contentType,
       content,
       key,
@@ -392,7 +411,7 @@ export class BridgeMessageOps {
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      ${NATIVE_SEND_CONTEXT_SCRIPT}
+      ${targetLoginName ? NATIVE_USER_SEND_CONTEXT_SCRIPT : NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
@@ -400,7 +419,7 @@ export class BridgeMessageOps {
       const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
       try {
       let context;
-      try { context = await readNativeSendContext(data.target); }
+      try { context = await ${targetLoginName ? 'readNativeUserSendContext(data.targetLoginName)' : 'readNativeSendContext(data.target)'}; }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
       const { identity, session: targetSes, receiver } = context;
       let messageContent = data.content;
@@ -416,13 +435,13 @@ export class BridgeMessageOps {
       // 草稿设备列允许NULL；正式核心从CORE_DATA使用当前注册设备，不以空值冒充设备身份。
       const msgObj = { contentType: data.contentType, content: messageContent, sender: identity.id, senderName: identity.name, senderNameEN: identity.name_en || '', senderNameTC: identity.name_tc || '', receiver, sessionType: targetSes.type, sessionID: targetSes.id,
         sendTime: Math.floor(Date.now()/1000), status: 'sending', type: 0, atState: data.contentType === 13 ? 2 : mentionIds.length ? 0 : 1, atMemberIDList: mentionIds, msgFlag: data.key };
-      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal, data.targetLoginName);
       if (submission.failure) return submission.failure;
-      return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      return { status: 'sent', messageId: String(submission.confirmedMessage.id), ...(data.targetLoginName ? { sessionId: String(submission.confirmedMessage.sessionID) } : {}), receipt: submission.receipt, isPreTrigger: false };
       } finally { cancellation.finish(); }
     })()`;
     try {
-      const outcome = await this.cdp.evaluate<SendOutcome>(script, timeout + 12000);
+      const outcome = await this.cdp.evaluate<SendOutcome>(script, timeout + (targetLoginName ? 20000 : 12000));
       if (!outcome || !['sent', 'failed', 'unknown'].includes(outcome.status))
         return { status: 'unknown', error: '原生发送未返回有效结果', isPreTrigger: false };
       return { ...outcome, verifyLatencyMs: Date.now() - started };

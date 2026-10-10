@@ -23,6 +23,7 @@ export function createNativeMessageKey(kind: string, operationId?: string): stri
 export function sendOperationRecordToResult(operation: SendOperationRecord): SendResult {
   const common = {
     operationId: operation.operationId,
+    ...(operation.sessionId ? { sessionId: operation.sessionId } : {}),
     isPreTrigger: operation.isPreTrigger,
     verifyLatencyMs: operation.verifyLatencyMs,
     nativeCode: operation.nativeCode,
@@ -63,7 +64,8 @@ export class BridgeSendStatus {
   public async resolve(operation: SendOperationRecord): Promise<SendResult> {
     if (operation.status !== 'unknown') return sendOperationRecordToResult(operation);
     const target = operation.fingerprint.targetSessionId;
-    if (!target) return sendOperationRecordToResult(operation);
+    const targetLoginName = operation.fingerprint.targetLoginName;
+    if (!target && !targetLoginName) return sendOperationRecordToResult(operation);
     if (isCdpUnavailableBeforeSend(this.cdp))
       return {
         operationId: operation.operationId,
@@ -75,7 +77,7 @@ export class BridgeSendStatus {
       operation.fingerprint.messageType,
       operation.operationId
     );
-    const encoded = encodeRendererPayload({ nativeKey, target });
+    const encoded = encodeRendererPayload({ nativeKey, target, targetLoginName });
     // 只读本次采集的业务证据；没有回执时，任意正ID历史也不能变成sent。
     const observation = await this.cdp.evaluate<SendOutcome | null>(
       `(async () => {
@@ -84,20 +86,23 @@ export class BridgeSendStatus {
       ${RENDERER_IPC_HELPERS_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
       const entry = window.__kairo_send_receipts?.get(data.nativeKey);
-      if (!entry || entry.receipt?.sessionId !== data.target) return null;
+      if (!entry || (data.targetLoginName ? entry.targetLoginName !== data.targetLoginName : entry.receipt?.sessionId !== data.target)) return null;
       if (entry.failure) return entry.failure;
       const receipt = entry.receipt;
       if (receipt.code !== 0 || (receipt.businessCode !== undefined && receipt.businessCode !== 0)) return null;
+      const sessionId = data.targetLoginName ? receipt.sessionId : data.target;
+      if (!/^[1-9]\\d*$/.test(String(sessionId))) return null;
       let messageId = receipt.messageId;
-      if (!/^[1-9]\\d*$/.test(String(messageId))) {
-        const response = await callKairoIpc('getMessages', { sessionID: Number(data.target), count: 100, endIdx: 2147483647, sendTime: 0 });
-        if (response?.code !== 0 || !Array.isArray(response.data)) throw new Error('getMessages状态查询失败 (' + response?.code + '): ' + (response?.error || '无效数组'));
-        const found = response.data.find(message => message.msgFlag === data.nativeKey && String(message.sessionID) === data.target && /^[1-9]\\d*$/.test(String(message.id)));
+      if (data.targetLoginName || !/^[1-9]\\d*$/.test(String(messageId))) {
+        const response = await callKairoIpc('getMessages', { sessionID: Number(sessionId), count: 100, endIdx: 2147483647, sendTime: 0 });
+        if (response?.code !== 0 || !Array.isArray(response.data)) throw new Error('getMessages状态查询失败 (' + response?.code + '): ' + (response?.error || response?.message || '无效数组'));
+        const found = response.data.find(message => message.msgFlag === data.nativeKey && String(message.sessionID) === String(sessionId) && /^[1-9]\\d*$/.test(String(message.id)) &&
+          (!data.targetLoginName || (String(message.id) === String(messageId) && String(message.sender) === entry.senderId && String(message.receiver) === entry.receiverId)));
         if (!found) return null;
         messageId = String(found.id);
         receipt.msgIdx = Number(found.msgIdx);
       }
-      return { status: 'sent', messageId: String(messageId), receipt: { ...receipt, messageId: String(messageId) }, isPreTrigger: false };
+      return { status: 'sent', messageId: String(messageId), ...(data.targetLoginName ? { sessionId: String(sessionId) } : {}), receipt: { ...receipt, messageId: String(messageId) }, isPreTrigger: false };
     })()`,
       6000
     );

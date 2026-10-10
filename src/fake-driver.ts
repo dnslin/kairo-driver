@@ -21,6 +21,7 @@ import type {
   SendOptions,
   SendOutcome,
   SendResult,
+  SendToUserOptions,
 } from './types/index.js';
 import {
   InMemorySendOperationStore,
@@ -60,6 +61,7 @@ export type FakeSendBehavior =
 export interface RecordedSendCall {
   type:
     | 'text'
+    | 'textToUser'
     | 'richText'
     | 'reply'
     | 'image'
@@ -71,6 +73,7 @@ export interface RecordedSendCall {
     | 'voice';
   payload: FakeSendPayload;
   options?: SendOptions | SendFileOptions;
+  targetLoginName?: string;
   timestamp: number;
 }
 
@@ -204,6 +207,13 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     return this.executeSendAction('text', 'text', text, options);
   }
 
+  public async sendTextToUser(loginName: string, text: string, options?: SendToUserOptions): Promise<SendResult> {
+    return this.executeSendAction('text-to-user', 'textToUser', text, {
+      operationId: options?.operationId,
+      verifyTimeoutMs: options?.verifyTimeoutMs,
+    }, false, loginName.trim());
+  }
+
   public async sendRichText(content: FormattedText, options?: SendOptions): Promise<SendResult> {
     if (options?.replyTo !== undefined) return this.sendReply(options.replyTo, content, options);
     return this.executeSendAction('rich-text', 'richText', content, options);
@@ -301,7 +311,8 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     callType: RecordedSendCall['type'],
     payload: FakeSendPayload,
     options?: SendOptions | SendFileOptions,
-    supportsReplyAndMentions = true
+    supportsReplyAndMentions = true,
+    targetLoginName?: string
   ): Promise<SendResult> {
     const operationId =
       options?.operationId === undefined ? randomUUID() : options.operationId.trim();
@@ -310,12 +321,16 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     const mentions = options && 'mentions' in options ? options.mentions : undefined;
     const fingerprint = createSendOperationFingerprint({
       targetSessionId: options?.targetSessionId,
+      targetLoginName,
       messageType: operationType,
       content: { payload, replyTo, mentions },
     });
     const claim = await this.sendOperationStore.claim({ operationId, fingerprint });
     if (!claim.claimed) return sendOperationRecordToResult(claim.operation);
     let textError: string | undefined;
+    if (operationType === 'text-to-user' && (typeof payload !== 'string' || !payload.trim())) {
+      textError = '文本内容不能为空';
+    }
     if (['text', 'rich-text', 'reply'].includes(operationType)) {
       try {
         const parsed = parseFormattedTextToKK(payload as FormattedText);
@@ -342,11 +357,33 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
         }
       }
     }
+    let targetEmployee: KK9Employee | undefined;
+    let targetError: string | undefined;
+    if (targetLoginName !== undefined && !textError) {
+      if (!targetLoginName) {
+        targetError = '发送必须指定准确工号';
+      } else if (!this.currentUserId?.trim()) {
+        targetError = '按工号发送缺少当前登录身份';
+      } else {
+        const candidates = new Map<string, KK9Employee>();
+        for (const employee of this.employees) {
+          if (employee.loginName === targetLoginName) candidates.set(String(employee.id), employee);
+        }
+        if (candidates.size === 0) targetError = `未找到准确工号: ${targetLoginName}`;
+        else if (candidates.size > 1) targetError = `工号对应多个UID，拒绝歧义目标: ${targetLoginName}`;
+        else targetEmployee = candidates.values().next().value;
+        if (targetEmployee && String(targetEmployee.id) === this.currentUserId.trim()) {
+          targetError = '按工号发送仅支持其他人员，不能发送给本人';
+        }
+      }
+    }
     let outcome: SendOutcome;
-    if (!options?.targetSessionId?.trim()) {
+    if (targetLoginName === undefined && !options?.targetSessionId?.trim()) {
       outcome = { status: 'failed', error: '发送必须指定明确原生会话ID', isPreTrigger: true };
     } else if (textError) {
       outcome = { status: 'failed', error: textError, isPreTrigger: true };
+    } else if (targetError) {
+      outcome = { status: 'failed', error: targetError, isPreTrigger: true };
     } else if (!supportsReplyAndMentions && (replyTo !== undefined || mentions !== undefined)) {
       outcome = {
         status: 'failed',
@@ -358,6 +395,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
         type: callType,
         payload,
         options: effectiveOptions,
+        ...(targetLoginName !== undefined ? { targetLoginName } : {}),
         timestamp: Date.now(),
       });
       try {
@@ -366,9 +404,26 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
         outcome = { status: 'unknown', error: String(error), isPreTrigger: false };
       }
     }
+    if (targetEmployee) {
+      if (outcome.status === 'sent') {
+        const receiverId = String(targetEmployee.id);
+        let session = this.sessions.find(item => item.type === 'private' && item.receiverId === receiverId && /^[1-9]\d*$/.test(item.id));
+        if (!session) {
+          let sessionId = 1;
+          while (this.sessions.some(item => item.id === String(sessionId))) sessionId++;
+          session = { id: String(sessionId), name: targetEmployee.name, type: 'private', nativeType: 0, receiverId, unread: false };
+          this.sessions.push(session);
+        }
+        outcome = { ...outcome, sessionId: session.id };
+      } else {
+        // 故障结果不能把注入的会话号当成本次创建会话的证据。
+        outcome = { ...outcome, sessionId: undefined };
+      }
+    }
     const result = sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
-    if (result.status === 'sent' && effectiveOptions.targetSessionId) {
-      this.confirmedSendKeys.set(createMessageIdentityKey(effectiveOptions.targetSessionId, result.messageId),
+    const confirmedSessionId = targetLoginName !== undefined ? result.sessionId : effectiveOptions.targetSessionId;
+    if (result.status === 'sent' && confirmedSessionId) {
+      this.confirmedSendKeys.set(createMessageIdentityKey(confirmedSessionId, result.messageId),
         createNativeMessageKey(operationType, operationId));
       if (this.confirmedSendKeys.size > 10000)
         this.confirmedSendKeys.delete(this.confirmedSendKeys.keys().next().value!);

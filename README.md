@@ -70,7 +70,7 @@ T04 双目标SDK回显、真实新入站、本机人工本人消息、历史不�
 
 会话 `id` 是原生 `sessionID` 的字符串形式；`receiverId` 是私聊对端 UID，其他类型为原生 `typeID`；`nativeType` 保留原生类型数字。`type` 区分 `private`、`group`、`discussion`、`service` 和 `unknown`。原生会话列表不提供窗口 `active` 状态。
 
-例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。发送、撤回、历史和已读操作使用明确原生会话。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。数据查询和发送不读取当前窗口，SDK不再提供窗口切换接口。
+例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。按会话发送、撤回、历史和已读操作使用明确原生会话；首次联系可使用下文的 `sendTextToUser()` 按准确工号发送。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。数据查询和发送不读取当前窗口，SDK不再提供窗口切换接口。
 
 已直接删除 `getCurrentSession/selectSession`、`KK9Session.active`、`SelectorsConfig/DriverConfig.selectors`、`PreSendCheckResult`、`SessionOps/MessageOps/SendOps`、`DEFAULT_SELECTORS/resolveSelectors` 与 `DomError`，没有兼容别名。`src/dom` 已删除；保留的 `parseEmployee/parseEmployeeList` 与 `readImageAsBase64/saveImageToFile` 分别位于 `src/utils/employee.ts`、`src/utils/image.ts`，仍由包入口导出。
 
@@ -104,7 +104,7 @@ const history = await driver.getRecentMessages(session, 10);
 
 ## 发送消息
 
-发送必须提供 `getSessions()` 返回的原生 `targetSessionId`；缺省、界面标识或会话名称均不会改投当前窗口。文本直接读取原生身份与指定会话，预插入草稿、订阅本次业务回执后提交，不读聊天编辑器、按钮或 Vue。下面的函数使用上例中已连接的 `driver`，只有调用函数时才会发送：
+`sendText()` 和既有媒体发送必须提供明确原生 `targetSessionId`；缺省、界面标识或会话名称均不会改投当前窗口。文本直接读取原生身份与指定会话，预插入草稿、订阅本次业务回执后提交，不读聊天编辑器、按钮或 Vue。下面的函数使用上例中已连接的 `driver`，只有调用函数时才会发送：
 
 ```ts
 import { randomUUID } from 'node:crypto';
@@ -124,11 +124,31 @@ async function sendToSession(targetSessionId: string, text: string) {
 
 每次调用都返回稳定 `operationId`，省略输入时 SDK 为该意图生成一次。同一 ID 不能更换内容、目标、类型、提及或引用；重复调用只返回或查询原结果，不再次提交，包括明确前置失败。需要另一次发送时必须显式建立新意图。`getSendStatus()` 不发送消息；没有本次业务证据时保持 `unknown`。默认记录保存在内存，跨实例或进程接入复用调用方提供的 `SendOperationStore`；未新增数据库、迁移或兼容结果别名。
 
-`verifyTimeoutMs` 控制取得负草稿后的业务回执等待；外层 `sendMessageNew` 请求超时只保留诊断，不提前结束这段等待。图片、卡片与文本使用同一等待约定。调用 `disconnect()` 时，尚未提交的声明与准备工作取消，已提交且没有业务证据的操作保持 `unknown`；仅清理本实例的监听。发送结果登记和快捷撤回使用调用时固定的目标会话。
+`verifyTimeoutMs` 控制取得负草稿后的业务回执等待；外层 `sendMessageNew` 请求超时只保留诊断，不提前结束这段等待。图片、卡片与文本使用同一等待约定。调用 `disconnect()` 时，尚未提交的声明与准备工作取消，已提交且没有业务证据的操作保持 `unknown`；仅清理本实例的监听。按会话发送固定调用时目标；按工号发送的快捷撤回绑定本次回执确认的正式会话。
 
-自定义 `SendOperationStore.update()` 必须在一次原子更新中保留已确认的 `sent/failed`，不能让后到的 `unknown` 清除正式 ID、业务错误或回执；返回实际保留的记录，不能先读再写实现这个约束。默认内存 Store 已执行此规则；没有新增方法、持久化字段或数据迁移。
+自定义 `SendOperationStore.update()` 必须在一次原子更新中保留已确认的 `sent/failed`，不能让后到的 `unknown` 清除正式 ID、业务错误或回执；返回实际保留的记录，不能先读再写实现这个约束。默认内存 Store 已执行此规则。按工号发送新增指纹字段 `targetLoginName` 和记录字段 `sessionId`，自定义 Store 必须保留它们，并把工号纳入同意图冲突比较；Store 方法未新增，不提供旧数据迁移或兼容路径。
 
 还支持图片、文件、富文本、引用回复、卡片、语音和撤回；完整方法见 [IKK9Driver](src/types/index.ts)。图片和文件路径属于运行 Driver 的机器，跨机器接入时由调用方传输实际文件。
+
+### 按工号首次联系与文本通知
+
+`sendTextToUser(loginName, text, options?)` 接受准确 `login_name`，不是显示名、UID或会话名称；只去掉工号首尾空白，大小写必须准确。无需对方已在会话列表，也无需先手动聊天。选项 `SendToUserOptions` 只包含 `operationId` 和 `verifyTimeoutMs`；本接口仅发送纯文本，不支持引用、提及或本人设备会话。
+
+```ts
+async function notifyUser(loginName: string, text: string, operationId: string) {
+  const result = await driver.sendTextToUser(loginName, text, { operationId });
+  if (result.status === 'unknown') return driver.getSendStatus(operationId);
+  // sent时result.sessionId是真正的私聊ID，result.recall()绑定该会话。
+  return result;
+}
+```
+
+原生人员搜索分页后按准确工号匹配并核对档案、私聊权限；找不到、歧义或查询失败均在提交前明确失败，不改投相似账号。KK9按双方UID解析或建立私聊，零值只用于原生首次提交，不作为公开会话ID。成功结果额外提供正式 `sessionId`；只有本次负草稿业务回执、双方UID和正式记录匹配才能判为 `sent`。
+
+同一 `operationId` 不能更换工号或正文；重复与 `getSendStatus()` 不再次找人或发送。查询仅使用本次已采集的业务回执和正式历史，不能拿任意正ID记录补判成功。Fake按注入人员建立或复用模拟私聊，但不从发送请求制造消息历史或实时回声。
+
+构建后真机命令、确认门禁和实测边界见 [按工号文本通知验收](docs/KK9-STARTUP.md#按工号文本通知验收)。
+
 
 ### 原生富文本、提及与引用
 

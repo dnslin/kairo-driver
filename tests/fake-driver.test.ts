@@ -283,4 +283,159 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     ]);
     expect(ats).toEqual(events);
   });
+  it('按工号精确匹配而非同名，成功分配不冲突的数字私聊并复用', async () => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([
+      { id: 91002, loginName: '员工甲', name: '同名员工', updatedAt: 1 },
+      { id: 91003, loginName: 'EMP-003', name: '同名员工', updatedAt: 1 },
+      { id: '91003', loginName: 'EMP-003', name: '同名员工', updatedAt: 1 },
+    ]);
+    driver.setSessions([{ id: '1', name: '已占用', type: 'group', nativeType: 1, receiverId: '92001', unread: false }]);
+    driver.setSendBehavior({ mode: 'success', messageId: '1001' });
+
+    const first = await driver.sendTextToUser(' EMP-003 ', '准确目标', { operationId: '按工号首次' });
+    expect(first).toMatchObject({ status: 'sent', messageId: '1001', isPreTrigger: false });
+    expect(first.sessionId).toMatch(/^[1-9]\d*$/);
+    expect(first.sessionId).not.toBe('1');
+    expect(first.receipt).toBeUndefined();
+    const sessions = await driver.getSessions();
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]).toMatchObject({ id: first.sessionId, type: 'private', nativeType: 0, receiverId: '91003', name: '同名员工' });
+    expect(driver.recordedCalls[0]).toMatchObject({ type: 'textToUser', targetLoginName: 'EMP-003', payload: '准确目标', options: { operationId: '按工号首次' } });
+    expect(driver.recordedCalls[0]?.options?.targetSessionId).toBeUndefined();
+
+    const second = await driver.sendTextToUser('EMP-003', '再次发送', { operationId: '按工号再次' });
+    expect(second).toMatchObject({ status: 'sent', sessionId: first.sessionId });
+    expect(await driver.getSessions()).toHaveLength(2);
+    expect(driver.recordedCalls).toHaveLength(2);
+  });
+
+  it('按工号复用相同接收人的既有私聊，不复用同接收人群聊或其他私聊', async () => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    driver.setSessions([
+      { id: '93001', name: '同接收人群聊', type: 'group', nativeType: 1, receiverId: '91003', unread: false },
+      { id: '93002', name: '其他人', type: 'private', nativeType: 0, receiverId: '91002', unread: false },
+      { id: '93003', name: '目标员工', type: 'private', nativeType: 0, receiverId: '91003', unread: false },
+    ]);
+    const result = await driver.sendTextToUser('EMP-003', '复用已有私聊');
+    expect(result).toMatchObject({ status: 'sent', sessionId: '93003' });
+    expect(await driver.getSessions()).toHaveLength(3);
+  });
+
+  it.each([
+    ['空工号', '   ', '91001', []],
+    ['不存在工号', 'EMP-404', '91001', [{ id: 91003, loginName: 'EMP-003', name: '员工乙', updatedAt: 1 }]],
+    ['显示名不是工号', '同名员工', '91001', [{ id: 91003, loginName: 'EMP-003', name: '同名员工', updatedAt: 1 }]],
+    ['工号区分大小写', 'emp-003', '91001', [{ id: 91003, loginName: 'EMP-003', name: '同名员工', updatedAt: 1 }]],
+    ['多UID歧义', 'EMP-003', '91001', [{ id: 91002, loginName: 'EMP-003', name: '员工甲', updatedAt: 1 }, { id: 91003, loginName: 'EMP-003', name: '员工乙', updatedAt: 1 }]],
+    ['无当前身份', 'EMP-003', null, [{ id: 91003, loginName: 'EMP-003', name: '员工乙', updatedAt: 1 }]],
+    ['本人账号', 'EMP-001', '91001', [{ id: 91001, loginName: 'EMP-001', name: '本人', updatedAt: 1 }]],
+  ] as Array<[string, string, string | null, KK9Employee[]]>)('%s时触发前失败，不建立会话或记录发送', async (_label, loginName, currentUserId, employees) => {
+    driver.setCurrentUserId(currentUserId);
+    driver.setEmployees(employees);
+    const result = await driver.sendTextToUser(loginName, '不能发送');
+    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(result.sessionId).toBeUndefined();
+    expect(await driver.getSessions()).toEqual([]);
+    expect(driver.recordedCalls).toEqual([]);
+    expect(await driver.getSendStatus(result.operationId)).toEqual(result);
+  });
+
+  it('空文本在找人前失败且不消耗故障序列', async () => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    driver.setSendBehavior({ mode: 'sequence', behaviors: [
+      { mode: 'pre_trigger_failure', error: '原定首个故障' },
+      { mode: 'success', messageId: '1002' },
+    ] });
+    expect(await driver.sendTextToUser('EMP-003', '   ')).toMatchObject({ status: 'failed', isPreTrigger: true });
+    expect(await driver.sendTextToUser('EMP-003', '第一条')).toMatchObject({ status: 'failed', error: '原定首个故障' });
+    expect(await driver.getSessions()).toEqual([]);
+    expect(await driver.sendTextToUser('EMP-003', '第二条')).toMatchObject({ status: 'sent', messageId: '1002' });
+    expect(driver.recordedCalls).toHaveLength(2);
+  });
+
+  it.each(['pre_trigger_failure', 'post_trigger_timeout', 'post_trigger_disconnect', 'post_trigger_lost_response'] as const)('%s按工号不声称创建会话，重复与查询不重发', async mode => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    driver.setSendBehavior({ mode, error: '注入故障' });
+    const first = await driver.sendTextToUser('EMP-003', '故障文本', { operationId: '工号故障' });
+    expect(first).toMatchObject({ status: mode === 'pre_trigger_failure' ? 'failed' : 'unknown', isPreTrigger: mode === 'pre_trigger_failure' });
+    expect(first.sessionId).toBeUndefined();
+    expect(await driver.getSessions()).toEqual([]);
+    driver.setEmployees([]);
+    driver.setSendBehavior({ mode: 'success' });
+    expect(await driver.sendTextToUser('EMP-003', '故障文本', { operationId: '工号故障' })).toEqual(first);
+    expect(await driver.getSendStatus('工号故障')).toEqual(first);
+    expect(await driver.getSessions()).toEqual([]);
+    expect(driver.recordedCalls).toHaveLength(1);
+  });
+
+  it('同操作重复及共享Store新实例只读已有正式会话，不重复查人、建会话或记录', async () => {
+    const store = new InMemorySendOperationStore();
+    const sender = new FakeKK9Driver(store);
+    sender.setCurrentUserId('91001');
+    sender.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    const first = await sender.sendTextToUser('EMP-003', '一次意图', { operationId: '共享工号操作' });
+    sender.setEmployees([]);
+    sender.setCurrentUserId(null);
+    expect(await sender.sendTextToUser(' EMP-003 ', '一次意图', { operationId: '共享工号操作' })).toEqual(first);
+    expect(await sender.getSessions()).toHaveLength(1);
+    expect(sender.recordedCalls).toHaveLength(1);
+
+    const observer = new FakeKK9Driver(store);
+    expect(await observer.sendTextToUser('EMP-003', '一次意图', { operationId: '共享工号操作' })).toEqual(first);
+    expect(await observer.getSendStatus('共享工号操作')).toEqual(first);
+    expect(await observer.getSessions()).toEqual([]);
+    expect(observer.recordedCalls).toEqual([]);
+    expect((await store.get('共享工号操作'))?.fingerprint).toMatchObject({ targetSessionId: '', targetLoginName: 'EMP-003', messageType: 'text-to-user' });
+  });
+
+  it('同操作并发工号发送只有声明者执行，冲突工号或内容拒绝复用', async () => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    const results = await Promise.all([
+      driver.sendTextToUser('EMP-003', '并发意图', { operationId: '并发工号操作' }),
+      driver.sendTextToUser('EMP-003', '并发意图', { operationId: '并发工号操作' }),
+    ]);
+    expect(results.some(result => result.status === 'sent')).toBe(true);
+    expect(driver.recordedCalls).toHaveLength(1);
+    expect(await driver.getSessions()).toHaveLength(1);
+    await expect(driver.sendTextToUser('EMP-004', '并发意图', { operationId: '并发工号操作' })).rejects.toThrow('fingerprint');
+    await expect(driver.sendTextToUser('EMP-003', '冲突内容', { operationId: '并发工号操作' })).rejects.toThrow('fingerprint');
+    expect(driver.recordedCalls).toHaveLength(1);
+  });
+
+  it('按工号请求不制造历史或实时回声，真实本人回显只在正式会话关联发送键', async () => {
+    driver.setCurrentUserId('91001');
+    driver.setEmployees([{ id: 91003, loginName: 'EMP-003', name: '目标员工', updatedAt: 1 }]);
+    driver.setSendBehavior({ mode: 'success', messageId: '1001' });
+    const events: KK9Message[] = [];
+    driver.on('message', message => events.push(message));
+    const result = await driver.sendTextToUser('EMP-003', '实际文本', { operationId: '工号确认' });
+    const session = (await driver.getSessions())[0]!;
+    expect(await driver.getRecentMessages(session)).toEqual([]);
+    expect(await driver.scanCompensationWindow({ fromTimestamp: 0 })).toEqual([]);
+    expect(events).toEqual([]);
+    const actualMessage: KK9Message = { id: '1001', sessionId: result.sessionId!, sessionName: '目标员工', sessionType: 'private', sender: '本人', senderId: '91001', direction: 'unknown', isMe: false, content: '实际文本', time: '12:00', timestamp: 100 };
+    driver.emitMessage(actualMessage);
+    driver.emitMessage(actualMessage);
+    driver.emitMessage({ ...actualMessage, sessionId: '93002' });
+    driver.emitMessage({ ...actualMessage, id: '1002', senderId: '91003' });
+    driver.setSendBehavior({ mode: 'post_trigger_timeout' });
+    const unknown = await driver.sendTextToUser('EMP-003', '未知结果文本', { operationId: '工号未知' });
+    expect(unknown).toMatchObject({ status: 'unknown', isPreTrigger: false });
+    expect(unknown.sessionId).toBeUndefined();
+    expect(events).toHaveLength(3);
+    expect(await driver.getSessions()).toHaveLength(1);
+    driver.emitMessage({ ...actualMessage, id: '1003', content: '未知结果后的真实消息' });
+    expect(events.map(message => ({ sessionId: message.sessionId, direction: message.direction, key: message.sdkSendKey }))).toEqual([
+      { sessionId: result.sessionId, direction: 'outbound', key: createNativeMessageKey('text-to-user', '工号确认') },
+      { sessionId: '93002', direction: 'outbound', key: undefined },
+      { sessionId: result.sessionId, direction: 'inbound', key: undefined },
+      { sessionId: result.sessionId, direction: 'outbound', key: undefined },
+    ]);
+    expect(await driver.getRecentMessages(session)).toEqual([]);
+  });
 });

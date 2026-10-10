@@ -11,6 +11,18 @@ export function createNativeSendRuntime(
     insertWithoutData?: boolean;
     responseLost?: boolean;
     mismatchedSession?: boolean;
+    mismatchedReceiver?: boolean;
+    mismatchedSender?: boolean;
+    mismatchedDraft?: boolean;
+    receiptSessionId?: number;
+    searchUsers?: Array<{ id: number; login_name: string; name: string }>;
+    searchCode?: number;
+    targetProfile?: Record<string, unknown>;
+    targetProfileCode?: number;
+    permissionCode?: number;
+    permissionDenied?: boolean;
+    existingUserSessionId?: number;
+    reverseUserSession?: boolean;
     queryCode?: number;
     cancelCode?: number;
     sendDelayMs?: number;
@@ -19,20 +31,48 @@ export function createNativeSendRuntime(
     prepareImage?: (thumb: string, source: string) => unknown;
   } = {}
 ) {
-  const sessions = [
+  const sessions: Array<{ id: number; type: number; typeID: number | string;
+    creater: number | string; typeName: string }> = [
     { id: 93001, type: 0, typeID: 91002, creater: 91001, typeName: '员工甲' },
     { id: 93002, type: 1, typeID: 92001, creater: 92001, typeName: '群甲' },
   ];
+  if (config.existingUserSessionId !== undefined || config.reverseUserSession) sessions.push({
+    id: config.existingUserSessionId ?? 93003, type: 0,
+    typeID: config.reverseUserSession ? '91001' : 91003,
+    creater: config.reverseUserSession ? '91003' : 91001, typeName: '准确接收者',
+  });
+  const users = config.searchUsers ?? [{ id: 91003, login_name: 'int2023', name: '准确接收者' }];
   const records: Array<Record<string, unknown>> = [];
   const drafts: Array<Record<string, unknown>> = [];
   let nextId = 135700000;
   const ipc = new FakeIpcRenderer(request => {
     const method = request.args[0];
-    if (method === 'getMemberDetail')
-      return {
-        code: 0,
-        data: { id: config.identity === undefined ? 91001 : config.identity, name: '原生账号' },
-      };
+    if (method === 'getMemberDetail') {
+      if (request.args[1] === undefined)
+        return { code: 0, data: {
+          id: config.identity === undefined ? 91001 : config.identity,
+          login_name: '0123040139', name: '原生账号',
+        } };
+      if (config.targetProfileCode) return { code: config.targetProfileCode, error: '目标档案拒绝' };
+      return { code: 0, data: config.targetProfile ?? users.find(user => user.id === request.args[1]) ?? null };
+    }
+    if (method === 'unionSearch') {
+      if (config.searchCode) return { code: config.searchCode, error: '人员搜索拒绝' };
+      const query = request.args[1];
+      if (!query || typeof query !== 'object' || !('type' in query) || query.type !== 'user' ||
+          !('kwd' in query) || typeof query.kwd !== 'string' || !('pageNo' in query) ||
+          !Number.isSafeInteger(query.pageNo) || Number(query.pageNo) < 1 ||
+          !('pageSize' in query) || query.pageSize !== 200) throw new Error('人员搜索参数不符合原生协议');
+      const start = (Number(query.pageNo) - 1) * query.pageSize;
+      return { code: 0, data: { probableUsers: [], users: users.slice(start, start + query.pageSize),
+        groups: [], departs: [], apps: [], messages: [], files: [] } };
+    }
+    if (method === 'getUsersSessionLimit') {
+      if (config.permissionCode) return { code: config.permissionCode, error: '权限查询拒绝' };
+      if (!Number.isSafeInteger(request.args[1]) || Number(request.args[1]) <= 0)
+        throw new Error('权限查询应传准确接收者UID');
+      return { code: 0, data: config.permissionDenied ? [request.args[1]] : [] };
+    }
     if (method === 'getSessionBySessionID')
       return { code: 0, data: sessions.find(session => session.id === request.args[1]) };
     if (method === 'insertSendBefoeMsg') {
@@ -48,8 +88,21 @@ export function createNativeSendRuntime(
     }
     if (method === 'sendMessageNew') {
       const message = request.args[1] as Record<string, unknown>;
+      let sessionID = message['sessionID'];
+      if (sessionID === 0) {
+        let session = sessions.find(item => item.type === 0 &&
+          ((String(item.typeID) === String(message['receiver']) && String(item.creater) === String(message['sender'])) ||
+           (String(item.typeID) === String(message['sender']) && String(item.creater) === String(message['receiver']))));
+        if (!session) {
+          session = { id: 94001, type: 0, typeID: Number(message['receiver']),
+            creater: Number(message['sender']), typeName: '准确接收者' };
+          sessions.push(session);
+        }
+        sessionID = session.id;
+      }
       const record = {
         ...message,
+        sessionID,
         id: nextId++,
         msgIdx: records.length + 1,
         status: 'success',
@@ -62,9 +115,15 @@ export function createNativeSendRuntime(
           `${String(message['sessionType'])}-${String(message['receiver'])}-sendMsgCallback`,
           {
             args: {
-              msgID: message['id'],
+              msgID: config.mismatchedDraft ? Number(message['id']) - 100 : message['id'],
               code: config.code ?? 0,
-              data: config.mismatchedSession ? { ...record, sessionID: 999 } : record,
+              data: {
+                ...record,
+                ...(config.mismatchedSession ? { sessionID: 999 } : {}),
+                ...(config.receiptSessionId !== undefined ? { sessionID: config.receiptSessionId } : {}),
+                ...(config.mismatchedReceiver ? { receiver: 91999 } : {}),
+                ...(config.mismatchedSender ? { sender: 91999 } : {}),
+              },
             },
           }
         );

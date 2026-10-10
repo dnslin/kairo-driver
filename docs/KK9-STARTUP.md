@@ -497,3 +497,29 @@ node --input-type=module -e "process.env.KK9_TEST_PRIVATE_ID='716791'; process.e
 本轮未发送、撤回、切窗口、标已读，未操作同名716827、清理原生缓存或修改其他监听。只读查询可能使KK9内部更新查询缓存，不承诺内部缓存不变；输出仅必要元数据，没有保存聊天正文/凭据或全员联系方式，没有自建临时脚本、文件或常驻采集待清理。
 
 C3/C4按当前验收范围完成；媒体、三类撤回、组织/已读/历史范围及真实断线unknown查询复用前序已合并证据，不称本轮重测。必要Vue本机菜单通知、即时气泡刷新差异和历史未实测边界继续保留，不虚报全原生或全部历史命名场景实测；T04停止补测、C2不变。本轮仅更新现有说明与清单，没有提交、推送、开PR、合并、发布或升级版本；交付后停止。
+
+## 按工号文本通知验收
+
+`examples/verify-native-user-text.ts` 使用构建后的 `@kairo/driver` 公开ESM入口。先 `pnpm check`（或构建），脚本不重复构建。参数为登录UID、登录账号、目标UID、目标准确工号；必须取得发送授权并设置确认门禁：
+
+```powershell
+$env:KK9_USER_TEXT_CONFIRM = "5761:3583:int2023"
+pnpm exec tsx examples/verify-native-user-text.ts 5761 0123040139 3583 int2023
+```
+
+脚本先核对实际登录与目标档案，使用 `sendTextToUser` 只发送一条唯一标记文本。业务成功后，以相同operationId重复调用和查询，独立计数负草稿/发送应均为1；核对正式会话、消息ID/索引、双方UID、正文和意图标记，再退出本次Driver、采集及CDP连接。unknown不重发；不自动撤回，保留文本供目标查看。不切窗口，不操作其他联系人或媒体，不修改客户端安装包和数据库。
+
+### 实际结果
+
+本轮 `pnpm check` 的build/typecheck、31文件381项与lint通过后，执行：
+
+```cmd
+cmd /c "set KK9_USER_TEXT_CONFIRM=5761:3583:int2023&& pnpm exec tsx examples/verify-native-user-text.ts 5761 0123040139 3583 int2023"
+```
+
+运行ID `0e193638-2bc9-484e-aa41-9ec6425c523b`，报告 `tmp/native-user-text-evidence.json`，进程退出码0。实际身份0123040139/5761、目标int2023/3583精确匹配。正式会话816219、消息137624619/索引2、业务回执code0/负草稿-26；正式历史、正文与本次意图匹配。原生insert/send分别1次，重复与查询返回相同正式会话和消息，未新增提交。
+
+发送前后与退出时窗口均为816235，不读取该窗口聊天正文或操作该会话。退出快照回到基线：message监听1、目标回执监听0、DriverHook=false、原生发送观察器false、在途0；Driver与核对CDP连接均disconnected，没有常驻采集或一次性脚本残留。测试文本保留供查看，未撤回或追加发送。
+
+前序同一用户授权的首次调查通过 `unionSearch` 找到3583/int2023；`getSessionInfo6({sessionType:0,typeID:3583})` 返回610，原版首次发送参数sessionID0的单次提交建立816219，正式137621731/索引1，业务code0。该证据保存在 `tmp/int2023-first-contact-evidence.json`。本轮SDK发送时会话已存在，因此只记复用通过，不删除数据或换用未授权目标制造新的首次联系场景。接收端展示、系统通知及已读尚未验证，不能由sent替代。
+
