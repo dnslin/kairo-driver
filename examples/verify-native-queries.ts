@@ -77,24 +77,19 @@ try {
     assert.deepEqual(events, [], '范围读取重放实时事件');
     console.log(JSON.stringify({ 切片: 'T11c', ranges, before, after, 实时事件: events }, null, 2));
   } else {
-    const initialWindow = (await snapshot()).windowId;
-    try {
       for (const id of ['716791', '793803']) {
-        const other = id === '716791' ? '793803' : '716791';
-        assert.equal(await driver.selectSession(other), true, '仅用另一授权会话准备目标未显示场景');
         const before = await snapshot();
-        assert.equal(before.windowId, other);
         const row = before.rows.find(s => String(s.id) === id)!;
         assert.equal(await driver.markSessionRead(id), true);
         const after = await snapshot();
-        assert.equal(after.windowId, other);
+        assert.equal(after.windowId, before.windowId);
         assert.equal(after.rows.find(s => String(s.id) === id)!.read, row.max);
         console.log(JSON.stringify({ 切片: 'T11b', 阶段: '既有未读或幂等', id, before, after }));
       }
       if (process.argv.includes('--listen')) {
         for (const id of ['716791', '793803']) {
           const other = id === '716791' ? '793803' : '716791';
-          assert.equal(await driver.selectSession(other), true);
+          console.log(`请人工保持另一授权会话${other}显示；脚本只观察，不切窗口。`);
           const incoming = new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => { driver.off('message', listener); reject(new Error(`等待授权目标${id}新入站超时；未证明未读推进`)); }, 180000);
             const listener = (message: { sessionId: string; senderId?: string }) => {
@@ -121,9 +116,6 @@ try {
           console.log(JSON.stringify({ 切片: 'T11b', 阶段: '真实未读推进', id, before, after, 历史新增事件: events.length - eventCount }));
         }
       }
-    } finally {
-      if (initialWindow === '716791' || initialWindow === '793803') assert.equal(await driver.selectSession(initialWindow), true);
-    }
   }
 } finally {
   await Promise.all([driver.disconnect(), cdp.disconnect()]);

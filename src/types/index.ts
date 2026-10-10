@@ -204,8 +204,6 @@ export interface KK9Session {
   unreadAt?: boolean;
   lastMessage?: string;
   lastMessageTime?: string;
-  /** 仅窗口查询提供；原生会话列表不读取窗口状态。 */
-  active?: boolean;
 }
 
 export interface KK9Message {
@@ -280,22 +278,6 @@ export interface KK9Employee {
   updatedAt: number;
 }
 
-export interface SelectorsConfig {
-  sessionList: string;
-  sessionItem: string;
-  sessionTitle: string;
-  sessionUnreadBadge: string;
-  activeSession: string;
-  messageList: string;
-  messageItem: string;
-  messageContent: string;
-  messageSender: string;
-  messageTime: string;
-  messageIsMe: string;
-  inputBox: string;
-  sendButton: string;
-  virtualScroller?: string;
-}
 
 export interface CdpConfig {
   url: string;
@@ -319,7 +301,6 @@ export interface DriverConfig {
   currentUserId?: string | number;
   /** 共享客户端验收可显式拒绝接管其他代次的Hook。 */
   rejectExistingBridge?: boolean;
-  selectors?: Partial<SelectorsConfig>;
   /** Composition Root 分配的唯一启动代次。 */
   startupGenerationId?: string;
 }
@@ -375,16 +356,6 @@ export interface KK9RecalledEvent {
   timestamp?: number;
 }
 
-export interface PreSendCheckResult {
-  canSend: boolean;
-  reason?:
-    | 'session_switched'
-    | 'message_gone'
-    | 'new_incoming_messages'
-    | 'input_not_empty'
-    | 'unknown';
-  details?: string;
-}
 
 export interface SendOptions {
   /** 必须提供原生会话ID；缺省返回failed，不使用当前窗口或会话名称。 */
@@ -434,8 +405,6 @@ export interface IKK9Driver extends EventEmitter {
 
   // 会话管理
   getSessions(): Promise<KK9Session[]>;
-  getCurrentSession(): Promise<KK9Session | null>;
-  selectSession(sessionId: string): Promise<boolean>;
   /** 仅接受原生 ID；不存在返回 false，原生操作失败抛 DriverError。 */
   markSessionRead(sessionId: string): Promise<boolean>;
 

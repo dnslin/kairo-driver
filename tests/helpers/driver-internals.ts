@@ -4,7 +4,6 @@ import type { BridgeOrgOps } from '../../src/bridge/org-ops.js';
 import type { BridgeSessionOps } from '../../src/bridge/session-ops.js';
 import type { CdpClient } from '../../src/cdp/client.js';
 import type { KK9Driver } from '../../src/driver.js';
-import type { SessionOps } from '../../src/dom/session-ops.js';
 import type { KK9RecalledEvent } from '../../src/types/index.js';
 
 interface DriverTestInternalSlots {
@@ -13,7 +12,6 @@ interface DriverTestInternalSlots {
   bridgeSessionOps: BridgeSessionOps;
   bridgeMessageOps: BridgeMessageOps;
   bridgeOrgOps: BridgeOrgOps;
-  domSessionOps: SessionOps;
   handleRecalledEvent(event: KK9RecalledEvent): void;
 }
 

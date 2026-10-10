@@ -17,7 +17,6 @@ import type {
   KK9Session,
   KK9UrlCardOptions,
   KK9VoiceOptions,
-  PreSendCheckResult,
   SendFileOptions,
   SendOptions,
   SendOutcome,
@@ -84,23 +83,17 @@ export declare interface FakeKK9Driver {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging, no-redeclare
 export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private currentUserId: string | null = null;
-  private currentSession: KK9Session | null = null;
   private sessions: KK9Session[] = [];
   private messages: KK9Message[] = [];
   private employees: KK9Employee[] = [];
   private currentBehavior: FakeSendBehavior = { mode: 'success' };
   private behaviorSequence: FakeSendBehavior[] = [];
-  private selectSessionHandler?: (sessionId: string) => Promise<boolean> | boolean;
-  private preSendCheckHandler?: (
-    sessionId: string
-  ) => Promise<PreSendCheckResult> | PreSendCheckResult;
   private readonly sendOperationStore: SendOperationStore;
 
   private readonly confirmedSendKeys = new Map<string, string>();
   private readonly knownMessageKeys = new Set<string>();
   private readonly knownRecalledMessageKeys = new Set<string>();
   public readonly recordedCalls: RecordedSendCall[] = [];
-  public selectSessionCallsCount = 0;
   public markSessionReadCallsCount = 0;
 
   constructor(sendOperationStore: SendOperationStore = new InMemorySendOperationStore()) {
@@ -194,32 +187,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     }
   }
 
-  public setSelectSessionBehavior(
-    handler: (sessionId: string) => Promise<boolean> | boolean
-  ): void {
-    this.selectSessionHandler = handler;
-  }
-
-  public setPreSendCheckBehavior(
-    handler: (sessionId: string) => Promise<PreSendCheckResult> | PreSendCheckResult
-  ): void {
-    this.preSendCheckHandler = handler;
-  }
-
-  public async selectSession(sessionId: string): Promise<boolean> {
-    this.selectSessionCallsCount++;
-    const exact = this.sessions.find(session => session.id === sessionId);
-    const names = this.sessions.filter(session => session.name === sessionId);
-    const session = exact ?? (names.length === 1 ? names[0] : undefined);
-    if (!session) return false;
-    const ok = this.selectSessionHandler ? await this.selectSessionHandler(session.id) : true;
-    if (ok) this.currentSession = { ...session, active: true };
-    return ok;
-  }
-
-  public getCurrentSession(): Promise<KK9Session | null> {
-    return Promise.resolve(this.currentSession);
-  }
 
   public markSessionRead(sessionId: string): Promise<boolean> {
     this.markSessionReadCallsCount++;
@@ -228,20 +195,9 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     session.unread = false;
     session.unreadCount = 0;
     session.unreadAt = false;
-    if (this.currentSession?.id === session.id) {
-      this.currentSession.unread = false;
-      this.currentSession.unreadCount = 0;
-      this.currentSession.unreadAt = false;
-    }
     return Promise.resolve(true);
   }
 
-  public async preSendCheck(sessionId: string): Promise<PreSendCheckResult> {
-    if (this.preSendCheckHandler) {
-      return await this.preSendCheckHandler(sessionId);
-    }
-    return { canSend: true };
-  }
 
   public async sendText(text: string, options?: SendOptions): Promise<SendResult> {
     if (options?.replyTo !== undefined) return this.sendReply(options.replyTo, text, options);
@@ -504,11 +460,8 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   public reset(): void {
     this.recordedCalls.length = 0;
-    this.selectSessionCallsCount = 0;
     this.markSessionReadCallsCount = 0;
     this.currentBehavior = { mode: 'success' };
     this.behaviorSequence = [];
-    this.selectSessionHandler = undefined;
-    this.preSendCheckHandler = undefined;
   }
 }

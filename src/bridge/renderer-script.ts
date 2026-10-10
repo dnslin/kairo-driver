@@ -2,57 +2,6 @@ export function encodeRendererPayload(data: unknown): string {
   return JSON.stringify(encodeURIComponent(JSON.stringify(data)));
 }
 
-export const RENDERER_SESSION_RESOLVER_SCRIPT = `
-  function resolveRendererSession(sessions, target) {
-    if (!Array.isArray(sessions) || !target) return null;
-    const cleanTarget = String(target).trim();
-    if (/^-?[0-9]+$/.test(cleanTarget)) {
-      return sessions.find(session => session && String(session.id) === cleanTarget) || null;
-    }
-
-    const idMatch = sessions.find(
-      session => session && (
-        session.sesUUID === cleanTarget ||
-        String(session.id) === cleanTarget
-      )
-    );
-    if (idMatch) return idMatch;
-    const nameMatches = sessions.filter(
-      session => session && (session.typeName === cleanTarget || session.name === cleanTarget)
-    );
-    return nameMatches.length === 1 ? nameMatches[0] : null;
-  }
-
-  function resolveRendererSessionIdentity(sessions, targetId, targetName) {
-    if (!Array.isArray(sessions)) return null;
-    if (targetId) {
-      const cleanId = String(targetId).trim();
-      const idMatch = sessions.find(
-        session => session && (
-          String(session.id) === cleanId ||
-          session.sesUUID === cleanId
-        )
-      );
-      if (idMatch) return idMatch;
-      return null;
-    }
-    if (!targetName) return null;
-
-    const nameMatches = sessions.filter(
-      session => session && (
-        session.typeName === targetName ||
-        session.name === targetName
-      )
-    );
-    return nameMatches.length === 1 ? nameMatches[0] : null;
-  }
-
-  function resolveRendererReceiver(session, currentUserId) {
-    return session.type === 0 && String(session.typeID) === String(currentUserId)
-      ? session.creater
-      : session.typeID;
-  }
-`;
 
 export const RENDERER_IPC_HELPERS_SCRIPT = `
   function nextKairoRequestId() {

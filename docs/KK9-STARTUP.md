@@ -10,7 +10,7 @@
   --remote-debugging-port=9222
 ```
 
-也可以使用仓库根目录的 `start-kk9-cdp.bat`。CDP 只绑定回环地址；端口被占用时，应先确认占用进程。登录后保持主界面加载完成，需要 DOM 操作时不要最小化窗口。
+也可以使用仓库根目录的 `start-kk9-cdp.bat`。CDP 只绑定回环地址；端口被占用时，应先确认占用进程。登录后保持主界面加载完成；SDK不再执行DOM点击或窗口切换。需要人工菜单撤回或显示核对时，在KK9内手动打开明确授权目标。
 
 打开 `http://127.0.0.1:9222/json`，应看到包含 `type: "page"`、页面 `url` 和 `webSocketDebuggerUrl` 的目标。脚本默认匹配 URL 中的 `renderer.html`，需要调整时在同一终端设置：
 
@@ -31,7 +31,7 @@ pnpm diagnose sessions
 pnpm diagnose listen
 ```
 
-`status` 探测 CDP，`sessions` 读取会话，`listen` 监听真实消息。`pnpm diagnose` 可查看完整命令；发送、撤回、切换等命令会实际操作客户端，需明确提供已获授权的目标。
+`status` 探测 CDP，`sessions` 读取原生会话，`listen` 监听真实消息。`pnpm diagnose` 可查看完整命令；发送、撤回等命令会实际操作客户端，需明确提供已获授权的原生目标。旧 `switch` 命令已删除。
 
 身份、会话和十条历史的只读 SDK 验收（参数依次为登录 UID、登录账号、原生会话 ID、对端 UID、对端账号）：
 
@@ -45,15 +45,19 @@ pnpm exec tsx examples/verify-native-readonly.ts <登录UID> <登录账号> <原
 
 前序 T01/T02 真机只读验收：账号0123040139（UID5761），int2024（UID3585）的原生私聊716791；SDK与jshookmcp原生对照一致，十条消息索引651–660，读取前后userReadIndex均为660。该轮没有真实新入站、发送、撤回、群聊或媒体验收。必要元数据记录在 `tmp/kk9-t01-t02-validation.json` 和 `tmp/kk9-t02-mcp-evidence.json`。
 
-`pnpm verify` 按指定原生私聊、群聊 ID 读取最近消息并查询员工档案，不再为历史切换窗口，不发送消息。运行前设置：
+`pnpm verify` 通过构建后的 `@kairo/driver` ESM公开入口连接，核对登录0123040139/UID5761、私聊716791/对端3585/int2024及群793803/接收对象29467/nativeType1/测试123。仅每目标读取3条历史并与原生ID/索引逐项对照、查询必要档案；检查窗口、读索引和实时事件不变，退出后自身Hook/在途及客户端监听回到基线。不发送、撤回、标已读，不操作同名716827。先运行 `pnpm build`，或复用刚通过的 `pnpm check` 构建；烟测本身不重复构建。运行前设置：
 
 ```powershell
-$env:KK9_TEST_PRIVATE_ID = "<私聊会话 ID>"
-$env:KK9_TEST_GROUP_ID = "<群聊会话 ID>"
-$env:KK9_TEST_USER_ID = "<员工 UID>"
+$env:KK9_TEST_PRIVATE_ID = "716791"
+$env:KK9_TEST_GROUP_ID = "793803"
+$env:KK9_TEST_USER_ID = "3585"
 pnpm verify
 ```
 
+
+旧 `check-vue-messages.ts`、`inspect-chat-content.ts`、`test-reload-messages.ts` 已删除；历史/资源/撤回核对继续使用各原生脚本。现行脚本不再准备或恢复窗口；必要界面操作由操作者在KK9内完成，独立只读观察不作为SDK数据源。本机菜单撤回仍依赖已验收的Vue本地通知、`addRevokeMsg`与组件重建观察，未证明等价原生替代前保留，不声称全原生或C4完成。
+
+以下T01–T11验收数值、旧路径及窗口切换描述均保留为历史事实，不重新执行。现行图片/撤回脚本需要查看时请人工打开授权目标，使用 `snapshot`（撤回）或 `finish`；旧自动 `private/group` 切换不再提供。实时事件脚本的 `private/group` 仅核对人工准备后的现场，T04仍停止补测。
 ## 六项修正专项回归
 
 `examples/verify-native-regressions.ts` 核对登录身份与既有私聊，再检查原生历史、当前会话、真实发送回显、撤回事件去重、历史撤回状态和主动历史隔离。运行前取得目标私聊授权，并保留与 `e2e:stage1` 相同的确认门禁：
@@ -309,7 +313,7 @@ PR #7审计修复补充：原生`Text(0)`历史引用改为保留字符串正文
 
 ## 私聊与群聊回归
 
-`pnpm e2e` 会真实发送文本、富文本、文件、图片和引用回复，切换会话、标记已读，并尝试撤回测试消息。先取得测试账号和会话的使用授权，再设置实际值：
+`pnpm e2e` 会真实发送文本、富文本、文件、图片和引用回复，标记已读，并尝试撤回测试消息；不切窗口。此为按需的综合脚本，不用于T12重跑媒体矩阵。先取得测试账号和会话的使用授权，再设置实际值：
 
 ```powershell
 $env:KK9_TEST_USER_ID = "<登录 Bot UID>"
@@ -417,7 +421,7 @@ pnpm e2e:media
 | -------------------- | ---------------------------------------------- |
 | CDP 拒绝连接         | 确认 KK9 由带调试参数的命令启动，旧实例已退出  |
 | 找不到目标页面       | 查看 `/json`，确认 `PAGE_MATCH` 匹配页面 URL   |
-| DOM 操作失败         | 恢复窗口，确认页面已加载、目标会话正确         |
+| 本机菜单撤回无事件   | 确认原版Vue本地通知与组件Hook仍可用；不能用原生message等价假设删除它 |
 | Driver 失效          | 清理原实例并创建新实例，不能对失效实例原地重连 |
 | 消息状态为 `unknown` | 保留原 `operationId` 查询，不直接重发          |
 
@@ -452,3 +456,21 @@ pnpm e2e:media
 双目标历史范围与上节相同，SDK每目标3条的ID、索引及会话逐项匹配独立原生对照。查询前后窗口均511315，私聊max/read均724/724，群均153/153，message/at/recalled新增0。没有发送、切窗口、标已读或制造新消息；没有在真机伪造时间倒序，后页漏读边界由201条固定记录的必要回归验证。
 
 Driver运行5cb83821-a0ac-4e8e-839e-e8bd5f1d5302及核对连接878ec1dc-a2f7-4acb-b8ab-650021e473a3正常断开，脚本退出码0。Fake当前会话已读同步通过本地实际调用与回归验证，不重复执行真实标已读场景。
+
+## T12 构建入口最小只读验收
+
+本轮实际先执行 `pnpm diagnose help`，现行诊断命令正常输出且无switch；最终 `pnpm check`通过build/typecheck、30文件336项及lint。首次完整检查仅两条删除界面预检后残留的未使用导入导致lint失败，移除后因该失败重跑一次通过；没有逐批机械全量检查。
+
+随后实际执行：
+
+```bash
+node --input-type=module -e "process.env.KK9_TEST_PRIVATE_ID='716791'; process.env.KK9_TEST_GROUP_ID='793803'; process.env.KK9_TEST_USER_ID='3585'; const { spawnSync } = await import('node:child_process'); const result = spawnSync('pnpm verify', { shell: true, stdio: 'inherit', env: process.env }); process.exitCode = result.status ?? 1;"
+```
+
+`examples/verify.ts` 从包名 `@kairo/driver`导入本轮新构建ESM入口，不读旧dist或源码替代产物；仅执行只读查询，不需要发送确认门禁。真实登录0123040139/UID5761、int2024/UID3585/私聊716791及测试123/793803/接收对象29467/nativeType1全部核对通过，未操作同名716827。
+
+私聊3条原生ID/索引为137587661/722、137587823/723、137593073/724；群为137587293/151、137587827/152、137593135/153。SDK与独立原生getMessages逐项一致；窗口读取前后均511315，只观察其ID，未操作该会话。私聊max/read均724/724，群均153/153，message/at/recalled事件0。员工档案与私聊对端映射一致，不输出或保存聊天正文、凭据或全员联系方式。
+
+退出后message监听1→1、DriverHook=false、nativeObserver=false、pendingSends=0，窗口和索引仍与基线一致。Driver运行4fdaeb03-aee6-4f7d-b9f7-406d57bac569及核对连接8ce8b1ed-be85-4321-ba8b-716a4a03b1f4均disconnected，脚本exit0。未发送、撤回、标已读、清原生缓存或修改共享客户端其他监听；只读查询可能由KK9内部更新查询缓存，不承诺内部缓存不变。没有自建临时脚本、文件或常驻采集需要清理。
+
+本轮没有改实时、撤回捕获或媒体准备协议，复用有效前序证据，不重复真机发送/播放/菜单撤回，不补测已停止T04。保留的必要Vue总线、会话通知、addRevokeMsg和MutationObserver组件重建监听没有等价无Vue替代证明；T12a彻底去依赖与C4保持未勾选，不虚报全原生。T12b/T12c完成，未提交、推送、开PR、合并或发布；交付后停止。

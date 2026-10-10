@@ -50,7 +50,9 @@ const report: Record<string, unknown> = {
 let targets: KK9Session[] = [];
 let captureInstalled = false;
 let verificationConnected = false;
-let initialWindow: string | undefined;
+async function activeWindow(): Promise<string | null> {
+  return verification.evaluate(`(() => { const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__; return editor?.activedSes ? String(editor.activedSes.id) : null; })()`);
+}
 
 async function history(id: string): Promise<Array<Record<string, unknown>>> {
   const response = await callIpcToData<Array<Record<string, unknown>>>(
@@ -95,7 +97,6 @@ try {
   assert.equal(groupSession.receiverId, groupReceiver);
   targets = [privateSession, groupSession];
   report['身份'] = { uid, login, privateId, peerId, peerLogin, groupId, groupReceiver, groupName };
-  initialWindow = (await driver.getCurrentSession())?.id;
   await verification.evaluate(`(() => {
     const ipc = window.ipcRenderer || window.require('electron').ipcRenderer;
     const keys = ${JSON.stringify(operations.map(operation => operation.key))};
@@ -131,10 +132,7 @@ try {
   const results: Array<Record<string, unknown>> = [];
   for (const operation of operations) {
     const target = targets.find(session => session.id === operation.id)!;
-    const other = targets.find(session => session.id !== operation.id)!;
-    assert.equal(await driver.selectSession(other.id), true, '显示另一授权窗口失败');
-    const before = (await driver.getCurrentSession())?.id;
-    assert.equal(before, other.id);
+    const before = await activeWindow();
     await writeFile(operation.file, operation.bytes);
     const options = {
       targetSessionId: target.id,
@@ -180,7 +178,7 @@ try {
     assert.ok(receipt['businessCode'] === null || receipt['businessCode'] === 0);
     assert.equal(receipt['draftId'], result.receipt?.draftId);
     assert.equal(receipt['msgIdx'], record['msgIdx']);
-    const after = (await driver.getCurrentSession())?.id;
+    const after = await activeWindow();
     assert.equal(after, before, '发送或只读查询改变了窗口');
     const versions = await callIpcToData<Array<Record<string, unknown>>>(
       verification,
@@ -255,13 +253,6 @@ try {
       }
     }
     report['清理'] = cleaned;
-    if (initialWindow && targets.some(target => target.id === initialWindow)) {
-      try {
-        assert.equal(await driver.selectSession(initialWindow), true);
-      } catch (error) {
-        failure('窗口恢复错误', error);
-      }
-    }
     if (captureInstalled) {
       try {
         report['独立采集'] = await snapshot();

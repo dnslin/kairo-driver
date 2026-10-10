@@ -190,14 +190,10 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     const sessions = await driver.getSessions();
     expect(sessions).toHaveLength(2);
 
-    const switched = await driver.selectSession('test-employee');
-    expect(switched).toBe(true);
-    expect(driver.selectSessionCallsCount).toBe(1);
 
     expect(await driver.markSessionRead('test-group')).toBe(false);
     expect(await driver.markSessionRead('93002')).toBe(true);
     expect((await driver.getSessions()).find(s => s.id === '93002')).toMatchObject({ unread: false, unreadCount: 0, unreadAt: false });
-    expect((await driver.getCurrentSession())?.id).toBe('93001');
 
     const mockEmployees: KK9Employee[] = [
       {
@@ -223,14 +219,6 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     expect(fromGroup).toBeNull();
   });
 
-  it('标记当前会话已读后当前窗口与会话列表的未读状态一致', async () => {
-    driver.setSessions([{ id: '93002', name: '群', type: 'group', nativeType: 1, receiverId: '92001', unread: true, unreadCount: 3, unreadAt: true }]);
-    await driver.selectSession('93002');
-    await driver.markSessionRead('93002');
-    const expected = { id: '93002', unread: false, unreadCount: 0, unreadAt: false };
-    expect(await driver.getCurrentSession()).toMatchObject({ ...expected, active: true });
-    expect((await driver.getSessions())[0]).toMatchObject(expected);
-  });
 
   it('历史按原生会话隔离且不重放实时事件，不以当前窗口选择目标', async () => {
     const first: KK9Session = {
@@ -261,7 +249,6 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
       message,
       { ...message, id: '1002', sessionId: second.id, content: '乙的历史' },
     ]);
-    await driver.selectSession(second.id);
     const events: unknown[] = [];
     driver.on('message', item => events.push(item));
     const history = await driver.getRecentMessages(first, 1);

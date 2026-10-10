@@ -1,6 +1,6 @@
 import type { CdpClient } from '../cdp/client.js';
 import type { KK9Employee } from '../types/index.js';
-import { parseEmployee } from '../dom/org-ops.js';
+import { parseEmployee } from '../utils/employee.js';
 import { callIpcToData } from './rpc.js';
 import { DriverError } from '../utils/errors.js';
 import { createChildLogger } from '../utils/logger.js';

@@ -64,16 +64,14 @@ describe('主动原生历史范围读取', () => {
     await expect(driver.scanCompensationWindow({ fromTimestamp: 0, sessionIds: ['99999'] })).rejects.toThrow(/会话不存在.*99999/);
   });
 
-  it('Fake保留相同原生身份的跨会话历史、范围和数量限制，不改当前窗口/未读或重放', async () => {
+  it('Fake保留相同原生身份的跨会话历史、范围和数量限制，不改未读或重放', async () => {
     const fake = new FakeKK9Driver();
     fake.setSessions([{ id: '716791', name: '私聊', type: 'private', nativeType: 0, receiverId: '3585', unread: true }, { id: '793803', name: '群', type: 'group', nativeType: 1, receiverId: '29467', unread: true }]);
-    await fake.selectSession('793803');
     const base = { sessionName: '私聊', sessionType: 'private' as const, sender: '对端', content: '历史', time: '', isMe: false, direction: 'inbound' as const, timestamp: 1000 };
     fake.setMessages([{ ...base, id: '1', sessionId: '716791', msgIdx: 1 }, { ...base, id: '2', sessionId: '716791', msgIdx: 2, timestamp: 2000 }, { ...base, id: '1', sessionId: '793803', msgIdx: 1 }]);
     const events: string[] = [];
     fake.on('message', m => events.push(m.id));
     expect((await fake.scanCompensationWindow({ fromTimestamp: 1000, toTimestamp: 2000, maxMessagesPerSession: 1 })).map(m => [m.sessionId, m.id])).toEqual([['716791', '2'], ['793803', '1']]);
-    expect((await fake.getCurrentSession())?.id).toBe('793803');
     expect((await fake.getSessions()).map(s => s.unread)).toEqual([true, true]);
     expect(events).toEqual([]);
   });

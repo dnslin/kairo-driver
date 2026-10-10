@@ -278,64 +278,6 @@ describe('KK9Driver 顶层契约离线测试 (IKK9Driver)', () => {
     }
   );
 
-  it('Driver 顶层拒绝重名会话的 select', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
-    });
-    const internals = getDriverTestInternals(driver);
-    driver.getSessions = vi.fn().mockResolvedValue([
-      { id: '1-92001', name: 'test-group', type: 'group', unread: false },
-      { id: '1-92002', name: 'test-group', type: 'group', unread: false },
-    ]);
-    internals.bridgeSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-    internals.domSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-
-    expect(await driver.selectSession('test-group')).toBe(false);
-    expect(internals.bridgeSessionOps.selectSession).not.toHaveBeenCalled();
-    expect(internals.domSessionOps.selectSession).not.toHaveBeenCalled();
-  });
-
-  it('会话管理应优先调用 Bridge 会话服务', async () => {
-    const driver = new KK9Driver({
-      cdp: { url: 'http://localhost:9222', pageMatch: 'test' },
-    });
-    const internals = getDriverTestInternals(driver);
-
-    const mockSessions: KK9Session[] = [
-      {
-        id: '93001',
-        name: 'test-employee',
-        type: 'private',
-        nativeType: 0,
-        receiverId: '91002',
-        unread: false,
-      },
-      {
-        id: '93002',
-        name: 'test-group',
-        type: 'group',
-        nativeType: 1,
-        receiverId: '92001',
-        unread: true,
-        unreadCount: 3,
-      },
-    ];
-
-    internals.bridgeSessionOps.getSessions = vi.fn().mockResolvedValue(mockSessions);
-    internals.bridgeSessionOps.getCurrentSession = vi.fn().mockResolvedValue(mockSessions[0]);
-    internals.bridgeSessionOps.selectSession = vi.fn().mockResolvedValue(true);
-
-    const sessions = await driver.getSessions();
-    expect(sessions).toHaveLength(2);
-
-    const current = await driver.getCurrentSession();
-    expect(current?.name).toBe('test-employee');
-
-    const switched = await driver.selectSession('test-group');
-    expect(switched).toBe(true);
-    expect(internals.bridgeSessionOps.selectSession).toHaveBeenCalledWith('93002');
-
-  });
 
   it('已读名称不解析为原生目标，原生失败保留错误', async () => {
     const driver = new KK9Driver({ cdp: { url: 'http://localhost:9222', pageMatch: 'test' } });

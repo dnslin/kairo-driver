@@ -124,11 +124,7 @@ try {
   targets = await verifyIdentity();
   const initialWindow = await activeWindow();
   report['初始窗口'] = initialWindow;
-  // 仅观察现有窗口。若恰好显示某个授权目标，只切到另一个授权目标证明指定路由。
-  if (initialWindow === privateId || initialWindow === groupId) {
-    const other = initialWindow === privateId ? groupId : privateId;
-    assert.equal(await driver.selectSession(other), true, '必要的授权目标窗口切换失败');
-  }
+  // 窗口仅独立只读观察；SDK不准备或恢复界面。
   const channels = targets.map(
     session => `${session.nativeType}-${session.receiverId}-sendMsgCallback`
   );
@@ -181,13 +177,7 @@ try {
   for (let index = 0; index < operations.length; index++) {
     const operation = operations[index]!;
     const target = targets.find(session => session.id === operation.id)!;
-    let before = await activeWindow();
-    if (before === target.id) {
-      const other = targets.find(session => session.id !== target.id)!;
-      assert.equal(await driver.selectSession(other.id), true);
-      before = await activeWindow();
-    }
-    assert.notEqual(before, target.id, '发送时必须显示别的会话');
+    const before = await activeWindow();
     // KK9切换聊天组件会移除该会话监听；只重挂本轮自己的采集函数。
     await verification.evaluate(`(() => { const capture = window.__kairo_t03_capture;
       for (const channel of capture.channels) if (!capture.ipc.listeners(channel).includes(capture.onReceipt)) capture.ipc.on(channel, capture.onReceipt);
@@ -293,6 +283,7 @@ try {
       业务码: callback['businessCode'],
       发送前窗口: before,
       发送后窗口: after,
+      目标未显示: before !== target.id,
       原生提交次数: 1,
       查询重复无新增: true,
     });

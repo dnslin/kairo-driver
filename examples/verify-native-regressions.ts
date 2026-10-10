@@ -125,17 +125,7 @@ try {
     const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
     return editor?.activedSes ? String(editor.activedSes.id) : null;
   })()`);
-  if (activeIdBefore !== sessionId)
-    assert.equal(await driver.selectSession(sessionId), true, '无法切换到授权目标');
-  const current = await driver.getCurrentSession();
-  assert.equal(current?.id, sessionId, '当前会话应返回原生 ID');
-  assert.equal(current?.receiverId, receiverId);
-  assert.equal(current?.active, true);
-  report['当前会话'] = {
-    原生ID: current.id,
-    对端UID: current.receiverId,
-    是否切换: activeIdBefore !== sessionId,
-  };
+  report['原生目标'] = { 原生ID: authorizedSession.id, 对端UID: authorizedSession.receiverId, 观察窗口: activeIdBefore };
 
   sendStarted = true;
   let result = await driver.sendText(marker, { targetSessionId: sessionId, operationId: runId });
@@ -156,6 +146,10 @@ try {
   assert.equal(result.messageId, ownRecord.id, '发送结果与原生消息 ID 不一致');
   assert.equal(ownRecord.sessionId, sessionId);
   assert.equal(ownRecord.direction, 'outbound');
+  assert.equal(await verificationCdp.evaluate<string | null>(`(() => {
+    const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
+    return editor?.activedSes ? String(editor.activedSes.id) : null;
+  })()`), activeIdBefore, 'SDK发送改变窗口');
   await sleep(300);
   assert.ok(
     messages.some(message => message.id === ownedMessageId && message.direction === 'outbound'),

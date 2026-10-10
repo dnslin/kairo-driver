@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseEmployee, parseEmployeeList } from '../src/dom/org-ops.js';
+import { parseEmployee, parseEmployeeList } from '../src/utils/employee.js';
 
 describe('员工档案解析清洗', () => {
   describe('parseEmployee: 单个员工对象字段映射与清洗', () => {
