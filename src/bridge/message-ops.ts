@@ -14,7 +14,7 @@ import {
 } from './renderer-script.js';
 import { recallNativeMessage } from './recall-ops.js';
 import { sendNativeImage } from './image-ops.js';
-import { sendNativeStructuredMessage } from './card-ops.js';
+import { getCardInputError, sendNativeStructuredMessage } from './card-ops.js';
 import { prepareVoice } from './voice-ops.js';
 import { buildMentionNodes, parseFormattedTextToKK } from './rich-text.js';
 import {
@@ -417,14 +417,14 @@ export class BridgeMessageOps {
       summary: card.summary,
       linkUrl: card.linkUrl,
       picUrl: card.picUrl ?? '',
-      isValid: true,
-      filepath: '',
+      // 远端图片由 KK9 自己下载；不预先伪造 isValid 或本地路径。
     };
     return this.executeOperation('url-card', options, content, (nativeKey, effectiveOptions) => {
-      if (!content.title.trim() || !content.summary.trim() || !content.linkUrl.trim()) {
+      const error = getCardInputError('url-card', content);
+      if (error) {
         return Promise.resolve<SendOutcome>({
           status: 'failed',
-          error: 'UrlCard 的 title、summary 与 linkUrl 不能为空',
+          error,
           isPreTrigger: true,
         });
       }
@@ -443,14 +443,15 @@ export class BridgeMessageOps {
       title: message.title,
       content: message.content,
       summary: [...(message.summary ?? [])],
-      bizUrl: message.bizUrl ?? '',
-      bizType: message.bizType ?? 1,
+      bizUrl: message.bizUrl,
+      bizType: message.bizType,
     };
     return this.executeOperation('biz-message', options, content, (nativeKey, effectiveOptions) => {
-      if (!content.title.trim() || !content.content.trim()) {
+      const error = getCardInputError('biz-message', content);
+      if (error) {
         return Promise.resolve<SendOutcome>({
           status: 'failed',
-          error: 'BizMsg 的 title 与 content 不能为空',
+          error,
           isPreTrigger: true,
         });
       }
@@ -468,14 +469,15 @@ export class BridgeMessageOps {
     const content = {
       title: message.title,
       content: message.content,
-      linkUrl: message.linkUrl ?? '',
-      pcAppCode: message.pcAppCode ?? '',
+      ...(message.linkUrl !== undefined ? { linkUrl: message.linkUrl } : {}),
+      ...(message.pcAppCode !== undefined ? { pcAppCode: message.pcAppCode } : {}),
     };
     return this.executeOperation('app-message', options, content, (nativeKey, effectiveOptions) => {
-      if (!content.title.trim() || !content.content.trim()) {
+      const error = getCardInputError('app-message', content);
+      if (error) {
         return Promise.resolve<SendOutcome>({
           status: 'failed',
-          error: 'AppMsg 的 title 与 content 不能为空',
+          error,
           isPreTrigger: true,
         });
       }
@@ -493,29 +495,16 @@ export class BridgeMessageOps {
     record: KK9ChatRecordOptions,
     options: SendOptions = {}
   ): Promise<SendResult> {
-    let content: KK9ChatRecordOptions;
-    try {
-      const serialized = JSON.stringify({
-        title: record.title,
-        msgArray: record.msgArray,
-      });
-      content = JSON.parse(serialized) as KK9ChatRecordOptions;
-    } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new SendError(`无法生成 ChatRecord 内容快照: ${cause.message}`, cause);
-    }
-
+    const content = {
+      sourceSessionId: record.sourceSessionId,
+      msgArray: Array.isArray(record.msgArray) ? record.msgArray.map(item => ({ ...item })) : record.msgArray,
+    };
     return this.executeOperation('chat-record', options, content, (nativeKey, effectiveOptions) => {
-      const invalidItem = content.msgArray.some(
-        item =>
-          !item.senderName.trim() ||
-          !Number.isFinite(item.contentType) ||
-          item.content === undefined
-      );
-      if (!content.title.trim() || content.msgArray.length === 0 || invalidItem) {
+      const error = getCardInputError('chat-record', content);
+      if (error) {
         return Promise.resolve<SendOutcome>({
           status: 'failed',
-          error: 'ChatRecord 需要非空 title 与至少一条完整消息',
+          error,
           isPreTrigger: true,
         });
       }

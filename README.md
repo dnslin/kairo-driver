@@ -143,6 +143,25 @@ await driver.sendReply(
 提及不再接受任意昵称字符串，UID 不得用会话 ID 代替。原生全体提及保留显式 `'all'`，是否有权限由真实业务回执决定；T08 真机验收不使用它。引用目标只接受消息 ID 和可选准确索引；发送者及真实内容从指定会话原生历史取得，不能提供摘要或伪造身份。提供索引时必须同时匹配消息 ID，不退回其他记录。引用自动携带被引用作者 UID，正文提及另行加入同一原生元数据。历史及实时规范化保留引用作者 UID、原生索引和正文提及。
 
 
+### 原生卡片与合并转发
+
+链接、业务、应用卡片和合并转发均指定原生目标，复用本次业务回执与发送登记，不依赖编辑器、DOM 或 Vue，也不补即时气泡。语音仍保留未切换的原有显示通知，本轮不改其协议。
+
+`sendUrlCard({ title, summary, linkUrl, picUrl? }, options)` 使用原生链接字段；可不传图片，SDK 不伪造图片已下载或有效。`sendAppMessage({ title, content, linkUrl?, pcAppCode? }, options)` 的正文为原生 HTML；普通通知不要求应用编号，不要填造出的应用码。特定应用的打开能力须使用其真实配置。
+
+`sendBizMessage` 必须显式提供 `bizType: 1 | 2`（任务/日程展示样式）与 `bizUrl`。`bizUrl` 是相对于客户端 `ekp_outer_domain` 的路径，不是完整外部网址。该接口只发送通知，不创建真实业务对象；点击详情还依赖接收端实际业务站点配置。
+
+合并转发只接受来源原生会话及准确消息引用，正文、作者、发送时间与来源标题都从原生记录取得，不再接受手造简报、任意标题或虚构作者：
+
+```ts
+await driver.sendChatRecord({
+  sourceSessionId: source.id,
+  msgArray: [{ messageId: original.id, msgIdx: original.msgIdx! }],
+}, { targetSessionId: target.id });
+```
+
+来源必须是可读取、未撤回且身份完整的正式消息；ID 和索引必须指向同一条记录。SDK 按原索引排序，保留真实子条目 ID/UID。业务确认不代表实际呈现，真机范围见 [T09 验证](docs/KK9-STARTUP.md#t09-原生卡片与合并转发验证)。
+
 ## 运行边界
 
 - KK9 必须保持登录，CDP 端口只绑定 `127.0.0.1`。
