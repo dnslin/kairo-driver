@@ -1,6 +1,7 @@
 import path from 'node:path';
+import { stat } from 'node:fs/promises';
 import type { CdpClient } from '../cdp/client.js';
-import type { SendOptions, SendOutcome } from '../types/index.js';
+import type { KK9ImageInfo, SendOptions, SendOutcome } from '../types/index.js';
 import {
   encodeRendererPayload,
   RENDERER_IPC_HELPERS_SCRIPT,
@@ -9,6 +10,38 @@ import {
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
 import { createNativeMessageKey, isCdpUnavailableBeforeSend } from './send-status.js';
+import { DriverError } from '../utils/errors.js';
+import { callIpcToData } from './rpc.js';
+
+/** 复用 KK9 的资源下载，不经过编辑器或消息发送。 */
+export async function downloadNativeImage(
+  cdp: CdpClient,
+  image: KK9ImageInfo,
+  fullPath: string
+): Promise<string> {
+  const uri = image.originalUri || (image.originalFilePath ? undefined : image.uri);
+  const target = path.resolve(fullPath);
+  if (!uri) throw new DriverError(`图片缺少可下载的原图 URI；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
+  try {
+    const response = await callIpcToData<{ path: string }>(
+      cdp, 'download', [{ uri, fullPath: target, override: true }], 30000
+    );
+    if (response.code !== 0) {
+      throw new Error(`download (${response.code}): ${response.error || response.message || '原生下载失败'}`);
+    }
+    if (!response.data?.path || path.resolve(response.data.path) !== target) {
+      throw new Error('download 未返回指定的本地文件路径');
+    }
+    const file = await stat(target);
+    if (!file.isFile() || file.size < 1) throw new Error('download 未生成非空普通文件');
+    return target;
+  } catch (error) {
+    throw new DriverError(
+      `下载原图 ${uri} 到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
+      'IMAGE_DOWNLOAD_FAILED', error instanceof Error ? error : undefined
+    );
+  }
+}
 
 export async function sendNativeImage(
   cdp: CdpClient,

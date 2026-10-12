@@ -1,5 +1,7 @@
 import EventEmitter from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import type {
   CompensationScanOptions,
   ConnectionStatus,
@@ -11,6 +13,7 @@ import type {
   KK9BizMsgOptions,
   KK9ChatRecordOptions,
   KK9Employee,
+  KK9ImageInfo,
   KK9Message,
   KK9RecalledEvent,
   KK9ReplyTarget,
@@ -92,6 +95,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private currentBehavior: FakeSendBehavior = { mode: 'success' };
   private behaviorSequence: FakeSendBehavior[] = [];
   private readonly sendOperationStore: SendOperationStore;
+  private readonly imageResources = new Map<string, Uint8Array>();
 
   private readonly confirmedSendKeys = new Map<string, string>();
   private readonly knownMessageKeys = new Set<string>();
@@ -147,6 +151,28 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   public setEmployees(employees: KK9Employee[]): void {
     this.employees = employees;
+  }
+
+  /** 注入服务器图片资源；下载写入实际字节，不制造消息回声。 */
+  public setImageResource(uri: string, bytes: Uint8Array): void {
+    this.imageResources.set(uri, bytes);
+  }
+
+  public async downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string> {
+    const uri = image.originalUri || (image.originalFilePath ? undefined : image.uri);
+    const target = path.resolve(fullPath);
+    if (!uri) throw new DriverError(`图片缺少可下载的原图 URI；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
+    const bytes = this.imageResources.get(uri);
+    if (!bytes) throw new DriverError(`图片资源不存在：${uri}；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
+    try {
+      await writeFile(target, bytes);
+      return target;
+    } catch (error) {
+      throw new DriverError(
+        `下载原图 ${uri} 到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
+        'IMAGE_DOWNLOAD_FAILED', error instanceof Error ? error : undefined
+      );
+    }
   }
 
   public getSessions(): Promise<KK9Session[]> {

@@ -466,7 +466,7 @@ export function normalizeNativeMessage(
       } else if (contentObj && Array.isArray(contentObj['content'])) {
         const list = contentObj['content'] as Array<Record<string, unknown>>;
         const imgNodes = list.filter(
-          c => c && (c['type'] === 1 || c['filepath'] || c['filepath_h'] || c['uri'])
+          c => c && (c['type'] === 1 || c['filepath'] || c['filepath_h'] || c['uri'] || c['uri_h'])
         );
         if (imgNodes.length > 0) {
           images = imgNodes.map(c => {
@@ -479,6 +479,8 @@ export function normalizeNativeMessage(
                   ? 'file:///' + fp.replace(/\\/g, '/')
                   : undefined,
               uri: c['uri'] || c['uri_h'] ? toSafeString(c['uri'] || c['uri_h']) : undefined,
+              originalFilePath: c['filepath_h'] ? toSafeString(c['filepath_h']) : undefined,
+              originalUri: c['uri_h'] ? toSafeString(c['uri_h']) : undefined,
               mimeType: c['mimetype'] ? toSafeString(c['mimetype']) : 'image/png',
               width: typeof c['width'] === 'number' ? c['width'] : undefined,
               height: typeof c['height'] === 'number' ? c['height'] : undefined,
