@@ -86,6 +86,22 @@ describe('接收原图资源与原生下载', () => {
     await expect(driver.downloadImage({ originalFilePath: 'C:/expired/original.png', uri: 'group/thumb' }, target)).rejects.toThrow(/原图.*URI/);
   });
 
+  for (const image of [{ originalUri: '', uri: 'group/thumb' }, { originalFilePath: '', uri: 'group/thumb' }]) {
+    it(`原图字段显式为空时原生和 Fake 都不能下载缩略图：${JSON.stringify(image)}`, async () => {
+      const target = targetPath();
+      const native = nativeDriver(request => {
+        const input = request.args[1] as { fullPath: string };
+        writeFileSync(input.fullPath, '缩略图');
+        return { code: 0, data: { path: input.fullPath } };
+      });
+      const fake = new FakeKK9Driver();
+      fake.setImageResource('group/thumb', Buffer.from('缩略图'));
+      for (const driver of [native, fake]) {
+        await expect(driver.downloadImage(image, target)).rejects.toMatchObject({ code: 'IMAGE_DOWNLOAD_FAILED' });
+      }
+    });
+  }
+
   it('Fake 也保存原图实际字节，未注入资源必须报错', async () => {
     const target = targetPath();
     const driver = new FakeKK9Driver();

@@ -140,6 +140,8 @@ const localPath = await driver.downloadImage(message.images[0], 'D:/kairo/cache/
 
 调用方先创建目标父目录。`downloadImage(image, fullPath)` 复用 KK9 原生 `download`，等待最多 30 秒并确认目标已生成非空普通文件，成功返回绝对路径；失败抛出包含资源、路径及原生错误的 `DriverError(IMAGE_DOWNLOAD_FAILED)`。不发送消息、不切换会话，也不触发图片识别。存在原图字段时不会回退下载缩略图；只有单一 `uri` 的图片按该资源下载。文件传输、缓存保留和 20 MiB 等应用限制仍由消费方负责。
 
+`hasOriginalImageSource(image)` 判定独立原图字段是否存在，`getOriginalImageUri(image)` 返回可用的原图 URI；Driver、Fake 和消费方复用这两项规则。字段显式为空仍表示独立原图，不能改用缩略图。下载超时不保证原生后台任务已经取消；需要持久缓存的消费方应为每次尝试指定不同临时文件，成功后再重命名发布，避免中断文件或迟到写入污染完整缓存。
+
 `FakeKK9Driver.setImageResource(uri, bytes)` 注入图片资源，`downloadImage` 写入同样的实际字节；未注入资源会明确失败，不生成占位图片。
 
 ### 按工号首次联系与文本通知

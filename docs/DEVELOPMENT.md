@@ -307,3 +307,11 @@ T12c：删除三条过时的Vue/组件历史专用诊断，保留并迁移全部
 
 本次真实验证复用用户此前发送的私聊图片137677807，不发送新消息：从原生记录得到独立原图URI，本次构建的Driver实际下载一次，KK9 nativeImage解码580×180 PNG、138182字节。配套AstrBot桥接编译产物经隔离的真实HTTP服务上传，真实AstrBot Image读取的文件与下载原图逐字节相同。命令为插件仓库的 `python.exe artifacts/tmp/original-image-smoke.py`；临时脚本及隔离目录验证后删除。只建立独立CDP连接，未接管生产Driver Hook、未重启生产bridge、未派发聊天事件或调用识图模型。本结果只证明原图下载和输入链路，不代替生产模型识图验收；未提交、推送或发布。
 
+
+## 原图来源审计修复
+
+原图来源规则集中在 `src/utils/image.ts` 的 `hasOriginalImageSource/getOriginalImageUri`，真实下载、Fake 与 AstrBot 桥接共用。存在原图字段时只接受原图 URI，包括字段显式为空的情况；只有两个原图字段都未提供时才接受单一 `uri`。不改变下载 API 参数、发送契约或持久数据，不增加兼容路径。
+
+新增两项空字段回归在修复前均因错误下载缩略图而失败。修复后实际执行 `pnpm check`，build/typecheck、33 文件 404 项测试及 lint 全部通过。运行插件仓库的 `node artifacts/tmp/source-rule-smoke.mjs`，本次构建的原生下载函数将已有消息137677807的原图写入 `.part` 文件，KK9 nativeImage 解码为580×180、138182字节；验证完成后删除临时文件并断开独立 CDP。烟测初次因 Windows ESM 导入未使用 file URL 而在加载阶段失败，改为 file URL 后通过，不是生产实现错误。
+
+没有发送消息、调用识图模型、接管生产 Hook 或重启生产桥接。原生下载超时不取消后台写入；消费方使用每次独占的临时文件和完成后重命名发布，缓存管理仍不进入 Driver。

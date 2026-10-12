@@ -1,6 +1,16 @@
 import fs from 'node:fs';
 import type { KK9ImageInfo } from '../types/index.js';
 
+/** 原图字段即使为空也表示存在独立原图，不能改用缩略图。 */
+export function hasOriginalImageSource(image: KK9ImageInfo): boolean {
+  return image.originalFilePath !== undefined || image.originalUri !== undefined;
+}
+
+/** 没有独立原图字段时，uri 本身就是唯一的原图资源。 */
+export function getOriginalImageUri(image: KK9ImageInfo): string | undefined {
+  return hasOriginalImageSource(image) ? image.originalUri : image.uri;
+}
+
 /**
  * 将图片读取为 Data URL Base64 格式（便于直接喂给视觉/多模态 LLM）
  */

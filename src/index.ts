@@ -46,7 +46,7 @@ export type {
 export { CdpClient, type CdpClientOptions } from './cdp/client.js';
 
 // 纯数据解析与图片文件工具
-export { readImageAsBase64, saveImageToFile } from './utils/image.js';
+export { readImageAsBase64, saveImageToFile, hasOriginalImageSource, getOriginalImageUri } from './utils/image.js';
 export { parseEmployee, parseEmployeeList } from './utils/employee.js';
 export { parseFormattedTextToKK } from './bridge/rich-text.js';
 
