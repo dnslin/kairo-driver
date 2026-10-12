@@ -40,6 +40,7 @@ async function synthesizeText(text: string, voice: string, lang: string): Promis
     const tts = new EdgeTTS({
       voice,
       lang,
+      proxy: process.env.HTTPS_PROXY?.trim() || process.env.HTTP_PROXY?.trim() || undefined,
       outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
       timeout: 30000,
     });

@@ -188,6 +188,14 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 
 本轮唯一一次最终`pnpm check`通过build/typecheck、32文件376项测试及lint；之后仅更新Markdown记录，没有重复检查。修改后的真实SDK双目标各一条，用户一次明确确认“两条播放及结尾均正常”；正式记录、时长、确认与清理见启动说明T10节。未真机制造编码器故障、上传-9或服务器业务失败，未运行前序专项或已知无关测试全量类型检查。
 
+### 文本 TTS 进程代理（按需工具配套修复）
+
+文本合成向 SDK 已有 `proxy` 选项显式传入 Driver 所在 Node 进程的非空 `HTTPS_PROXY`（优先）或 `HTTP_PROXY`，先 trim；均未设置维持既有直连。指定代理失败保留 `VOICE_TTS_FAILED` 及原始原因，不换代理或回退直连。不读取 Windows 注册表、AstrBot 代理或 `ALL_PROXY`，不增加公开参数、KK 配置或依赖。
+
+`pnpm exec vitest run tests/voice-ops.test.ts tests/node-edge-tts-boundary.test.ts` 17 项通过；随后 `pnpm check` 的构建、类型检查、33 文件 409 项测试及 lint 通过。新增 5 项代理选路/失败回归使用真实本地 HTTP CONNECT 拒绝服务，并在 TCP/TLS 边界阻止外网访问；验证优先级、空白处理、失败原因及不再直连，不把构造参数回声当验收。删除旧测试中 SDK 构造选项的内部复制断言，保留音频转换、临时文件清理及输入错误行为验证。
+
+真实运行先观察到直连 Edge 403；给 SDK 显式代理后合成及 KK AMR 编码/回解通过。修改后使用正常 Driver 编译产物、仅设置标准 `HTTPS_PROXY` 再运行独立 `prepareVoice({text})`，得到 3534 字节、4 秒 AMR，965 毫秒完成。只建立独立 CDP 连接，未调用 Driver.connect 接管 Hook、未发送消息或调用模型；这证明合成及编码，不是接收端播放验收。未修改生产环境变量或重启已有进程。
+
 
 ## T11a 原生组织与员工查询
 

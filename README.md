@@ -195,6 +195,8 @@ await driver.sendReply(
 
 链接、业务、应用卡片、合并转发及语音均指定原生目标，复用本次业务回执与发送登记，不依赖编辑器、DOM 或 Vue，也不补即时气泡。语音继续复用AMR准备与两条音频依赖补丁。
 
+文本语音合成读取运行 Driver 的 Node 进程环境变量：优先非空 `HTTPS_PROXY`，其次非空 `HTTP_PROXY`，首尾空白会移除；两者均未配置时保持 SDK 既有直连网络行为。指定代理失败保留 `VOICE_TTS_FAILED` 及原因，不回退直连。不会自动继承 AstrBot 的代理配置，也不读取 Windows 系统代理、`ALL_PROXY` 或新增 KK 配置；Windows 下需由启动终端或服务为该 Node 进程提供环境变量，设置示例见 [语音验证](docs/KK9-STARTUP.md#卡片与语音验证)。
+
 `sendUrlCard({ title, summary, linkUrl, picUrl? }, options)` 使用原生链接字段；可不传图片，SDK 不伪造图片已下载或有效。`sendAppMessage({ title, content, linkUrl?, pcAppCode? }, options)` 的正文为原生 HTML；普通通知不要求应用编号，不要填造出的应用码。特定应用的打开能力须使用其真实配置。
 
 `sendBizMessage` 必须显式提供 `bizType: 1 | 2`（任务/日程展示样式）与 `bizUrl`。`bizUrl` 是相对于客户端 `ekp_outer_domain` 的路径，不是完整外部网址。该接口只发送通知，不创建真实业务对象；点击详情还依赖接收端实际业务站点配置。

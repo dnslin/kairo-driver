@@ -8,17 +8,12 @@ import { prepareVoice } from '../src/bridge/voice-ops.js';
 
 const ttsMock = vi.hoisted(() => ({
   audio: new Uint8Array(),
-  constructorOptions: [] as Array<Record<string, unknown>>,
   calls: [] as Array<{ text: string; audioPath: string }>,
   error: undefined as Error | undefined,
 }));
 
 vi.mock('node-edge-tts', () => ({
   EdgeTTS: class {
-    constructor(options: Record<string, unknown>) {
-      ttsMock.constructorOptions.push(options);
-    }
-
     async ttsPromise(text: string, audioPath: string): Promise<void> {
       ttsMock.calls.push({ text, audioPath });
       await writeFile(audioPath, ttsMock.audio);
@@ -127,7 +122,6 @@ async function createTempFile(name: string, data: Uint8Array): Promise<string> {
 afterEach(async () => {
   const ttsDirectories = ttsMock.calls.map(call => path.dirname(call.audioPath));
   ttsMock.audio = new Uint8Array();
-  ttsMock.constructorOptions = [];
   ttsMock.calls = [];
   ttsMock.error = undefined;
   await Promise.all([
@@ -206,7 +200,7 @@ describe('prepareVoice 语音输入与 KK9 AMR-NB 转换', () => {
     );
   });
 
-  it('文本输入使用指定 Edge TTS 音色并在转换后清理临时文件', async () => {
+  it('将文本合成音频转换为 AMR 并清理临时文件', async () => {
     // 使用本地生成的纯音 MP3 模拟 TTS 输出，测试期间离线读取，不访问网络。
     ttsMock.audio = await readFile(new URL('./fixtures/voice.mp3', import.meta.url));
     let captured: CapturedEncodeRequest | undefined;
@@ -218,14 +212,6 @@ describe('prepareVoice 语音输入与 KK9 AMR-NB 转换', () => {
       { text: '提醒 <研发&财务>', voice: 'zh-CN-YunxiNeural' }
     );
 
-    expect(ttsMock.constructorOptions).toEqual([
-      {
-        voice: 'zh-CN-YunxiNeural',
-        lang: 'zh-CN',
-        outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
-        timeout: 30000,
-      },
-    ]);
     expect(ttsMock.calls).toHaveLength(1);
     expect(ttsMock.calls[0]?.text).toBe('提醒 <研发&财务>');
     await expect(access(ttsMock.calls[0]!.audioPath)).rejects.toMatchObject({ code: 'ENOENT' });

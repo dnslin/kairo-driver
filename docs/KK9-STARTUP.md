@@ -413,7 +413,7 @@ $env:KK9_MEDIA_CONFIRM = "<登录 Bot UID>:$($env:KK9_MEDIA_TARGET_ID):$($env:KK
 pnpm e2e:media
 ```
 
-该脚本会发送链接、业务、应用、合并转发卡片和合成语音，核对原生历史，并默认尝试撤回。只检查某种类型时可追加参数，例如 `pnpm e2e:media UrlCard`。语音合成需要连接外部 TTS 服务；设置 `KK9_MEDIA_AUDIO_FILE` 可增加本地音频用例。只有需要保留测试消息时才设置 `KK9_MEDIA_KEEP=1`。
+该脚本会发送链接、业务、应用、合并转发卡片和合成语音，核对原生历史，并默认尝试撤回。只检查某种类型时可追加参数，例如 `pnpm e2e:media UrlCard`。语音合成需要连接外部 TTS 服务；设置 `KK9_MEDIA_AUDIO_FILE` 可增加本地音频用例。只有需要保留测试消息时才设置 `KK9_MEDIA_KEEP=1`。需要代理时，在启动 Driver 的同一个 Windows PowerShell 中先设置 `$env:HTTPS_PROXY = "http://127.0.0.1:<实际代理端口>"`，再运行 Node/pnpm 命令；由服务启动时须在该 Node 进程的启动环境中提供。Driver 优先使用非空 `HTTPS_PROXY`，其次非空 `HTTP_PROXY`，均会 trim；两者都未配置时保持 SDK 既有直连。已指定代理失败时保留合成错误及原因，不改走直连，也不会自动读取 Windows 系统代理、`ALL_PROXY` 或继承 AstrBot 代理配置。不要为了验证代理而运行未经授权的发送脚本。
 
 ## 排障与退出
 
