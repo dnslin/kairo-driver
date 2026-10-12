@@ -37,6 +37,7 @@ import { createMessageIdentityKey, normalizeNativeMessage } from './bridge/conve
 import { buildMentionNodes, parseFormattedTextToKK } from './bridge/rich-text.js';
 import { getCardInputError } from './bridge/card-ops.js';
 import { DriverError } from './utils/errors.js';
+import { getOriginalImageUri } from './utils/image.js';
 
 export type FakeSendPayload =
   | FormattedText
@@ -159,7 +160,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string> {
-    const uri = image.originalUri || (image.originalFilePath ? undefined : image.uri);
+    const uri = getOriginalImageUri(image);
     const target = path.resolve(fullPath);
     if (!uri) throw new DriverError(`图片缺少可下载的原图 URI；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
     const bytes = this.imageResources.get(uri);

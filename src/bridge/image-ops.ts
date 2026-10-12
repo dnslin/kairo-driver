@@ -12,6 +12,7 @@ import {
 import { createNativeMessageKey, isCdpUnavailableBeforeSend } from './send-status.js';
 import { DriverError } from '../utils/errors.js';
 import { callIpcToData } from './rpc.js';
+import { getOriginalImageUri } from '../utils/image.js';
 
 /** 复用 KK9 的资源下载，不经过编辑器或消息发送。 */
 export async function downloadNativeImage(
@@ -19,7 +20,7 @@ export async function downloadNativeImage(
   image: KK9ImageInfo,
   fullPath: string
 ): Promise<string> {
-  const uri = image.originalUri || (image.originalFilePath ? undefined : image.uri);
+  const uri = getOriginalImageUri(image);
   const target = path.resolve(fullPath);
   if (!uri) throw new DriverError(`图片缺少可下载的原图 URI；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
   try {
