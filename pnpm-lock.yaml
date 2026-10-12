@@ -4,7 +4,7 @@ settings:
   excludeLinksFromLockfile: false
 patchedDependencies:
   '@audio/decode-wav@1.5.0': 2b2a7dc402f58f9c699172f49ebf0f696ba70680b4799445cf85e75be321b378
-  node-edge-tts@1.2.10: 4cfd7ad1b23a82b6dad4eb55fe127955843b5163bd9000424d171eabce72360f
+  node-edge-tts@1.2.10: 6a0571405657a00bb9119bebda924f5551329ab644bcd4e79b926d895d97e941
 importers:
   .:
     dependencies:
@@ -19,7 +19,7 @@ importers:
         version: 3.0.2
       node-edge-tts:
         specifier: ^1.2.10
-        version: 1.2.10(patch_hash=4cfd7ad1b23a82b6dad4eb55fe127955843b5163bd9000424d171eabce72360f)(supports-color@7.2.0)
+        version: 1.2.10(patch_hash=6a0571405657a00bb9119bebda924f5551329ab644bcd4e79b926d895d97e941)(supports-color@7.2.0)
       pino:
         specifier: ^9.6.0
         version: 9.14.0
@@ -2430,7 +2430,7 @@ snapshots:
   ms@2.1.3: {}
   nanoid@3.3.11: {}
   natural-compare@1.4.0: {}
-  node-edge-tts@1.2.10(patch_hash=4cfd7ad1b23a82b6dad4eb55fe127955843b5163bd9000424d171eabce72360f)(supports-color@7.2.0):
+  node-edge-tts@1.2.10(patch_hash=6a0571405657a00bb9119bebda924f5551329ab644bcd4e79b926d895d97e941)(supports-color@7.2.0):
     dependencies:
       https-proxy-agent: 7.0.6(supports-color@7.2.0)
       ws: 8.21.3

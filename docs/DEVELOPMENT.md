@@ -188,6 +188,14 @@ PR #6审计补充：新增一条「可解码但尺寸错误的缩略图在创建
 
 本轮唯一一次最终`pnpm check`通过build/typecheck、32文件376项测试及lint；之后仅更新Markdown记录，没有重复检查。修改后的真实SDK双目标各一条，用户一次明确确认“两条播放及结尾均正常”；正式记录、时长、确认与清理见启动说明T10节。未真机制造编码器故障、上传-9或服务器业务失败，未运行前序专项或已知无关测试全量类型检查。
 
+### 文本 TTS 进程代理（按需工具配套修复）
+
+文本合成向 SDK 已有 `proxy` 选项显式传入 Driver 所在 Node 进程的非空 `HTTPS_PROXY`（优先）或 `HTTP_PROXY`，先 trim；均未设置维持既有直连。指定代理失败保留 `VOICE_TTS_FAILED` 及原始原因，不换代理或回退直连。不读取 Windows 注册表、AstrBot 代理或 `ALL_PROXY`，不增加公开参数、KK 配置或依赖。
+
+`pnpm exec vitest run tests/voice-ops.test.ts tests/node-edge-tts-boundary.test.ts` 17 项通过；随后 `pnpm check` 的构建、类型检查、33 文件 409 项测试及 lint 通过。新增 5 项代理选路/失败回归使用真实本地 HTTP CONNECT 拒绝服务，并在 TCP/TLS 边界阻止外网访问；验证优先级、空白处理、失败原因及不再直连，不把构造参数回声当验收。删除旧测试中 SDK 构造选项的内部复制断言，保留音频转换、临时文件清理及输入错误行为验证。
+
+真实运行先观察到直连 Edge 403；给 SDK 显式代理后合成及 KK AMR 编码/回解通过。修改后使用正常 Driver 编译产物、仅设置标准 `HTTPS_PROXY` 再运行独立 `prepareVoice({text})`，得到 3534 字节、4 秒 AMR，965 毫秒完成。只建立独立 CDP 连接，未调用 Driver.connect 接管 Hook、未发送消息或调用模型；这证明合成及编码，不是接收端播放验收。未修改生产环境变量或重启已有进程。
+
 
 ## T11a 原生组织与员工查询
 
@@ -315,3 +323,12 @@ T12c：删除三条过时的Vue/组件历史专用诊断，保留并迁移全部
 新增两项空字段回归在修复前均因错误下载缩略图而失败。修复后实际执行 `pnpm check`，build/typecheck、33 文件 404 项测试及 lint 全部通过。运行插件仓库的 `node artifacts/tmp/source-rule-smoke.mjs`，本次构建的原生下载函数将已有消息137677807的原图写入 `.part` 文件，KK9 nativeImage 解码为580×180、138182字节；验证完成后删除临时文件并断开独立 CDP。烟测初次因 Windows ESM 导入未使用 file URL 而在加载阶段失败，改为 file URL 后通过，不是生产实现错误。
 
 没有发送消息、调用识图模型、接管生产 Hook 或重启生产桥接。原生下载超时不取消后台写入；消费方使用每次独占的临时文件和完成后重命名发布，缓存管理仍不进入 Driver。
+
+## 2.0.1 文字语音代理与超时释放
+
+文字合成读取运行 Driver 的 Node 进程中非空 `HTTPS_PROXY`，其次 `HTTP_PROXY`，交给 Edge SDK 已有代理选项；未配置时直连，指定代理失败保留原始原因，不自动切换网络路径。代理 CONNECT 无响应时，Edge 补丁通过本次连接的 AbortSignal 取消代理底层连接；不增加 TTS 引擎、配置项或重试。
+
+新增「代理 CONNECT 挂起时超时必须关闭代理 TCP 连接」回归，修复前明确失败，补丁后通过。最终 `pnpm install --frozen-lockfile && pnpm check` 的安装、构建、类型检查、33 文件 410 项测试与 lint 通过；锁文件仅更新 Edge 补丁哈希，依赖版本与依赖图不变。
+
+独立 Node 进程实际运行已安装的 `EdgeTTS.ttsPromise`，本地代理接受 CONNECT 后不返回响应：得到原始 `Timed out`，代理端观察到 TCP 关闭，没有生成音频或建立外网连接。此前真实 Edge 合成及 KK9 AMR 编码/回解证据仍保留，接收端播放不因本轮检查自动视为通过；没有发送聊天消息或重启服务。
+

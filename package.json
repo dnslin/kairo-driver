@@ -1,6 +1,6 @@
 {
   "name": "@kairo/driver",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Pure, event-driven CDP driver for KK9 desktop client",
   "packageManager": "pnpm@11.19.0",
   "repository": {

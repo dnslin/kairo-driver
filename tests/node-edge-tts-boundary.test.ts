@@ -1,13 +1,16 @@
 import { EventEmitter, once } from 'node:events';
 import fs, { type WriteStream } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { createServer, type Server, type Socket } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
+import net, { createServer, type Server, type Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import tls, { type ConnectionOptions } from 'node:tls';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EdgeTTS } from 'node-edge-tts';
 import type { WebSocket } from 'ws';
+import { prepareVoice } from '../src/bridge/voice-ops.js';
+import type { CdpClient } from '../src/cdp/client.js';
 
 class FakeWebSocket extends EventEmitter {
   public readyState = 1;
@@ -73,6 +76,42 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
+function createRejectingProxy(): { server: Server; requests: string[]; sockets: Set<Socket> } {
+  const requests: string[] = [];
+  const sockets = new Set<Socket>();
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(502);
+    response.end();
+  });
+  server.on('connection', socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+  server.on('connect', (request, socket) => {
+    requests.push(request.url ?? '');
+    socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+  });
+  return { server, requests, sockets };
+}
+
+function guardVoiceNetwork(allowedPorts: number[]): string[] {
+  const blockedConnections: string[] = [];
+  const connect = net.connect;
+  vi.spyOn(net, 'connect').mockImplementation((...args) => {
+    const options = args[0] as { host?: string; port?: number };
+    if (options.host !== '127.0.0.1' || !allowedPorts.includes(Number(options.port))) {
+      blockedConnections.push('TCP');
+      throw new Error('测试禁止直接连接外网');
+    }
+    return connect(...args);
+  });
+  vi.spyOn(tls, 'connect').mockImplementation(() => {
+    blockedConnections.push('TLS');
+    throw new Error('测试禁止直接连接外网');
+  });
+  return blockedConnections;
+}
+
 function useFakeConnection(tts: EdgeTTS, socket: FakeWebSocket): WriteStream[] {
   vi.spyOn(tts, '_connectWebSocket').mockResolvedValue(socket as unknown as WebSocket);
   const streams: WriteStream[] = [];
@@ -87,6 +126,7 @@ function useFakeConnection(tts: EdgeTTS, socket: FakeWebSocket): WriteStream[] {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(
     tempDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))
   );
@@ -125,6 +165,37 @@ describe('node-edge-tts 依赖边界', () => {
       expect((result.error as Error).message).toBe('Timed out');
       if (!socket.destroyed) await once(socket, 'close');
       expect(socket.destroyed).toBe(true);
+    } finally {
+      serverSocket?.destroy();
+      await closeServer(server);
+    }
+  });
+
+  it('代理 CONNECT 挂起时超时必须关闭代理 TCP 连接', async () => {
+    let markAccepted = (_socket: Socket): void => {};
+    const accepted = new Promise<Socket>(resolve => {
+      markAccepted = resolve;
+    });
+    let serverSocket: Socket | undefined;
+    const server = createServer(socket => {
+      serverSocket = socket;
+      socket.resume();
+      markAccepted(socket);
+    });
+    const port = await listen(server);
+    guardVoiceNetwork([port]);
+    const outputPath = path.join(await createTempDirectory(), 'proxy-timeout.mp3');
+    try {
+      const tts = new EdgeTTS({ proxy: `http://127.0.0.1:${port}`, timeout: 100 });
+      const pending = tts.ttsPromise('代理握手超时', outputPath).then(
+        () => ({ error: undefined }),
+        error => ({ error })
+      );
+      const socket = await accepted;
+      const result = await pending;
+      expect(result.error).toBeInstanceOf(Error);
+      expect((result.error as Error).message).toBe('Timed out');
+      await vi.waitFor(() => expect(socket.destroyed).toBe(true), { timeout: 500 });
     } finally {
       serverSocket?.destroy();
       await closeServer(server);
@@ -196,5 +267,68 @@ describe('node-edge-tts 依赖边界', () => {
     socket.emitAudio(Buffer.from('late audio'));
 
     expect(await readFile(outputPath)).toEqual(audio);
+  });
+});
+
+describe('prepareVoice 文本合成代理路由', () => {
+  it.each([
+    ['HTTPS_PROXY 优先于 HTTP_PROXY，且忽略首尾空白', 'selected', 'secondary'],
+    ['未设置 HTTPS_PROXY 时使用 HTTP_PROXY', undefined, 'selected'],
+    ['HTTPS_PROXY 为空白时使用 HTTP_PROXY', 'blank', 'selected'],
+  ])('%s：真实 CONNECT 拒绝保留失败原因且不直连', async (_name, httpsValue, httpValue) => {
+    const selected = createRejectingProxy();
+    const secondary = createRejectingProxy();
+    try {
+      const selectedPort = await listen(selected.server);
+      const secondaryPort = await listen(secondary.server);
+      const values: Record<string, string> = {
+        selected: `  http://127.0.0.1:${selectedPort}  `,
+        secondary: `http://127.0.0.1:${secondaryPort}`,
+        blank: ' \t ',
+      };
+      vi.stubEnv('HTTPS_PROXY', httpsValue ? values[httpsValue] : undefined);
+      vi.stubEnv('HTTP_PROXY', httpValue ? values[httpValue] : undefined);
+      const blockedConnections = guardVoiceNetwork([selectedPort, secondaryPort]);
+      const cdp = { evaluate: vi.fn() } as unknown as CdpClient;
+
+      await expect(prepareVoice(cdp, { text: '代理拒绝测试' })).rejects.toMatchObject({
+        code: 'VOICE_TTS_FAILED',
+        message: expect.stringContaining('502'),
+        originalCause: { message: expect.stringContaining('502') },
+      });
+
+      expect(selected.requests).toEqual(['speech.platform.bing.com:443']);
+      expect(secondary.requests).toEqual([]);
+      expect(blockedConnections).toEqual([]);
+      expect(cdp.evaluate).not.toHaveBeenCalled();
+    } finally {
+      for (const socket of [...selected.sockets, ...secondary.sockets]) socket.destroy();
+      await Promise.all([closeServer(selected.server), closeServer(secondary.server)]);
+    }
+  });
+
+  it.each([undefined, ' \t '])('两项代理均为 %j 时保留直连，不读取 ALL_PROXY', async value => {
+    const ignored = createRejectingProxy();
+    try {
+      const port = await listen(ignored.server);
+      vi.stubEnv('HTTPS_PROXY', value);
+      vi.stubEnv('HTTP_PROXY', value);
+      vi.stubEnv('ALL_PROXY', `http://127.0.0.1:${port}`);
+      const blockedConnections = guardVoiceNetwork([port]);
+      const cdp = { evaluate: vi.fn() } as unknown as CdpClient;
+
+      // 在真实 TLS 边界阻止直连，既观察既有路线，也保证测试不会访问外网。
+      await expect(prepareVoice(cdp, { text: '无代理测试' })).rejects.toMatchObject({
+        code: 'VOICE_TTS_FAILED',
+        originalCause: { message: '测试禁止直接连接外网' },
+      });
+
+      expect(blockedConnections).toEqual(['TLS']);
+      expect(ignored.requests).toEqual([]);
+      expect(cdp.evaluate).not.toHaveBeenCalled();
+    } finally {
+      for (const socket of ignored.sockets) socket.destroy();
+      await closeServer(ignored.server);
+    }
   });
 });

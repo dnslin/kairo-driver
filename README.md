@@ -195,6 +195,8 @@ await driver.sendReply(
 
 链接、业务、应用卡片、合并转发及语音均指定原生目标，复用本次业务回执与发送登记，不依赖编辑器、DOM 或 Vue，也不补即时气泡。语音继续复用AMR准备与两条音频依赖补丁。
 
+文本语音合成读取运行 Driver 的 Node 进程环境变量：优先非空 `HTTPS_PROXY`，其次非空 `HTTP_PROXY`，首尾空白会移除；两者均未配置时保持 SDK 既有直连网络行为。指定代理失败保留 `VOICE_TTS_FAILED` 及原因，不回退直连。不会自动继承 AstrBot 的代理配置，也不读取 Windows 系统代理、`ALL_PROXY` 或新增 KK 配置；Windows 下需由启动终端或服务为该 Node 进程提供环境变量，设置示例见 [语音验证](docs/KK9-STARTUP.md#卡片与语音验证)。
+
 `sendUrlCard({ title, summary, linkUrl, picUrl? }, options)` 使用原生链接字段；可不传图片，SDK 不伪造图片已下载或有效。`sendAppMessage({ title, content, linkUrl?, pcAppCode? }, options)` 的正文为原生 HTML；普通通知不要求应用编号，不要填造出的应用码。特定应用的打开能力须使用其真实配置。
 
 `sendBizMessage` 必须显式提供 `bizType: 1 | 2`（任务/日程展示样式）与 `bizUrl`。`bizUrl` 是相对于客户端 `ekp_outer_domain` 的路径，不是完整外部网址。该接口只发送通知，不创建真实业务对象；点击详情还依赖接收端实际业务站点配置。
@@ -219,5 +221,14 @@ await driver.sendChatRecord({
 - 本机菜单撤回仍保留 `event-bridge.ts` 中已验收的Vue总线、会话撤回通知、`addRevokeMsg`及组件重建用 `MutationObserver`。这些依赖尚无已证明等价的无Vue替代；它们不用于发送、历史读取或补聊天气泡。“无DOM点击自动化”不等于“无任何Vue/DOM依赖”。C3/C4现行范围的证据与本轮运行结果见[开发说明](docs/DEVELOPMENT.md#c3-逐类媒体证据收口)和[启动记录](docs/KK9-STARTUP.md#c4-最终构建入口只读验收)。
 - 原生发送不承诺当前客户端立即显示新气泡；不通过切窗口或伪造Vue刷新掩盖差异。`unknown` 只查询原意图，不直接重发。
 - `pnpm verify` 从 `@kairo/driver` 的构建后ESM入口运行授权双目标只读烟测，先运行 `pnpm build`（或已有成功的 `pnpm check`）；不会自动构建或发送。环境与输出范围见启动说明。
+
+## 2.0.1 变更记录
+
+- 修复：文字语音合成显式使用 Node 进程的非空 `HTTPS_PROXY`，其次 `HTTP_PROXY`；无需增加 KK 专用配置或更换 TTS 引擎。
+- 保持：未配置代理时继续直连，指定代理失败保留原始错误，不再尝试另一条网络路径。
+- 修复：代理 CONNECT 一直不返回时，合成超时会取消代理自己的底层连接，不再留下占用句柄的 TCP 连接。
+- 验证：本地 CONNECT 代理选路与错误传播回归、真实 Edge 合成及 KK9 AMR 编码/回解通过；本次未发送测试聊天消息，接收端播放仍需人工确认。
+- 分发：本版本通过 GitHub 标签与源码发布，未发布到 npm；消费方应固定该版本对应的源码提交，并保留两份音频依赖补丁。
+
 
 开发规范见 [DEVELOPMENT.md](docs/DEVELOPMENT.md)，真机检查见 [KK9-STARTUP.md](docs/KK9-STARTUP.md)。
