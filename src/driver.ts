@@ -5,6 +5,7 @@ import { BridgeSessionOps } from './bridge/session-ops.js';
 import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
 import { createMessageIdentityKey } from './bridge/converter.js';
+import { downloadNativeImage } from './bridge/image-ops.js';
 
 
 import type {
@@ -21,6 +22,7 @@ import type {
   KK9BizMsgOptions,
   KK9ChatRecordOptions,
   KK9Employee,
+  KK9ImageInfo,
   KK9Message,
   KK9RecalledEvent,
   KK9ReplyTarget,
@@ -324,6 +326,11 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    */
   public getSendStatus(operationId: string): Promise<SendResult> {
     return this.bridgeMessageOps.getSendStatus(operationId);
+  }
+
+  /** 原生下载收到的图片，优先原图资源，不触发发送或会话操作。 */
+  public downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string> {
+    return downloadNativeImage(this.cdp, image, fullPath);
   }
 
   /**

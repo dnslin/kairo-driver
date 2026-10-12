@@ -125,6 +125,10 @@ export interface KK9ImageInfo {
   url?: string;
   /** 远程服务器资源 URI */
   uri?: string;
+  /** 原图缓存路径；独立于可能指向缩略图的 filePath。 */
+  originalFilePath?: string;
+  /** 原图服务器资源 URI；存在时不得回退到缩略图 uri。 */
+  originalUri?: string;
   /** 图片宽度 */
   width?: number;
   /** 图片高度 */
@@ -420,6 +424,8 @@ export interface IKK9Driver extends EventEmitter {
   /** 必须指定 getSessions 返回的原生会话；历史不会派发实时事件，查询失败抛错。 */
   getRecentMessages(session: KK9Session, limit?: number): Promise<KK9Message[]>;
   scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]>;
+  /** 经 KK9 原生下载原图到本机指定路径；失败抛 DriverError，不降级缩略图。 */
+  downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string>;
 
   // 消息发送与撤回
   sendText(text: string, options?: SendOptions): Promise<SendResult>;
