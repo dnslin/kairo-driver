@@ -171,6 +171,37 @@ describe('node-edge-tts 依赖边界', () => {
     }
   });
 
+  it('代理 CONNECT 挂起时超时必须关闭代理 TCP 连接', async () => {
+    let markAccepted = (_socket: Socket): void => {};
+    const accepted = new Promise<Socket>(resolve => {
+      markAccepted = resolve;
+    });
+    let serverSocket: Socket | undefined;
+    const server = createServer(socket => {
+      serverSocket = socket;
+      socket.resume();
+      markAccepted(socket);
+    });
+    const port = await listen(server);
+    guardVoiceNetwork([port]);
+    const outputPath = path.join(await createTempDirectory(), 'proxy-timeout.mp3');
+    try {
+      const tts = new EdgeTTS({ proxy: `http://127.0.0.1:${port}`, timeout: 100 });
+      const pending = tts.ttsPromise('代理握手超时', outputPath).then(
+        () => ({ error: undefined }),
+        error => ({ error })
+      );
+      const socket = await accepted;
+      const result = await pending;
+      expect(result.error).toBeInstanceOf(Error);
+      expect((result.error as Error).message).toBe('Timed out');
+      await vi.waitFor(() => expect(socket.destroyed).toBe(true), { timeout: 500 });
+    } finally {
+      serverSocket?.destroy();
+      await closeServer(server);
+    }
+  });
+
   it('合成阶段挂起时关闭文件流和 WebSocket 后返回超时错误', async () => {
     const directory = await createTempDirectory();
     const outputPath = path.join(directory, 'timeout.mp3');
