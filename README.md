@@ -222,4 +222,12 @@ await driver.sendChatRecord({
 - 原生发送不承诺当前客户端立即显示新气泡；不通过切窗口或伪造Vue刷新掩盖差异。`unknown` 只查询原意图，不直接重发。
 - `pnpm verify` 从 `@kairo/driver` 的构建后ESM入口运行授权双目标只读烟测，先运行 `pnpm build`（或已有成功的 `pnpm check`）；不会自动构建或发送。环境与输出范围见启动说明。
 
+## 2.0.1 变更记录
+
+- 修复：文字语音合成显式使用 Node 进程的非空 `HTTPS_PROXY`，其次 `HTTP_PROXY`；无需增加 KK 专用配置或更换 TTS 引擎。
+- 保持：未配置代理时继续直连，指定代理失败保留原始错误，不再尝试另一条网络路径。
+- 验证：本地 CONNECT 代理选路与错误传播回归、真实 Edge 合成及 KK9 AMR 编码/回解通过；本次未发送测试聊天消息，接收端播放仍需人工确认。
+- 分发：本版本通过 GitHub 标签与源码发布，未发布到 npm；消费方应固定该版本对应的源码提交，并保留两份音频依赖补丁。
+
+
 开发规范见 [DEVELOPMENT.md](docs/DEVELOPMENT.md)，真机检查见 [KK9-STARTUP.md](docs/KK9-STARTUP.md)。
