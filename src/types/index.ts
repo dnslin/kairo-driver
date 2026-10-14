@@ -301,6 +301,20 @@ export interface KK9EmployeeSearchResult {
   hasMore: false;
 }
 
+/** 指定群的原生全员资料；不使用展示回退值，不保证服务器最新快照。 */
+export interface KK9GroupMember {
+  /** 真实人员 UID，规范为字符串。 */
+  id: string;
+  /** 真实工号 login_name；未提供为 null。 */
+  loginName: string | null;
+  /** 档案真实姓名；未提供为 null。 */
+  name: string | null;
+  /** 全部可见部门链，以 / 连接；未提供为 null。 */
+  departmentPaths: string[] | null;
+  /** 档案岗位 pos；未提供为 null，不用部门替代。 */
+  position: string | null;
+}
+
 
 export interface CdpConfig {
   url: string;
@@ -474,6 +488,8 @@ export interface IKK9Driver extends EventEmitter {
   // 组织架构与员工档案
   /** 内部全分页并按 UID 去重；失败/超时抛错，不返回部分成功；不操作会话或发送。 */
   searchEmployees(keyword: string, timeoutMs?: number): Promise<KK9EmployeeSearchResult>;
+  /** 只接受原生群会话 ID；查完全部成员档案才返回，失败/超时抛错，不操作聊天。 */
+  getGroupMembers(sessionId: string, timeoutMs?: number): Promise<KK9GroupMember[]>;
   getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]>;
   getUserProfile(userId: number | string): Promise<KK9Employee | null>;
   getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null>;

@@ -88,6 +88,7 @@ export type {
   KK9Employee,
   KK9EmployeeSearchItem,
   KK9EmployeeSearchResult,
+  KK9GroupMember,
   CdpConfig,
   CompensationScanOptions,
   DriverConfig,

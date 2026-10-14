@@ -16,6 +16,7 @@ import type {
   KK9EmployeeSearchItem,
   KK9EmployeeSearchResult,
   KK9FileInfo,
+  KK9GroupMember,
   KK9ImageInfo,
   KK9Message,
   KK9RecalledEvent,
@@ -49,6 +50,15 @@ function cachedFileKey(source: string): string {
     if (/^\/[a-zA-Z]:/.test(source)) source = source.slice(1);
   }
   return source.replace(/\\/g, '/');
+}
+
+function normalizeGroupQueryId(value: string, label: string, code: string): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  const id = Number(text);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(id) || id <= 0) {
+    throw new DriverError(`${label}必须为正安全整数`, code);
+  }
+  return String(id);
 }
 
 export type FakeSendPayload =
@@ -106,6 +116,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private messages: KK9Message[] = [];
   private employees: KK9Employee[] = [];
   private searchEmployeeProfiles: KK9EmployeeSearchItem[] = [];
+  private readonly groupMemberProfiles = new Map<string, KK9GroupMember[]>();
   private currentBehavior: FakeSendBehavior = { mode: 'success' };
   private behaviorSequence: FakeSendBehavior[] = [];
   private readonly sendOperationStore: SendOperationStore;
@@ -212,6 +223,62 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
       return Promise.reject(new DriverError(`员工搜索超过总期限，超时 ${timeoutMs}ms`, 'IPC_QUERY_FAILED'));
     }
     return Promise.resolve({ employees, hasMore: false });
+  }
+
+  /** 按原生会话独立注入真实群成员档案，不使用组织架构或搜索展示资料补值。 */
+  public setGroupMembers(sessionId: string, members: KK9GroupMember[]): void {
+    const key = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ', 'IPC_QUERY_FAILED');
+    const profiles = new Map<string, { member: KK9GroupMember; paths: Set<string> }>();
+    for (const member of members) {
+      const id = normalizeGroupQueryId(member.id, '群成员档案 UID ', 'IPC_QUERY_FAILED');
+      let profile = profiles.get(id);
+      if (!profile) {
+        profile = {
+          member: {
+            id,
+            name: typeof member.name === 'string' && member.name.trim() ? member.name : null,
+            loginName: typeof member.loginName === 'string' && member.loginName.trim() ? member.loginName : null,
+            departmentPaths: null,
+            position: typeof member.position === 'string' && member.position.trim() ? member.position : null,
+          },
+          paths: new Set(),
+        };
+        profiles.set(id, profile);
+      }
+      for (const departmentPath of member.departmentPaths ?? []) {
+        if (typeof departmentPath === 'string' && departmentPath.trim()) profile.paths.add(departmentPath);
+      }
+    }
+    this.groupMemberProfiles.set(key, [...profiles.values()].map(({ member, paths }) => ({
+      ...member,
+      departmentPaths: paths.size ? [...paths] : null,
+    })));
+  }
+
+  public getGroupMembers(sessionId: string, timeoutMs = 30000): Promise<KK9GroupMember[]> {
+    try {
+      const startedAt = Date.now();
+      const id = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ', 'INVALID_SESSION_ID');
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        throw new DriverError(`群成员查询总期限必须为正有限毫秒数：${timeoutMs}`, 'IPC_QUERY_FAILED');
+      }
+      const session = this.sessions.find(item => /^\d+$/.test(item.id.trim()) && String(Number(item.id)) === id);
+      if (!session) throw new DriverError(`群成员查询原生会话不存在：${id}`, 'IPC_INVALID_RESPONSE');
+      if (session.type !== 'group' || session.nativeType !== 1) {
+        throw new DriverError(`群成员查询目标不是原生群会话：${id}`, 'INVALID_SESSION_ID');
+      }
+      normalizeGroupQueryId(session.receiverId, '群成员查询原生群接收对象 ID ', 'INVALID_SESSION_ID');
+      const members = (this.groupMemberProfiles.get(id) ?? []).map(member => ({
+        ...member,
+        departmentPaths: member.departmentPaths ? [...member.departmentPaths] : null,
+      }));
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new DriverError(`群成员查询超过总期限，超时 ${timeoutMs}ms`, 'IPC_QUERY_FAILED');
+      }
+      return Promise.resolve(members);
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   /** 注入服务器图片资源；下载写入实际字节，不制造消息回声。 */

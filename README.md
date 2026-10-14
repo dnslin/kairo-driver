@@ -222,6 +222,37 @@ const candidates = result.employees.map(employee => ({
 
 真机专项使用构建后的公开入口，方法见 [只读人员搜索验收](docs/KK9-STARTUP.md#只读人员搜索验收)。
 
+### 列出群全员资料
+
+`getGroupMembers(sessionId, timeoutMs?)` 接受原生群会话 ID，返回 `KK9GroupMember[]`。不能传群接收对象 ID、群名或界面标识；内部读取会话真实群对象，再查询原生全员并按 UID 去重，不截断为200人。默认整轮期限30秒，同时约束原生与CDP等待；未知/非群会话、原生失败、无效响应、任一档案缺席/错人或超时均抛出 `DriverError`，不返回半份名单。正常空群返回 `[]`。
+
+```ts
+const members = await driver.getGroupMembers('793803');
+console.table(members.map(member => ({
+  ID: member.id,
+  工号: member.loginName ?? '未提供',
+  姓名: member.name ?? '未提供',
+  部门: member.departmentPaths?.join('；') ?? '未提供',
+  岗位: member.position ?? '未提供',
+})));
+```
+
+- `id` 是字符串人员UID；工号、姓名和岗位分别来自准确档案的 `login_name/name/pos`，缺失为 `null`。保留工号前导零，不用群昵称、UID、其他编号或部门填充真实字段。
+- `departmentPaths` 是全部原生提供的可见部门链，沿用人员搜索的 ` / ` 连接和去重规则；未提供为 `null`，不从岗位推断部门。岗位文本原样返回，不擅自拆分多个岗位。
+- 名单来自 KK9 `getGroupsAllMembers` 的全部 `allUsers`，包含原生已展开的部门成员。KK9内部服务器同步失败可能继续读取本地名单，因此不保证服务器最新成员，也不是事务快照；SDK不额外添加静默回退、缓存或重试。
+- 查询不发送、撤回、建会话、插草稿、标已读或切窗口，也不派发聊天事件。Fake通过 `setGroupMembers(sessionId, members)` 按群独立注入真实资料，不复用展示工号；相同UID保留首份档案并合并全部部门路径。
+- Fake与真实查询使用相同错误分类：非法会话ID、非群目标（包括私聊/讨论组/服务号）或无效群对象为 `INVALID_SESSION_ID`；未知会话或返回其他会话为 `IPC_INVALID_RESPONSE`；无效期限、超时及原生请求失败为 `IPC_QUERY_FAILED`。`setGroupMembers` 的注入数据校验仍使用 `IPC_QUERY_FAILED`，不与查询目标错误混淆。
+
+命令行直接列出全部五列（独立只读CDP连接，不安装或接管Driver事件Hook）：
+
+```powershell
+$env:CDP_URL = "http://172.16.0.18:9222"
+pnpm diagnose group-members 793803
+```
+
+可追加整轮期限毫秒数，如 `pnpm diagnose group-members 793803 60000`。其他环境请使用实际CDP地址及获授权群会话；构建入口真机对照见 [群全员资料只读验收](docs/KK9-STARTUP.md#群全员资料只读验收)。
+
+
 ### 按工号首次联系与文本通知
 
 `sendTextToUser(loginName, text, options?)` 接受准确 `login_name`，不是显示名、UID或会话名称；只去掉工号首尾空白，大小写必须准确。无需对方已在会话列表，也无需先手动聊天。选项 `SendToUserOptions` 只包含 `operationId` 和 `verifyTimeoutMs`；入口只复制这两个字段，复用普通发送选项不会产生引用、提及或会话目标，空正文仍前置失败。本接口不支持本人设备会话。
@@ -308,6 +339,8 @@ await driver.sendChatRecord({
 
 - 修复：锁定经真实合成验证的 `node-edge-tts@1.2.11` 新服务端点，移植仍需要的超时、代理 CONNECT 取消及文件/WebSocket 清理补丁；代理优先级、KK 编码和发送防重不变。
 - 验证：语音相关54项通过；独立真实 MP3 解码4.176秒，最终 Driver 经 KK9 AMR 编码/回解4.18秒、有声、无聊天操作。构建、类型检查与lint通过；全套 `pnpm check` 被已有人员搜索工作区测试的定时器断言阻断，详情见开发说明。
+- 新增：`getGroupMembers` 和 `group-members` 只读列出群全部成员的ID、真实工号、姓名、全部可见部门路径和岗位；缺失字段为null，失败不返回部分名单，不保证KK9服务器最新快照。
+- 修复：Fake群查询的目标错误码与真实实现对齐，补齐私聊/讨论组/服务号等场景的跨实现错误契约回归，避免模拟测试与真实运行进入不同错误处理分支。
 - 新增：`searchEmployees` 只读人员搜索，内部全分页、UID去重、真实工号和所有可见部门路径；失败不返回部分结果，不负责对话或选择状态。
 - 修复：人员搜索的剩余总期限同时约束CDP等待；只读专项的双连接故障进入退出流程，按本代归属清理资源，并分别保留原生首错及清理错误。
 - 新增：图片和普通文件通过现有 CDP 分块传输，统一采用 Driver 本机输入路径，无需 Windows 桥接或共享磁盘。

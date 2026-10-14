@@ -703,3 +703,30 @@ cmd /d /c "set HTTPS_PROXY=http://127.0.0.1:7897&& set CDP_URL=http://172.16.0.1
 没有重试旧版403、发送测试消息、接管生产Hook、重启KK9/桥接/AstrBot或改变生产环境。这里证明合成和编码产物可解码且有有效声音/时长，不证明消息送达、接收端播放或Linux本轮成功合成；之前Linux403仍保留为历史证据。
 
 语音相关3文件54项通过，build/typecheck/lint通过；全套 `pnpm check` 因当时已有人员搜索工作区测试的定时器数量断言失败，未宣称完整检查通过。原因、补丁和插件同步要求见[开发说明](DEVELOPMENT.md#edge-tts-403-协议修复)。后续按用户授权提交修复，准确SHA以Git提交记录为准；未发布或修改插件固定提交。
+
+## 群全员资料只读验收
+
+先运行 `pnpm check` 并复用其构建；若存在已记录的无关测试失败，可使用本轮已通过的 `pnpm build` 产物并明确记录检查未全绿。专项从 `@kairo/driver` 的ESM入口调用公开 `BridgeOrgOps.getGroupMembers`，与Driver门面共用实现，不安装聊天事件桥；参数依次为登录UID、准确账号、原生群会话ID、群接收对象ID和群精确名：
+
+```powershell
+$env:CDP_URL = "http://172.16.0.18:9222"
+pnpm exec tsx examples/verify-native-group-members.ts 3583 kairo 793803 29467 测试123
+```
+
+只查询上述授权群，不操作同名716827。专项核对实际登录、原生会话与群对象的区别，再以独立原生全员、逐UID档案和所有可见部门链对照公开实现的五字段；检查窗口、会话集合、最大/已读索引、监听及已有桥接状态不变。仅建立独立CDP，不接管、重启或删除其他实例资源。报告位于 `tmp/group-members-live-evidence.json`，不保存完整成员资料、凭据或聊天正文。
+
+原生 `getGroupsAllMembers(groupId)` 内部刷新群用户后返回数据库全部 `allUsers`，没有成员分页或limit；原生已将部门成员展开为个人。其服务器同步内部catch可能返回空增量并继续读取本地全员，所以“全部”仅指当前KK9原生返回的名单，不能证明服务器最新快照。工号必须从 `getMemberDetail.login_name` 读取，岗位取 `pos`；`getAllDeptPaths` 获取全部可见部门，不能用岗位或群列表默认部门补全。
+
+直接输出名单可运行 `pnpm diagnose group-members 793803 [整轮期限毫秒]`，该命令使用独立CDP只读查询，不安装或接管Driver事件Hook；它不是上述字段与资源对照专项。所有查询均不发送、撤回、建会话、插草稿、标已读或切窗口。
+
+### 本轮群成员实测结果
+
+实际执行 `cmd /d /c "set CDP_URL=http://172.16.0.18:9222&& pnpm diagnose group-members 793803"`，正常输出6人全部五列并断开；未截断名单，真实工号前导零保留，缺失部门/岗位显示未提供。
+
+最终独立专项命令：`cmd /d /c "set CDP_URL=http://172.16.0.18:9222&& pnpm exec tsx examples/verify-native-group-members.ts 3583 kairo 793803 29467 测试123"`。复用最终build产物，连接 `7ecb4ddc-cdf9-4a40-a379-b6b0dc1e5e68`；6名成员逐UID及五字段全部与独立原生对照一致，3人部门缺失、2人岗位缺失均为null，另有3条可见部门链。
+
+窗口816219、群最大索引201/已读194、其他三会话身份与索引均不变；客户端message监听2、data回复监听0、在途0，已有生产Hook代次 `a2ef8823-7f34-4bbf-bb84-7960cbc8c8bf` 及连接身份不变。没有安装本轮聊天事件桥，也没有接管现有桥接；独立CDP退出为disconnected、命令exit0。这里证明构建后公开组织实现，不声称启动了第二个Driver事件桥或完成了实时事件专项。
+
+保留首次 `tmp/group-members-bridge-conflict-evidence.json`：旧专项尝试建立Driver事件桥时发现生产桥接，拒绝且原资源保留；最终改为单一路径独立只读查询，不提供自动接管或回退。独立专项首轮误将 `sessionsInfo` 数组按对象校验，失败报告保留在 `tmp/group-members-snapshot-model-evidence.json`；按真实数组修正后定点ESLint及上述实际运行通过。
+
+未在真机制造200人以上、同名/重复UID、多部门、缺工号、原生故障或超时；这些由行为回归覆盖。原生可能吞同步错误的最新状态限制不变，未修改KK9安装包或已有生产进程。完整检查中的既有定时器失败及最终build/typecheck/lint结果见开发说明；不把全套检查记为通过。
