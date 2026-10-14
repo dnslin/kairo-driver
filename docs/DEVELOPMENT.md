@@ -460,3 +460,17 @@ README 的插件 TypeScript 示例另用 TypeScript 编译器内存 Program、No
 `pnpm diagnose help` 与授权 `group-members 793803` 实际运行通过，输出6人全部五列。最终 `examples/verify-native-group-members.ts` 通过构建后公开 `BridgeOrgOps` 与独立原生逐字段对照，窗口/会话/索引/监听/已有生产Hook不变，独立连接退出。名单查询本身无需事件桥，专项和命令行不接管已有实例；Driver门面仍直接委托同一实现。准确命令、原始失败报告和未实测边界见[群全员验收](KK9-STARTUP.md#群全员资料只读验收)。
 
 LSP引用查询本轮初始化退出code0，已检索真实调用补足，不冒充导航成功；挂载Electron附着工具忽略远端wsEndpoint已报告，改用已有CdpClient只读核对源码。没有修改安装包、生产服务、依赖/锁文件，未发送、撤回、标已读、提交或推送。
+
+## PR #19 群查询评审修复
+
+Fake群查询现与真实实现对齐：非法会话ID、非群目标及无效群接收对象返回 `INVALID_SESSION_ID`，未知会话返回 `IPC_INVALID_RESPONSE`；无效期限和超时仍为 `IPC_QUERY_FAILED`。现有标识校验助手由具体调用指定错误码，Fake注入数据校验保留原分类；没有新增错误框架、回退、依赖或公开签名变化，真实原生实现未修改。
+
+`tests/bridge-org-ops.test.ts` 增加8项跨实现参数化对照：空/零会话ID、私聊、讨论组、服务号、未知会话、无效群对象及无效期限。两种实现共用同组场景和预期，原生一侧实际执行生成的IPC脚本；目标无效时不得继续查询成员。旧私聊单独拒绝用例迁入对照，净增7项测试；原有Fake错误预期同步对齐，注入校验、超时和只读断言保持不变。
+
+修复前 `pnpm exec vitest run tests/bridge-org-ops.test.ts tests/fake-driver.test.ts -t "群查询错误契约对照|群成员查询前后|群成员拒绝非法"` 观察到9失败、1通过。修复后 `pnpm exec vitest run tests/bridge-org-ops.test.ts tests/fake-driver.test.ts tests/driver.test.ts` 的126项全部通过。
+
+隔离副本将原生类型校验变为仅拒绝私聊type0，使用临时Vitest配置运行 `-t "群查询错误契约对照.*(讨论组|服务号)"`，新增两条回归均因误返回成员而按预期失败。原生源码逐字保持不变，变异副本及配置已删除；没有把变异或临时探针留入产品。
+
+本轮只执行一次最终 `pnpm check`，build/typecheck、38文件537项测试及lint全部通过，1项既有Linux专属用例跳过。此前人员搜索定时器断言失败本轮未出现，未改其源码/断言，也不宣称修复了该既有问题；历史失败记录保留。
+
+复用本轮构建，通过 `pnpm exec tsx -e` 动态导入 `@kairo/driver` 公开包入口，实际调用Fake及执行原生脚本的Bridge：正常群五字段一致，上述8类错误分类一致，Fake会话与发送记录不变。该烟测为隔离运行时，不连接真实KK9；本次仅改Fake错误分类与测试，未重复上节真机查询、发送或制造真实故障。README、计划与任务状态同步；尚未提交、推送或合并。

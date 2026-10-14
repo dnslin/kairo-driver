@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CdpClient } from '../src/cdp/client.js';
 import { BridgeOrgOps } from '../src/bridge/org-ops.js';
+import { FakeKK9Driver } from '../src/fake-driver.js';
+import type { KK9Session } from '../src/types/index.js';
 import { FakeIpcRenderer, runRendererScript } from './helpers/renderer-runtime.js';
 
 function nativeOrg(responder: ConstructorParameters<typeof FakeIpcRenderer>[0]) {
@@ -267,7 +269,6 @@ describe('只读群全员资料', () => {
 
   it.each([
     ['未知会话', 'getSessionBySessionID', { code: 0, data: null }, /会话.*793803/],
-    ['非群', 'getSessionBySessionID', { code: 0, data: { id: 793803, type: 0, typeID: 29467 } }, /群/],
     ['错会话', 'getSessionBySessionID', { code: 0, data: { id: 716827, type: 1, typeID: 29467 } }, /getSessionBySessionID/],
     ['群UID无效', 'getSessionBySessionID', { code: 0, data: { id: 793803, type: 1, typeID: 0 } }, /getSessionBySessionID/],
     ['成员失败', 'getGroupsAllMembers', { code: 627, error: '群不可读' }, /getGroupsAllMembers.*793803.*29467.*627.*群不可读/],
@@ -310,5 +311,39 @@ describe('只读群全员资料', () => {
     const ops = nativeOrg(() => { throw new Error('不应访问原生'); });
     for (const id of ['', '测试123', '0', '-1', '1.5', '9007199254740992']) await expect(ops.getGroupMembers(id)).rejects.toThrow(/会话.*ID/);
     for (const timeout of [0, -1, NaN, Infinity]) await expect(ops.getGroupMembers('793803', timeout)).rejects.toThrow(/期限/);
+  });
+});
+
+describe('群查询错误契约对照', () => {
+  const group: KK9Session = { id: '793803', name: '测试群', type: 'group', nativeType: 1, receiverId: '29467', unread: false };
+
+  it.each([
+    ['空会话ID', '', group, 30000, 'INVALID_SESSION_ID'],
+    ['零会话ID', '0', group, 30000, 'INVALID_SESSION_ID'],
+    ['私聊', group.id, { ...group, type: 'private', nativeType: 0 }, 30000, 'INVALID_SESSION_ID'],
+    ['讨论组', group.id, { ...group, type: 'discussion', nativeType: 2 }, 30000, 'INVALID_SESSION_ID'],
+    ['服务号', group.id, { ...group, type: 'service', nativeType: 3 }, 30000, 'INVALID_SESSION_ID'],
+    ['未知会话', group.id, null, 30000, 'IPC_INVALID_RESPONSE'],
+    ['无效群对象', group.id, { ...group, receiverId: '0' }, 30000, 'INVALID_SESSION_ID'],
+    ['无效期限', group.id, group, 0, 'IPC_QUERY_FAILED'],
+  ] as const)('%s在真实查询与Fake中返回相同错误分类', async (_title, sessionId, session, timeoutMs, code) => {
+    const methods: unknown[] = [];
+    const native = nativeOrg(({ args: [method] }) => {
+      methods.push(method);
+      if (method === 'getSessionBySessionID') return { code: 0, data: session ? {
+        id: Number(session.id), type: session.nativeType, typeID: Number(session.receiverId),
+      } : null };
+      // 若非群校验被错误放宽，后续查询仍能成功，让回归捕捉到实际误放行。
+      if (method === 'getGroupsAllMembers') return { code: 0, data: [{ id: 1 }] };
+      if (method === 'getMemberDetail') return { code: 0, data: { id: 1, name: '成员' } };
+      if (method === 'getAllDeptPaths') return { code: 0, data: [] };
+      throw new Error(`不应访问其他原生方法: ${String(method)}`);
+    });
+    const fake = new FakeKK9Driver();
+    fake.setSessions(session ? [session] : []);
+    for (const implementation of [native, fake]) {
+      await expect(implementation.getGroupMembers(sessionId, timeoutMs)).rejects.toMatchObject({ name: 'DriverError', code });
+    }
+    expect(methods).toEqual(!sessionId || sessionId === '0' || timeoutMs === 0 ? [] : ['getSessionBySessionID']);
   });
 });

@@ -52,11 +52,11 @@ function cachedFileKey(source: string): string {
   return source.replace(/\\/g, '/');
 }
 
-function normalizeGroupQueryId(value: string, label: string): string {
+function normalizeGroupQueryId(value: string, label: string, code: string): string {
   const text = typeof value === 'string' ? value.trim() : '';
   const id = Number(text);
   if (!/^\d+$/.test(text) || !Number.isSafeInteger(id) || id <= 0) {
-    throw new DriverError(`${label}必须为正安全整数`, 'IPC_QUERY_FAILED');
+    throw new DriverError(`${label}必须为正安全整数`, code);
   }
   return String(id);
 }
@@ -227,10 +227,10 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   /** 按原生会话独立注入真实群成员档案，不使用组织架构或搜索展示资料补值。 */
   public setGroupMembers(sessionId: string, members: KK9GroupMember[]): void {
-    const key = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ');
+    const key = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ', 'IPC_QUERY_FAILED');
     const profiles = new Map<string, { member: KK9GroupMember; paths: Set<string> }>();
     for (const member of members) {
-      const id = normalizeGroupQueryId(member.id, '群成员档案 UID ');
+      const id = normalizeGroupQueryId(member.id, '群成员档案 UID ', 'IPC_QUERY_FAILED');
       let profile = profiles.get(id);
       if (!profile) {
         profile = {
@@ -258,16 +258,16 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   public getGroupMembers(sessionId: string, timeoutMs = 30000): Promise<KK9GroupMember[]> {
     try {
       const startedAt = Date.now();
-      const id = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ');
+      const id = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ', 'INVALID_SESSION_ID');
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new DriverError(`群成员查询总期限必须为正有限毫秒数：${timeoutMs}`, 'IPC_QUERY_FAILED');
       }
       const session = this.sessions.find(item => /^\d+$/.test(item.id.trim()) && String(Number(item.id)) === id);
-      if (!session) throw new DriverError(`群成员查询原生会话不存在：${id}`, 'IPC_QUERY_FAILED');
+      if (!session) throw new DriverError(`群成员查询原生会话不存在：${id}`, 'IPC_INVALID_RESPONSE');
       if (session.type !== 'group' || session.nativeType !== 1) {
-        throw new DriverError(`群成员查询目标不是原生群会话：${id}`, 'IPC_QUERY_FAILED');
+        throw new DriverError(`群成员查询目标不是原生群会话：${id}`, 'INVALID_SESSION_ID');
       }
-      normalizeGroupQueryId(session.receiverId, '群成员查询原生群接收对象 ID ');
+      normalizeGroupQueryId(session.receiverId, '群成员查询原生群接收对象 ID ', 'INVALID_SESSION_ID');
       const members = (this.groupMemberProfiles.get(id) ?? []).map(member => ({
         ...member,
         departmentPaths: member.departmentPaths ? [...member.departmentPaths] : null,

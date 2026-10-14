@@ -441,7 +441,7 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     driver.on('health', () => events.push('health'));
 
     await driver.getGroupMembers(session.id);
-    await expect(driver.getGroupMembers('92001')).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+    await expect(driver.getGroupMembers('92001')).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_INVALID_RESPONSE' });
     await expect(driver.getGroupMembers(session.id, 0)).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
 
     expect(await driver.getSessions()).toEqual(sessionsBefore);
@@ -463,10 +463,14 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
       expect(() => driver.setGroupMembers('93002', [{ id, name: null, loginName: null, departmentPaths: null, position: null }]))
         .toThrow(expect.objectContaining({ name: 'DriverError', code: 'IPC_QUERY_FAILED' }));
       expect(() => driver.setGroupMembers(id, [])).toThrow(expect.objectContaining({ name: 'DriverError', code: 'IPC_QUERY_FAILED' }));
-      await expect(driver.getGroupMembers(id)).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+      await expect(driver.getGroupMembers(id)).rejects.toMatchObject({ name: 'DriverError', code: 'INVALID_SESSION_ID' });
     }
-    for (const sessionId of ['99999', '92001', '测试群', '93001', '93003', '93004', '93005']) {
-      await expect(driver.getGroupMembers(sessionId)).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+    for (const [sessionId, code] of [
+      ['99999', 'IPC_INVALID_RESPONSE'], ['92001', 'IPC_INVALID_RESPONSE'],
+      ['测试群', 'INVALID_SESSION_ID'], ['93001', 'INVALID_SESSION_ID'],
+      ['93003', 'INVALID_SESSION_ID'], ['93004', 'INVALID_SESSION_ID'], ['93005', 'INVALID_SESSION_ID'],
+    ] as const) {
+      await expect(driver.getGroupMembers(sessionId)).rejects.toMatchObject({ name: 'DriverError', code });
     }
   });
 
