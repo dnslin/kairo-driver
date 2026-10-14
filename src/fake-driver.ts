@@ -1,6 +1,6 @@
 import EventEmitter from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   CompensationScanOptions,
@@ -13,6 +13,7 @@ import type {
   KK9BizMsgOptions,
   KK9ChatRecordOptions,
   KK9Employee,
+  KK9FileInfo,
   KK9ImageInfo,
   KK9Message,
   KK9RecalledEvent,
@@ -37,7 +38,16 @@ import { createMessageIdentityKey, normalizeNativeMessage } from './bridge/conve
 import { buildMentionNodes, parseFormattedTextToKK } from './bridge/rich-text.js';
 import { getCardInputError } from './bridge/card-ops.js';
 import { DriverError } from './utils/errors.js';
-import { getOriginalImageUri } from './utils/image.js';
+import { getOriginalImageUri, hasOriginalImageSource } from './utils/image.js';
+
+function cachedFileKey(source: string): string {
+  if (source.startsWith('file:')) {
+    const url = new URL(source);
+    source = `${url.hostname ? `//${url.hostname}` : ''}${decodeURIComponent(url.pathname)}`;
+    if (/^\/[a-zA-Z]:/.test(source)) source = source.slice(1);
+  }
+  return source.replace(/\\/g, '/');
+}
 
 export type FakeSendPayload =
   | FormattedText
@@ -97,6 +107,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private behaviorSequence: FakeSendBehavior[] = [];
   private readonly sendOperationStore: SendOperationStore;
   private readonly imageResources = new Map<string, Uint8Array>();
+  private readonly cachedFiles = new Map<string, Uint8Array>();
 
   private readonly confirmedSendKeys = new Map<string, string>();
   private readonly knownMessageKeys = new Set<string>();
@@ -159,20 +170,72 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     this.imageResources.set(uri, bytes);
   }
 
+  /** 注入 KK9 机器上的缓存字节；支持 Windows 路径，独立于 Driver 本地文件系统。 */
+  public setCachedFile(filePath: string, bytes: Uint8Array): void {
+    this.cachedFiles.set(cachedFileKey(filePath), bytes);
+  }
+
   public async downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string> {
     const uri = getOriginalImageUri(image);
     const target = path.resolve(fullPath);
-    if (!uri) throw new DriverError(`图片缺少可下载的原图 URI；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
-    const bytes = this.imageResources.get(uri);
-    if (!bytes) throw new DriverError(`图片资源不存在：${uri}；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
+    const cache = hasOriginalImageSource(image)
+      ? image.originalFilePath
+      : image.filePath || (image.url?.startsWith('file:') ? image.url : undefined);
     try {
-      await writeFile(target, bytes);
+      let bytes = cache ? this.cachedFiles.get(cachedFileKey(cache)) : undefined;
+      if (bytes === undefined) {
+        if (!uri) throw new Error('图片缺少可下载的原图 URI');
+        bytes = this.imageResources.get(uri);
+        if (bytes === undefined) throw new Error(`图片资源不存在：${uri}`);
+      }
+      if (bytes.byteLength < 1) throw new Error('原图不是非空普通文件');
+      await this.publishAttachmentBytes(target, bytes);
       return target;
     } catch (error) {
       throw new DriverError(
-        `下载原图 ${uri} 到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
+        `下载原图 ${uri || cache || '未知资源'} 到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
         'IMAGE_DOWNLOAD_FAILED', error instanceof Error ? error : undefined
       );
+    }
+  }
+
+  public async saveFile(file: KK9FileInfo, fullPath: string): Promise<string> {
+    const target = path.resolve(fullPath);
+    try {
+      if (!file.filePath) throw new Error('普通文件尚未缓存，缺少 KK9 filePath');
+      const bytes = this.cachedFiles.get(cachedFileKey(file.filePath));
+      if (bytes === undefined) throw new Error(`ENOENT：KK9 缓存不存在：${file.filePath}`);
+      await this.publishAttachmentBytes(target, bytes);
+      return target;
+    } catch (error) {
+      throw new DriverError(
+        `保存文件 ${file.fileName}（KK9 缓存 ${file.filePath || '未缓存'}）到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
+        'FILE_SAVE_FAILED', error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  private async publishAttachmentBytes(target: string, bytes: Uint8Array): Promise<void> {
+    const temporary = path.join(path.dirname(target), `.kairo-attachment-${randomUUID()}.part`);
+    const destination = await open(temporary, 'wx');
+    let closed = false;
+    try {
+      await destination.writeFile(bytes);
+      await destination.close();
+      closed = true;
+      await rename(temporary, target);
+    } catch (error) {
+      const errors = [error];
+      if (!closed) {
+        try { await destination.close(); }
+        catch (closeError) { errors.push(closeError); }
+      }
+      try { await rm(temporary, { force: true }); }
+      catch (cleanupError) { errors.push(cleanupError); }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, `本地附件写入与清理失败：${errors.map(String).join('；')}`);
+      }
+      throw error;
     }
   }
 

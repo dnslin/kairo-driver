@@ -116,16 +116,16 @@ export interface KK9MentionTarget {
 }
 
 /**
- * 图片元数据（支持本地缓存路径与远程 URI）
+ * 图片元数据（缓存路径属于 KK9 机器，可能与 Driver 不在同一机器）
  */
 export interface KK9ImageInfo {
-  /** 本地缓存图片绝对路径 (如 C:\Users\...\file-cache\image\xxx.png) */
+  /** KK9 机器上的缓存图片绝对路径（可能为 Windows 路径），不是 Driver 本地路径。 */
   filePath?: string;
-  /** 图片 URL 或 file:// 地址 */
+  /** 图片 URL 或 KK9 机器上的 file:// 地址。 */
   url?: string;
   /** 远程服务器资源 URI */
   uri?: string;
-  /** 原图缓存路径；独立于可能指向缩略图的 filePath。 */
+  /** KK9 机器上的原图缓存路径；独立于可能指向缩略图的 filePath。 */
   originalFilePath?: string;
   /** 原图服务器资源 URI；存在时不得回退到缩略图 uri。 */
   originalUri?: string;
@@ -146,6 +146,7 @@ export interface KK9FileInfo {
   fileName: string;
   fileSize?: string;
   fileExt?: string;
+  /** KK9 机器上的普通文件缓存路径；缺省表示未缓存，不能直接在 Driver 本机读取。 */
   filePath?: string;
 }
 
@@ -188,7 +189,7 @@ export interface KK9ChatRecordOptions {
   msgArray: KK9ChatRecordItem[];
 }
 
-/** 语音输入二选一：文本合成或本地音频文件。 */
+/** 语音输入二选一：文本合成或 Driver 机器上的本地音频文件。 */
 export type KK9VoiceOptions =
   | { text: string; filePath?: never; voice?: string }
   | { filePath: string; text?: never; voice?: never };
@@ -424,8 +425,10 @@ export interface IKK9Driver extends EventEmitter {
   /** 必须指定 getSessions 返回的原生会话；历史不会派发实时事件，查询失败抛错。 */
   getRecentMessages(session: KK9Session, limit?: number): Promise<KK9Message[]>;
   scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]>;
-  /** 经 KK9 原生下载原图到本机指定路径；失败抛 DriverError，不降级缩略图。 */
+  /** 优先 KK9 原图缓存，否则原生下载准确原图；原子保存到 Driver 本机 fullPath，返回本机绝对路径，不降级缩略图。 */
   downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string>;
+  /** 只保存 KK9 已缓存的普通文件到 Driver 本机 fullPath，返回本机绝对路径；未缓存抛 DriverError(FILE_SAVE_FAILED)。 */
+  saveFile(file: KK9FileInfo, fullPath: string): Promise<string>;
 
   // 消息发送与撤回
   sendText(text: string, options?: SendOptions): Promise<SendResult>;
@@ -437,8 +440,10 @@ export interface IKK9Driver extends EventEmitter {
     content: FormattedText,
     options?: SendOptions
   ): Promise<SendResult>;
+  /** filePath 属于运行 Driver 的机器，SDK 负责传输到 KK9，不接受 KK9 远端缓存路径。 */
   sendFile(filePath: string, options?: SendFileOptions): Promise<SendResult>;
   getSendStatus(operationId: string): Promise<SendResult>;
+  /** imagePath 属于运行 Driver 的机器，SDK 负责传输到 KK9。 */
   sendImage(imagePath: string, options?: SendOptions): Promise<SendResult>;
   sendUrlCard(card: KK9UrlCardOptions, options?: SendOptions): Promise<SendResult>;
   sendBizMessage(message: KK9BizMsgOptions, options?: SendOptions): Promise<SendResult>;

@@ -17,6 +17,7 @@ import { recallNativeMessage } from './recall-ops.js';
 import { sendNativeImage } from './image-ops.js';
 import { getCardInputError, sendNativeStructuredMessage } from './card-ops.js';
 import { prepareVoice } from './voice-ops.js';
+import { uploadLocalFile, releaseRemoteFile, REMOTE_FILE_LEASE_SCRIPT } from './file-transfer.js';
 import { buildMentionNodes, parseFormattedTextToKK } from './rich-text.js';
 import {
   BridgeSendStatus,
@@ -351,9 +352,8 @@ export class BridgeMessageOps {
     });
   }
   public sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
-    return this.executeOperation('file', options, filePath, async (key, bound) => {
+    return this.executeOperation('file', options, filePath, async (key, bound, signal) => {
       const fullPath = path.resolve(filePath);
-      let size: number;
       try {
         const stats = fs.statSync(fullPath);
         if (stats.isDirectory())
@@ -362,28 +362,50 @@ export class BridgeMessageOps {
           return { status: 'failed', error: '文件大小超出限制(100MB)', isPreTrigger: true };
         const descriptor = fs.openSync(fullPath, 'r');
         try {
-          // 实际读取一个字节，发现本地读取错误；文件内容仍由原生发送负责上传。
+          // 先确认本地可读；随后通过 CDP 分块传输实际内容。
           fs.readSync(descriptor, Buffer.alloc(1), 0, 1, 0);
         } finally {
           fs.closeSync(descriptor);
         }
-        size = stats.size;
       } catch (error) {
         return { status: 'failed', error: '本地文件预检失败: ' + fullPath + '；' + String(error), isPreTrigger: true };
       }
-      return this.sendContent(
-        3,
-        {
-          type: 'File',
-          mimetype: mime.lookup(fullPath) || 'application/octet-stream',
-          filepath: fullPath,
-          size: String(size),
-          isValid: true,
-          filename: path.basename(fullPath),
-        },
-        bound,
-        key
-      );
+      let remote;
+      try {
+        remote = await uploadLocalFile(this.cdp, fullPath, MAX_FILE_SIZE_BYTES, signal);
+      } catch (error) {
+        return { status: 'failed', error: '文件传输失败: ' + fullPath + '；' + String(error), isPreTrigger: true };
+      }
+      let outcome: SendOutcome;
+      try {
+        outcome = signal.aborted
+          ? { status: 'failed', error: '文件传输后发送已取消，未提交原生发送', isPreTrigger: true }
+          : await this.sendContent(
+            3,
+            {
+              type: 'File',
+              mimetype: mime.lookup(fullPath) || 'application/octet-stream',
+              filepath: remote.path,
+              size: String(remote.size),
+              isValid: true,
+              filename: path.basename(fullPath),
+            },
+            bound,
+            key,
+            [],
+            undefined,
+            undefined,
+            remote.id
+          );
+      } catch (error) {
+        outcome = { status: 'unknown', error: '文件发送异常: ' + String(error), isPreTrigger: false };
+      }
+      try {
+        await releaseRemoteFile(this.cdp, remote);
+      } catch (error) {
+        outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端文件清理失败: ' + String(error);
+      }
+      return outcome;
     });
   }
 
@@ -394,7 +416,8 @@ export class BridgeMessageOps {
     key: string,
     mentionIds: unknown[] = [],
     replyTo?: KK9ReplyTarget,
-    targetLoginName?: string
+    targetLoginName?: string,
+    remoteFileId?: string
   ): Promise<SendOutcome> {
     const started = Date.now();
     const timeout = options.verifyTimeoutMs ?? 8000;
@@ -409,6 +432,7 @@ export class BridgeMessageOps {
       replyTo,
       timeout,
       deadlineMs: targetLoginName ? cdpTimeoutMs - 2000 : undefined,
+      remoteFileId,
     });
     const script = `(async () => {
       const electron = window.require ? window.require('electron') : null;
@@ -417,11 +441,19 @@ export class BridgeMessageOps {
       ${targetLoginName ? NATIVE_USER_SEND_CONTEXT_SCRIPT : NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
+      ${remoteFileId ? REMOTE_FILE_LEASE_SCRIPT : ''}
       const data = JSON.parse(decodeURIComponent(${encoded}));
       // 渲染任务比外层CDP提前两秒结束，避免宿主超时后留下可继续发送的任务。
       const cancellation = beginNativeSend(data.key, data.deadlineMs);
-      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      let fileLease;
+      const callIpc = (channel, ...args) => fileLease && channel === 'sendMessageNew'
+        ? callKairoFileIpc(fileLease, 4000, cancellation.signal, channel, ...args)
+        : callKairoIpcWithSignal(cancellation.signal, channel, ...args);
       try {
+      if (data.remoteFileId) {
+        try { fileLease = takeKairoFileLease(data.remoteFileId); }
+        catch (error) { return { status: 'failed', error: '远端文件不可用: ' + String(error), isPreTrigger: true }; }
+      }
       let context;
       try { context = await ${targetLoginName ? 'readNativeUserSendContext(data.targetLoginName)' : 'readNativeSendContext(data.target)'}; }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
@@ -442,7 +474,10 @@ export class BridgeMessageOps {
       const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal, data.targetLoginName);
       if (submission.failure) return submission.failure;
       return { status: 'sent', messageId: String(submission.confirmedMessage.id), ...(data.targetLoginName ? { sessionId: String(submission.confirmedMessage.sessionID) } : {}), receipt: submission.receipt, isPreTrigger: false };
-      } finally { cancellation.finish(); }
+      } finally {
+        try { fileLease?.release(); }
+        finally { cancellation.finish(); }
+      }
     })()`;
     try {
       const outcome = await this.cdp.evaluate<SendOutcome>(script, cdpTimeoutMs);
@@ -460,8 +495,8 @@ export class BridgeMessageOps {
   }
 
   public sendImage(imagePath: string, options: SendOptions = {}): Promise<SendResult> {
-    return this.executeOperation('image', options, imagePath, (key, bound) =>
-      sendNativeImage(this.cdp, imagePath, bound, key)
+    return this.executeOperation('image', options, imagePath, (key, bound, signal) =>
+      sendNativeImage(this.cdp, imagePath, bound, key, signal)
     );
   }
   /** 发送链接图文卡片。 */

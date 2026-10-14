@@ -638,8 +638,16 @@ describe('原生图片准备与提交', () => {
         return { code: 0, data: { thumbPath, artworkPath } };
       },
     });
+    let started!: () => void;
+    const submitted = new Promise<void>(resolve => { started = resolve; });
+    const send = native.ipc.send.bind(native.ipc);
+    native.ipc.send = (channel, request) => {
+      if (request.args[0] === 'sendMessageNew') started();
+      send(channel, request);
+    };
     // Electron是外部运行时边界；固定素材的真实解码结果由KK9生成，发送脚本实际执行。
     const resized = vi.fn(() => ({ toPNG: () => thumbnail }));
+    const requireNative = native.window['require'] as (name: string) => unknown;
     native.window['require'] = (name: string) => {
       if (name === 'fs') return fs;
       if (name === 'file-type')
@@ -656,7 +664,7 @@ describe('原生图片准备与提交', () => {
             }),
           },
         };
-      throw new Error('未声明的原生依赖 ' + name);
+      return requireNative(name);
     };
     return {
       ...native,
@@ -664,6 +672,7 @@ describe('原生图片准备与提交', () => {
       resized,
       thumbPath,
       artworkPath,
+      submitted,
       ops: new BridgeMessageOps(native.cdp),
     };
   }
@@ -719,15 +728,15 @@ describe('原生图片准备与提交', () => {
     expect(await native.ops.sendImage(path.dirname(native.file), options)).toMatchObject({
       status: 'failed',
       isPreTrigger: true,
-      error: expect.stringContaining('非普通文件'),
     });
+    expect(native.ipc.sent).toEqual([]);
     fs.writeFileSync(native.file, '');
     fs.truncateSync(native.file, 20 * 1024 * 1024 + 1);
     expect(await native.ops.sendImage(native.file, options)).toMatchObject({
       status: 'failed',
       isPreTrigger: true,
-      error: expect.stringContaining('20MB'),
     });
+    expect(native.ipc.sent).toEqual([]);
     fs.writeFileSync(native.file, '不是图片');
     expect(await native.ops.sendImage(native.file, options)).toMatchObject({
       status: 'failed',
@@ -827,6 +836,7 @@ describe('原生图片准备与提交', () => {
       targetSessionId: '93001',
       verifyTimeoutMs: 6000,
     });
+    await native.submitted;
     await vi.advanceTimersByTimeAsync(4500);
     expect(await pending).toMatchObject({ status: 'sent' });
     const unknown = imageRuntime({ callback: false });
@@ -836,6 +846,7 @@ describe('原生图片准备与提交', () => {
       verifyTimeoutMs: 100,
     };
     const waiting = unknown.ops.sendImage(unknown.file, options);
+    await unknown.submitted;
     await vi.advanceTimersByTimeAsync(101);
     expect(await waiting).toMatchObject({ status: 'unknown', isPreTrigger: false });
     expect(await unknown.ops.sendImage(unknown.file, options)).toMatchObject({ status: 'unknown' });

@@ -21,6 +21,8 @@ $env:PAGE_MATCH = "renderer.html"
 
 `PAGE_MATCH` 必须使用实际目标 URL 中稳定的片段。不要把客户端凭据写入仓库。
 
+远程部署时，Driver 的 `CDP_URL` 指向可达的 HTTP/HTTPS 基址，不能是 `/json` 或 WebSocket 地址。KK9 可能仍仅监听 `127.0.0.1`，应查看真实监听再用受限端口转发或 SSH 隧道；不依赖 `--remote-debugging-address=0.0.0.0` 必然生效。本轮 Windows 端口转发地址为 `http://172.16.0.18:9222`，返回的 WebSocket 地址也使用该 IP。Driver 不无证据改写发现地址；转发必须同时支持 HTTP 发现与 WebSocket，HTTPS/WSS 证书须被运行 Driver 的 Node 正常信任。
+
 ## 基本诊断
 
 在仓库根目录运行：
@@ -541,4 +543,61 @@ pnpm exec tsx tmp/pr13-fix-dist-smoke.ts
 - 清理后窗口仍为50981，816219读索引/最大索引均为2；message监听1、目标回执监听0、Hook/观察器/binding均不存在、在途0，完整回到读取前基线。Driver及核对连接均disconnected；报告为 `tmp/pr13-fix-dist-smoke-evidence.json`。
 
 本轮真机证明搜索样本、精确状态恢复和无发送的自有连接失联清理。慢分页超时、真实在途发送取消和同Hook并发回执仅通过执行实际生成脚本的受控回归验证，没有在真机制造慢查询或额外消息。接收端展示、通知和已读仍未验证，前序消息保留，不把这些边界写成通过。
+
+
+## Linux Driver + Windows KK9 跨机器附件验证
+
+### 本轮范围与授权
+
+本轮真实 KK9 为 `172.16.0.18:9222`，Windows 主机 `K3-APPLICATION`，KK9 9.0.1 / Electron 22.3.18 / Node 16.17.1。独立只读身份查询得到 `kairo / UID 3583`，不是前文历史测试账号 `0123040139 / UID 5761`。没有将旧授权套到新账号，也没有自行选择联系人；本轮没有发送、撤回、切换、创建会话或标已读，没有读取聊天正文、安装 Driver Hook 或修改插件。
+
+Driver 真正运行于 Debian WSL 的 Linux Node v24.18.0，主机 `LHGD241029099`。源码与构建产物从本地工作区加载，传输输入和目标均在 Linux `/tmp`；没有挂载目标 Windows 目录，也没有使用 SMB、Windows 桥接/文件服务或额外端口。
+
+### 文件、缓存图片与清理
+
+先通过本轮 `pnpm check` 生成构建，再实际执行（没有重复构建）：
+
+```text
+wsl.exe -d Debian -- env NODE_ENV=production LOG_LEVEL=warn CDP_URL=http://172.16.0.18:9222 /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/examples/verify-remote-files.ts --large
+```
+
+`examples/verify-remote-files.ts` 复用构建后的公开 `CdpClient` 与同一构建的内部附件实现，只操作本轮生成的文件。普通文件从 Linux 通过 CDP 上传到真实 Windows 独占临时路径，再通过 `saveNativeFile` 分块保存回 Linux；Windows 路径保留 `中文附件.bin`，未使用 Linux 输入路径作为原生路径。
+
+结果：
+
+- 普通文件 **104857600 字节（100 MiB）** 往返一致；SHA256 为 `dc9368657a26378db22b625e81dd3cbf54d69bacc4b81116ee01e2c90cb18121`。
+- 原图与缩略图分别上传到 Windows；`downloadNativeImage` 在两种缓存均存在时保存原图，Linux 结果与原图真实字节一致且不同于缩略图。远端 Electron `nativeImage` 实际解码为 **640×360**。
+- 未缓存普通文件明确失败，已有完整目标内容不变，本机无残留 `.part`。
+- 三个本轮 Windows 临时文件逐个请求释放，远端 `existsSync` 均为 false；Linux 临时目录删除，独立 CDP 断开，进程退出码 **0**。
+
+这证明真实跨机器文件传输和缓存保存，不证明原生服务器上传、真实入站事件、消息发送回执或接收端打开附件。本轮原图是自建缓存，不是对生产聊天图片或云端原图下载的验收；原生 `download` 新跨机链路由实际生成脚本的确定性回归覆盖，但尚未取得当前账号的授权真机资源验收。
+
+### 文件语音与文字 TTS
+
+实际命令：
+
+```text
+wsl.exe -d Debian -- /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/.voice-remote-smoke.mjs
+```
+
+该临时脚本加载真实 `prepareVoice` 源码，用 TypeScript 内存转译处理模块加载；音频依赖未替换。自建 WAV 和已有 MP3 素材均写入 Linux `/tmp`，真实 Windows 内置 `app.asar/dist/electron/lib/amrnb.js` 完成编码/回解，没有调用任何发送 IPC。
+
+| 输入 | 源字节 | 8 kHz 输入采样 | AMR 回解采样 | 返回 duration | AMR 字节 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 16 kHz 双声道 2.013 秒 WAV | 128876 | 16104 | 16160 | 3 | 2127 |
+| 真实 MP3 素材 | 6336 | 8448 | 8480 | 2 | 1119 |
+
+两种产物均有真实 `#!AMR\n` 头，结果仅携带 `duration/data`，不携带 Linux 文件路径。WAV 不足整帧的末尾有效声音保留，末尾 RMS 为 0.17789653143935824。验证后删除临时脚本和 Linux 输入目录，独立 CDP 关闭。
+
+真实文字 TTS 沿用 Linux 进程已有的 `HTTPS_PROXY/HTTP_PROXY` 规则，返回 `VOICE_TTS_FAILED`，原始原因 `Unexpected server response: 403`。未切换代理或直连路线、未重试、未伪造合成成功；没有进入 AMR 编码，新增 TTS 临时目录为 0。当前仍缺可成功访问 Edge TTS 的运行网络条件，不将既有历史 Windows 合成记录当成本轮 Linux 合成通过。
+
+### 尚未验证的边界
+
+- 当前 `kairo / UID 3583` 账号及明确测试对象尚无消息发送授权，因此没有真实跨机图片/文件/语音发送，也没有服务端附件上传和接收端播放/打开验证。
+- 原生云端原图下载到 Windows 再传 Linux的真实资源路径尚未验收；缓存原图保存已真实通过，两者不能混称。
+- HTTP 端口转发已实测；HTTPS/WSS 仅有配置/不降级行为回归，没有实际 TLS 部署验收。
+- 真实文字 TTS 被 403 阻断；代码回归验证了失败传播与清理，不能替代成功合成。
+- 原生永久悬挂时仍保留可能在用的临时文件和自身完成监听；异常退出导致远端 Map 丢失时可能遗留 SDK 临时目录。正常完成、传输失败/取消、迟到原生完成释放均有回归，不能据此声称真机已制造所有故障场景。
+
+本次完整质量检查为 `pnpm check`：build/typecheck、36 文件 451 项测试和 lint 通过。纯字节往返、原图缓存和音频编码均为真机实测；收发、云端下载、外部 TTS 成功及接收端体验明确保留未验证，不把 Fake、同机测试或代码回归冒充跨机器收发验收。
 

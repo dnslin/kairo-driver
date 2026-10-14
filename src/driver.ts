@@ -5,7 +5,7 @@ import { BridgeSessionOps } from './bridge/session-ops.js';
 import { BridgeMessageOps } from './bridge/message-ops.js';
 import { BridgeOrgOps } from './bridge/org-ops.js';
 import { createMessageIdentityKey } from './bridge/converter.js';
-import { downloadNativeImage } from './bridge/image-ops.js';
+import { downloadNativeImage, saveNativeFile } from './bridge/attachment-ops.js';
 
 
 import type {
@@ -22,6 +22,7 @@ import type {
   KK9BizMsgOptions,
   KK9ChatRecordOptions,
   KK9Employee,
+  KK9FileInfo,
   KK9ImageInfo,
   KK9Message,
   KK9RecalledEvent,
@@ -312,7 +313,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   /**
-   * 发送文件
+   * 发送 Driver 机器上的本地文件
    */
   public async sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
@@ -328,13 +329,18 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.bridgeMessageOps.getSendStatus(operationId);
   }
 
-  /** 原生下载收到的图片，优先原图资源，不触发发送或会话操作。 */
+  /** 将收到的原图保存到 Driver 本机；优先 KK9 原图缓存，不降级缩略图。 */
   public downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string> {
     return downloadNativeImage(this.cdp, image, fullPath);
   }
 
+  /** 将 KK9 已缓存的普通附件保存到 Driver 本机，不触发原生下载。 */
+  public saveFile(file: KK9FileInfo, fullPath: string): Promise<string> {
+    return saveNativeFile(this.cdp, file, fullPath);
+  }
+
   /**
-   * 发送本地图片
+   * 发送 Driver 机器上的本地图片
    */
   public async sendImage(imagePath: string, options: SendOptions = {}): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
