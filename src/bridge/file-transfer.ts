@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CdpClient } from '../cdp/client.js';
+import { createChildLogger } from '../utils/logger.js';
 
 export interface RemoteFile {
   id: string;
@@ -12,6 +14,7 @@ export interface RemoteFile {
 
 const CHUNK_BYTES = 256 * 1024;
 const REQUEST_TIMEOUT_MS = 10000;
+const log = createChildLogger('file-transfer');
 
 /**
  * 仅在KK9渲染端操作临时目录；原生实际完成之前不能删除其正在读取的文件。
@@ -225,13 +228,19 @@ export async function createRemoteTempFile(cdp: CdpClient, name: string): Promis
 }
 
 export async function releaseRemoteFile(cdp: CdpClient, file: RemoteFile): Promise<void> {
-  await evaluateRemote(
-    cdp,
+  try {
+    await evaluateRemote(
+      cdp,
+      `
+      const entry = kairoFileStore().get(${JSON.stringify(file.id)});
+      if (entry) { entry.releaseRequested = true; cleanupKairoFile(entry); }
     `
-    const entry = kairoFileStore().get(${JSON.stringify(file.id)});
-    if (entry) { entry.releaseRequested = true; cleanupKairoFile(entry); }
-  `
-  );
+    );
+  } catch (error) {
+    // 清理不是发送终态；成功发送也必须经现有日志出口暴露清理异常。
+    log.warn({ event: 'Driver运行异常', errorType: 'driver', runId: file.id }, '远端临时文件清理失败');
+    throw error;
+  }
 }
 
 export async function uploadLocalFile(
@@ -243,7 +252,11 @@ export async function uploadLocalFile(
   checkAbort(signal);
   const name = path.basename(localPath);
   checkFilename(name);
-  const source = await fs.open(localPath, 'r');
+  // Linux FIFO只读打开会等待写端；非阻塞打开后按描述符拒绝非普通文件。
+  const source = await fs.open(
+    localPath,
+    process.platform === 'linux' ? constants.O_RDONLY | constants.O_NONBLOCK : 'r'
+  );
   let file: RemoteFile | undefined;
   let closed = false;
   try {

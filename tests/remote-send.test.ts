@@ -2,6 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import fsp from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { EventEmitter, once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { KK9Driver } from '../src/driver.js';
+import { getDriverTestInternals } from './helpers/driver-internals.js';
+import { setDriverLogSink, type DriverLogEntry } from '../src/utils/logger.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BridgeMessageOps } from '../src/bridge/message-ops.js';
 import { createNativeSendRuntime } from './helpers/native-send-runtime.js';
@@ -32,6 +39,7 @@ function remoteRuntime() {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -63,6 +71,71 @@ describe('跨机器普通文件发送', () => {
     expect(fs.readFileSync(runtime.file)).toEqual(runtime.bytes);
     expect(await runtime.ops.sendFile(runtime.file, options)).toEqual(result);
     expect(runtime.records).toHaveLength(1);
+  });
+
+  it('公开文件发送成功后清理失败仍告警，重复操作与状态查询不重发', async () => {
+    const runtime = remoteRuntime();
+    const logs: DriverLogEntry[] = [];
+    const nativeFs = { ...fs, rmSync: () => {
+      throw Object.assign(new Error('测试远端删除失败'), { code: 'EPERM' });
+    } };
+    const requireNative = runtime.window['require'] as (name: string) => unknown;
+    runtime.window['require'] = (name: string) => name === 'fs' ? nativeFs : requireNative(name);
+    const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1' } });
+    getDriverTestInternals(driver).bridgeMessageOps = runtime.ops;
+    const options = { targetSessionId: '93001', operationId: 'cleanup-failure-file' };
+    setDriverLogSink(entry => logs.push(entry));
+    try {
+      const result = await driver.sendFile(runtime.file, options);
+      expect(result.status).toBe('sent');
+      expect(logs).toContainEqual(expect.objectContaining({
+        level: 'warn', event: 'Driver运行异常', errorType: 'driver', runId: expect.any(String),
+      }));
+      expect(await driver.sendFile(runtime.file, options)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(await driver.getSendStatus(options.operationId)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(runtime.records).toHaveLength(1);
+      expect(runtime.drafts).toHaveLength(1);
+      expect(fs.readdirSync(runtime.remoteRoot)).toHaveLength(1);
+    } finally { setDriverLogSink(undefined); }
+  });
+
+  it.runIf(process.platform === 'linux')('Linux无写端FIFO及时前置失败，断开不等待写端', async () => {
+    const runtime = remoteRuntime();
+    const fifo = path.join(runtime.sourceRoot, '命名管道.png');
+    execFileSync('mkfifo', [fifo]);
+    const opening = new EventEmitter();
+    const started = once(opening, 'opening');
+    const open = fsp.open;
+    vi.spyOn(fsp, 'open').mockImplementation((...args: Parameters<typeof fsp.open>) => {
+      if (args[0] === fifo) opening.emit('opening');
+      return open(...args);
+    });
+    const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1' } });
+    getDriverTestInternals(driver).bridgeMessageOps = runtime.ops;
+    let settled = false;
+    const pending = driver.sendImage(fifo, { targetSessionId: '93001' }).finally(() => { settled = true; });
+    await Promise.race([started, pending]);
+    const disconnect = driver.disconnect();
+    const deadline = new AbortController();
+    try {
+      const [result] = await Promise.race([
+        Promise.all([pending, disconnect]),
+        delay(2000, undefined, { signal: deadline.signal }).then((): never => { throw new Error('FIFO发送或断开仍在等待写端'); }),
+      ]);
+      expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
+      expect(runtime.drafts).toEqual([]);
+      expect(runtime.records).toEqual([]);
+      expect(fs.readdirSync(runtime.remoteRoot)).toEqual([]);
+    } finally {
+      deadline.abort();
+      if (!settled) {
+        const writer = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+        fs.closeSync(writer);
+      }
+      await pending;
+      await disconnect;
+      opening.removeAllListeners();
+    }
   });
 
   it.each(['超时', '取消'] as const)(

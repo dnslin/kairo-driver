@@ -165,6 +165,9 @@ export async function sendNativeImage(
   }
   if (outcome.error) outcome.error = '图片 ' + sourcePath + '；' + outcome.error;
   try { await releaseRemoteFile(cdp, remote); }
-  catch (error) { outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端图片清理失败: ' + String(error); }
+  catch (error) {
+    if (outcome.status !== 'sent')
+      outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端图片清理失败: ' + String(error);
+  }
   return { ...outcome, verifyLatencyMs: Date.now() - startTime };
 }

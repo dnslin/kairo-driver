@@ -75,6 +75,31 @@ describe('接收原图资源与原生下载', () => {
     });
   });
 
+  it.each(['filepath_h', 'uri_h'])('原生显式空%s经规范化后仍拒绝已缓存缩略图', async emptyField => {
+    const thumbnail = targetPath();
+    const target = targetPath();
+    const remoteThumbnail = 'C:\\KK9\\cache\\仅缩略图.png';
+    writeFileSync(thumbnail, '缩略图字节');
+    writeFileSync(target, '原成功目标');
+    const [message] = normalizeNativeMessage({
+      id: 102, sessionID: 93001, sender: 91002, contentType: 4,
+      content: { content: [{ type: 1, filepath: remoteThumbnail, [emptyField]: '' }] },
+    });
+    const image = message?.images?.[0];
+    expect(image).toBeDefined();
+    const { driver: native, ipc } = nativeDriver(() => { throw new Error('不能下载缩略图'); }, {
+      [remoteThumbnail]: thumbnail, [path.resolve(remoteThumbnail)]: thumbnail,
+    });
+    const fake = new FakeKK9Driver();
+    fake.setCachedFile(remoteThumbnail, Buffer.from('缩略图字节'));
+    for (const driver of [native, fake]) {
+      await expect(driver.downloadImage(image!, target)).rejects.toMatchObject({ code: 'IMAGE_DOWNLOAD_FAILED' });
+      expect(readFileSync(target, 'utf8')).toBe('原成功目标');
+    }
+    expect(ipc.sent).toEqual([]);
+    expect(readFileSync(thumbnail, 'utf8')).toBe('缩略图字节');
+  });
+
   it('原生下载选择原图 URI 并落地真实字节，不把缩略图当原图', async () => {
     const target = targetPath();
     const original = Buffer.from('原图真实字节');

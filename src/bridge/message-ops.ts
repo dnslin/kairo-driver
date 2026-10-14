@@ -403,7 +403,8 @@ export class BridgeMessageOps {
       try {
         await releaseRemoteFile(this.cdp, remote);
       } catch (error) {
-        outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端文件清理失败: ' + String(error);
+        if (outcome.status !== 'sent')
+          outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端文件清理失败: ' + String(error);
       }
       return outcome;
     });

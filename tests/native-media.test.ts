@@ -11,6 +11,7 @@ import { prepareVoice } from '../src/bridge/voice-ops.js';
 import { KK9Driver } from '../src/driver.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
+import { setDriverLogSink, type DriverLogEntry } from '../src/utils/logger.js';
 import {
   createRendererRuntime,
   FakeIpcRenderer,
@@ -702,6 +703,40 @@ describe('原生图片准备与提交', () => {
     expect(native.resized).toHaveBeenCalledTimes(1);
     expect(native.drafts).toHaveLength(1);
     expect(result.receipt?.draftId).toBe('-1');
+  });
+
+  it('公开图片发送成功后清理失败仍告警且不重复准备或发送', async () => {
+    const native = imageRuntime();
+    const logs: DriverLogEntry[] = [];
+    let failedDirectory = '';
+    const requireNative = native.window['require'] as (name: string) => unknown;
+    native.window['require'] = (name: string) => name === 'fs' ? {
+      ...fs, rmSync: (directory: fs.PathLike) => {
+        failedDirectory = String(directory);
+        throw Object.assign(new Error('测试远端图片删除失败'), { code: 'EPERM' });
+      },
+    } : requireNative(name);
+    const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1' } });
+    getDriverTestInternals(driver).bridgeMessageOps = native.ops;
+    const options = { targetSessionId: '93001', operationId: 'cleanup-failure-image' };
+    setDriverLogSink(entry => logs.push(entry));
+    try {
+      const result = await driver.sendImage(native.file, options);
+      expect(result.status).toBe('sent');
+      expect(logs).toContainEqual(expect.objectContaining({
+        level: 'warn', event: 'Driver运行异常', errorType: 'driver', runId: expect.any(String),
+      }));
+      expect(await driver.sendImage(native.file, options)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(await driver.getSendStatus(options.operationId)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(native.records).toHaveLength(1);
+      expect(native.drafts).toHaveLength(1);
+      expect(native.resized).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(failedDirectory)).toBe(true);
+      expect(fs.readFileSync(native.artworkPath)).toEqual(source);
+    } finally {
+      setDriverLogSink(undefined);
+      if (failedDirectory) fs.rmSync(failedDirectory, { recursive: true, force: true });
+    }
   });
 
   it('有PNG头但无法解码的损坏图片不准备或提交', async () => {

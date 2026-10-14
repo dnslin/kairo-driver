@@ -616,6 +616,18 @@ wsl.exe -d Debian -- env NODE_ENV=production LOG_LEVEL=warn CDP_URL=http://172.1
 
 证据为 `tmp/remote-send-05a70ecc-d135-4ba1-8501-5946f8a26f04.json`（保留首次失败）、`tmp/remote-voice-recheck-137854077.json`（只读播放资源复核）、`tmp/remote-send-c7d8419d-7752-4de5-acb6-d629fec5a6e8.json`（群三条完整通过）。不在报告保存音频Base64或其他历史正文。新增验收脚本的ESLint已通过；没有重试文字TTS、发送文字消息或自动撤回。
 
+### 评审修复后的只读真机回归
+
+原图显式空字段、Linux FIFO和成功后清理告警修复完成后，再次运行默认无消息脚本，而不是重新发送已验收消息：
+
+```text
+wsl.exe -d Debian -- env NODE_ENV=production LOG_LEVEL=warn CDP_URL=http://172.16.0.18:9222 /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/examples/verify-remote-files.ts
+```
+
+本轮786469字节跨机往返，SHA256 `d1679c45335f37b8acdcdf92749e13f4c18c54b71cf17e0b097c90cc83f6763c` 一致；已有缓存文件和640×360原图保存成功，远端临时文件全部释放，消息操作0、退出0。Linux公开构建入口另用真实无写端FIFO验证直接前置失败及并发断开及时完成，不打开任何写端、原生IPC0，结果在 `tmp/pr17-fixed-fifo.json`；不把隔离CDP当作KK9故障验收。
+
+Windows最终 `pnpm check` 的构建、类型、36文件455项测试和lint通过，1项Linux专属FIFO回归跳过，该行为由上述Linux公开入口另行实际验证。原图缺失和EPERM清理告警通过完整入口确定性回归覆盖；没有在真实KK9制造权限错误或重新发送消息。释放失败使用既有日志告警，保持已确认sent和原生读取租约，不新增重发或自动强删。
+
 ### 尚未验证的边界
 
 - HTTP 端口转发已实测；HTTPS/WSS 仅有配置/不降级行为回归，没有实际 TLS 部署验收。
