@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
-import type { KK9Employee, KK9EmployeeSearchItem, KK9Message, KK9Session } from '../src/types/index.js';
+import type { KK9Employee, KK9EmployeeSearchItem, KK9GroupMember, KK9Message, KK9Session } from '../src/types/index.js';
 import { createNativeMessageKey } from '../src/bridge/send-status.js';
 
 describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
@@ -359,6 +359,133 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
     expect(events).toEqual([]);
   });
 
+
+  it('群成员按原生会话隔离，规范化 UID 保留首个档案并合并全部部门，不回退展示或搜索资料', async () => {
+    driver.setSessions([
+      { id: '93002', name: '同名群', type: 'group', nativeType: 1, receiverId: '92001', unread: false },
+      { id: '93003', name: '同名群', type: 'group', nativeType: 1, receiverId: '92002', unread: false },
+      { id: '93004', name: '空群', type: 'group', nativeType: 1, receiverId: '92003', unread: false },
+    ]);
+    driver.setEmployees([{ id: 91002, name: '展示姓名', loginName: '展示工号', position: '展示职务', updatedAt: 1 }]);
+    driver.setSearchEmployees([{ id: '91002', name: '搜索姓名', loginName: '搜索工号', departmentPaths: ['搜索部门'] }]);
+    driver.setGroupMembers('093002', [
+      { id: '091002', name: '  ', loginName: null, departmentPaths: ['总部/研发', '', '  '], position: '' },
+      { id: '91003', name: '同名成员', loginName: 'EMP-003', departmentPaths: null, position: '工程师' },
+      { id: '91002', name: '不能补入', loginName: '不能补入', departmentPaths: ['总部/研发', '总部/测试'], position: '不能补入' },
+      { id: '91004', name: '同名成员', loginName: 'EMP-004', departmentPaths: [], position: null },
+    ]);
+    driver.setGroupMembers('93003', [{ id: '91005', name: '另一群成员', loginName: null, departmentPaths: null, position: null }]);
+
+    await expect(driver.getGroupMembers('93002')).resolves.toEqual([
+      { id: '91002', name: null, loginName: null, departmentPaths: ['总部/研发', '总部/测试'], position: null },
+      { id: '91003', name: '同名成员', loginName: 'EMP-003', departmentPaths: null, position: '工程师' },
+      { id: '91004', name: '同名成员', loginName: 'EMP-004', departmentPaths: null, position: null },
+    ]);
+    await expect(driver.getGroupMembers('093003')).resolves.toEqual([
+      { id: '91005', name: '另一群成员', loginName: null, departmentPaths: null, position: null },
+    ]);
+    await expect(driver.getGroupMembers('93004')).resolves.toEqual([]);
+  });
+
+  it('群成员注入和每次查询均隔离档案对象与部门路径数组', async () => {
+    driver.setSessions([{ id: '93002', name: '群', type: 'group', nativeType: 1, receiverId: '92001', unread: false }]);
+    const member: KK9GroupMember = {
+      id: '91002', name: '真实姓名', loginName: '真实工号', departmentPaths: ['总部/研发'], position: '真实职务',
+    };
+    const injected = [member];
+    driver.setGroupMembers('93002', injected);
+    member.name = '篡改注入姓名';
+    member.departmentPaths!.push('篡改注入部门');
+    injected.length = 0;
+
+    const expected: KK9GroupMember[] = [
+      { id: '91002', name: '真实姓名', loginName: '真实工号', departmentPaths: ['总部/研发'], position: '真实职务' },
+    ];
+    const first = await driver.getGroupMembers('93002');
+    expect(first).toEqual(expected);
+    first[0]!.id = '91009';
+    first[0]!.name = '篡改返回姓名';
+    first[0]!.loginName = '篡改返回工号';
+    first[0]!.position = '篡改返回职务';
+    first[0]!.departmentPaths!.push('篡改返回部门');
+    first.length = 0;
+
+    await expect(driver.getGroupMembers('93002')).resolves.toEqual(expected);
+    driver.setGroupMembers('93002', []);
+    await expect(driver.getGroupMembers('93002')).resolves.toEqual([]);
+  });
+
+  it('群成员查询前后会话、历史、发送记录及已读状态不变且不派发事件', async () => {
+    const session: KK9Session = {
+      id: '93002', name: '群', type: 'group', nativeType: 1, receiverId: '92001',
+      unread: true, unreadCount: 2, unreadAt: true,
+    };
+    driver.setSessions([session]);
+    driver.setMessages([{
+      id: '1001', messageId: '1001', msgIdx: 1, sessionId: session.id, sessionName: session.name,
+      sessionType: session.type, sender: '历史发送人', content: '已有历史', time: '12:00',
+      isMe: false, direction: 'inbound', timestamp: 100,
+    }]);
+    driver.setGroupMembers(session.id, [{ id: '91002', name: null, loginName: null, departmentPaths: null, position: null }]);
+    await driver.sendText('已有发送记录', { operationId: '群查询前发送', targetSessionId: session.id });
+    const sessionsBefore = globalThis.structuredClone(await driver.getSessions());
+    const historyBefore = globalThis.structuredClone(await driver.getRecentMessages(session));
+    const callsBefore = globalThis.structuredClone(driver.recordedCalls);
+    const events: string[] = [];
+    driver.on('status', () => events.push('status'));
+    driver.on('message', () => events.push('message'));
+    driver.on('at', () => events.push('at'));
+    driver.on('recalled', () => events.push('recalled'));
+    driver.on('error', () => events.push('error'));
+    driver.on('heartbeat', () => events.push('heartbeat'));
+    driver.on('health', () => events.push('health'));
+
+    await driver.getGroupMembers(session.id);
+    await expect(driver.getGroupMembers('92001')).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+    await expect(driver.getGroupMembers(session.id, 0)).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+
+    expect(await driver.getSessions()).toEqual(sessionsBefore);
+    expect(await driver.getRecentMessages(session)).toEqual(historyBefore);
+    expect(driver.recordedCalls).toEqual(callsBefore);
+    expect(driver.markSessionReadCallsCount).toBe(0);
+    expect(events).toEqual([]);
+  });
+
+  it('群成员拒绝非法标识、未知会话、非群及无效原生群元数据，不以接收对象或群名查找', async () => {
+    driver.setSessions([
+      { id: '93001', name: '私聊', type: 'private', nativeType: 0, receiverId: '91001', unread: false },
+      { id: '93002', name: '测试群', type: 'group', nativeType: 1, receiverId: '92001', unread: false },
+      { id: '93003', name: '原生非群', type: 'group', nativeType: 0, receiverId: '92002', unread: false },
+      { id: '93004', name: '映射非群', type: 'private', nativeType: 1, receiverId: '92003', unread: false },
+      { id: '93005', name: '无效接收对象', type: 'group', nativeType: 1, receiverId: '0', unread: false },
+    ]);
+    for (const id of ['', ' ', '0', '-1', '1.5', 'NaN', 'Infinity', '9007199254740992', '1e3', '0x10']) {
+      expect(() => driver.setGroupMembers('93002', [{ id, name: null, loginName: null, departmentPaths: null, position: null }]))
+        .toThrow(expect.objectContaining({ name: 'DriverError', code: 'IPC_QUERY_FAILED' }));
+      expect(() => driver.setGroupMembers(id, [])).toThrow(expect.objectContaining({ name: 'DriverError', code: 'IPC_QUERY_FAILED' }));
+      await expect(driver.getGroupMembers(id)).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+    }
+    for (const sessionId of ['99999', '92001', '测试群', '93001', '93003', '93004', '93005']) {
+      await expect(driver.getGroupMembers(sessionId)).rejects.toMatchObject({ name: 'DriverError', code: 'IPC_QUERY_FAILED' });
+    }
+  });
+
+  it('群成员拒绝无效总期限，并在查询完成时检查截止时间', async () => {
+    driver.setSessions([{ id: '93002', name: '群', type: 'group', nativeType: 1, receiverId: '92001', unread: false }]);
+    for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      await expect(driver.getGroupMembers('93002', timeoutMs)).rejects.toMatchObject({
+        name: 'DriverError', code: 'IPC_QUERY_FAILED', message: expect.stringMatching(/期限|超时/),
+      });
+    }
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValue(1010);
+    try {
+      await expect(driver.getGroupMembers('93002', 10)).rejects.toMatchObject({
+        name: 'DriverError', code: 'IPC_QUERY_FAILED', message: expect.stringMatching(/期限|超时/),
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   it('历史按原生会话隔离且不重放实时事件，不以当前窗口选择目标', async () => {
     const first: KK9Session = {

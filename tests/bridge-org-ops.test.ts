@@ -216,3 +216,99 @@ describe('只读人员搜索', () => {
     for (const timeout of [0, -1, NaN, Infinity]) await expect(ops.searchEmployees('张三', timeout)).rejects.toThrow(/期限|超时/);
   });
 });
+
+describe('只读群全员资料', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  function groupOps(overrides: Record<string, unknown> = {}) {
+    return nativeOrg(({ args: [method, value] }) => {
+      if (Object.hasOwn(overrides, String(method))) return overrides[String(method)];
+      if (method === 'getSessionBySessionID') return { code: 0, data: value === 793803 ? { id: 793803, type: 1, typeID: 29467 } : null };
+      if (method === 'getGroupsAllMembers') {
+        if (value !== 29467) throw new Error('必须使用接收对象而非会话ID查成员');
+        return { code: 0, data: [{ id: 1, login_name: '旧工号' }, { id: '1' }, { id: 2 }] };
+      }
+      if (method === 'getMemberDetail') return { code: 0, data: { id: value, name: '同名员工', login_name: value === 1 ? '000102' : 'E208', pos: '工程师' } };
+      if (method === 'getAllDeptPaths') return { code: 0, data: [
+        { deptPaths: [{ id: 10, name: '研发' }, { id: 11, name: '后端' }] },
+        { deptPaths: [{ id: 20, name: '项目' }] },
+        { deptPaths: [{ id: 10, name: '研发' }, { id: 11, name: '后端' }] },
+      ] };
+      throw new Error(`群查询不得写入或查询其他接口: ${String(method)}`);
+    });
+  }
+
+  it('按会话解析真实群对象，全员去重保留同名人员、工号前导零与全部部门', async () => {
+    expect(await groupOps().getGroupMembers('793803')).toEqual([
+      { id: '1', name: '同名员工', loginName: '000102', position: '工程师', departmentPaths: ['研发 / 后端', '项目'] },
+      { id: '2', name: '同名员工', loginName: 'E208', position: '工程师', departmentPaths: ['研发 / 后端', '项目'] },
+    ]);
+  });
+
+  it('超过200人的原生全员不截断', async () => {
+    const members = Array.from({ length: 201 }, (_, index) => ({ id: index + 1 }));
+    const result = await groupOps({ getGroupsAllMembers: { code: 0, data: members } }).getGroupMembers('793803');
+    expect(result.map(row => row.id)).toEqual(members.map(row => String(row.id)));
+  });
+
+  it('真实字段缺失为null，不拿展示别名、部门或UID填充', async () => {
+    const ops = groupOps({
+      getMemberDetail: { code: 0, data: { id: 1, name: ' ', login_name: '', pos: null, loginName: '别名', job_number: '其他编号', department: '部门不是岗位' } },
+      getGroupsAllMembers: { code: 0, data: [{ id: 1, name: '群昵称', pos: '缓存岗位' }] },
+      getAllDeptPaths: { code: 0, data: [] },
+    });
+    expect(await ops.getGroupMembers('793803')).toEqual([{ id: '1', name: null, loginName: null, position: null, departmentPaths: null }]);
+  });
+
+  it('正常空群不查档案', async () => {
+    const ops = groupOps({ getGroupsAllMembers: { code: 0, data: [] }, getMemberDetail: { code: 627, error: '空群不应查档案' } });
+    expect(await ops.getGroupMembers('793803')).toEqual([]);
+  });
+
+  it.each([
+    ['未知会话', 'getSessionBySessionID', { code: 0, data: null }, /会话.*793803/],
+    ['非群', 'getSessionBySessionID', { code: 0, data: { id: 793803, type: 0, typeID: 29467 } }, /群/],
+    ['错会话', 'getSessionBySessionID', { code: 0, data: { id: 716827, type: 1, typeID: 29467 } }, /getSessionBySessionID/],
+    ['群UID无效', 'getSessionBySessionID', { code: 0, data: { id: 793803, type: 1, typeID: 0 } }, /getSessionBySessionID/],
+    ['成员失败', 'getGroupsAllMembers', { code: 627, error: '群不可读' }, /getGroupsAllMembers.*793803.*29467.*627.*群不可读/],
+    ['成员非数组', 'getGroupsAllMembers', { code: 0, data: {} }, /getGroupsAllMembers.*数组/],
+    ['成员UID无效', 'getGroupsAllMembers', { code: 0, data: [{ id: 0 }] }, /getGroupsAllMembers.*UID/],
+    ['档案缺席', 'getMemberDetail', { code: 0, data: null }, /getMemberDetail.*1.*档案/],
+    ['档案错人', 'getMemberDetail', { code: 0, data: { id: 99 } }, /getMemberDetail.*1.*UID/],
+    ['岗位类型错误', 'getMemberDetail', { code: 0, data: { id: 1, pos: 42 } }, /getMemberDetail.*1.*岗位/],
+    ['部门失败', 'getAllDeptPaths', { code: 627, error: '路径不可读' }, /getAllDeptPaths.*1.*627.*路径不可读/],
+    ['部门链无效', 'getAllDeptPaths', { code: 0, data: [{}] }, /getAllDeptPaths.*1.*路径/],
+  ])('%s拒绝完整成功', async (_title, method, response, error) => {
+    await expect(groupOps({ [method]: response }).getGroupMembers('793803')).rejects.toThrow(error);
+  });
+
+  it('后一成员档案失败不返回前一成员', async () => {
+    const ops = nativeOrg(({ args: [method, value] }) => {
+      if (method === 'getSessionBySessionID') return { code: 0, data: { id: 793803, type: 1, typeID: 29467 } };
+      if (method === 'getGroupsAllMembers') return { code: 0, data: [{ id: 1 }, { id: 2 }] };
+      if (method === 'getAllDeptPaths') return { code: 0, data: [] };
+      if (method === 'getMemberDetail') return value === 1 ? { code: 0, data: { id: 1 } } : { code: 627, error: '第二人不可读' };
+      throw new Error('不应执行其他操作');
+    });
+    await expect(ops.getGroupMembers('793803')).rejects.toThrow(/getMemberDetail.*2.*627.*第二人不可读/);
+  });
+
+  it('最后部门查询到期也不能返回全员成功', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const ops = nativeOrg(({ args: [method, value] }) => {
+      if (method === 'getSessionBySessionID') return { code: 0, data: { id: 793803, type: 1, typeID: 29467 } };
+      if (method === 'getGroupsAllMembers') return { code: 0, data: [{ id: 1 }] };
+      if (method === 'getMemberDetail') return { code: 0, data: { id: value } };
+      if (method === 'getAllDeptPaths') { vi.setSystemTime(1030); return { code: 0, data: [] }; }
+      throw new Error('不应执行其他操作');
+    });
+    await expect(ops.getGroupMembers('793803', 30)).rejects.toThrow(/getAllDeptPaths.*1.*超时/);
+  });
+
+  it('非法会话或期限在原生访问前拒绝', async () => {
+    const ops = nativeOrg(() => { throw new Error('不应访问原生'); });
+    for (const id of ['', '测试123', '0', '-1', '1.5', '9007199254740992']) await expect(ops.getGroupMembers(id)).rejects.toThrow(/会话.*ID/);
+    for (const timeout of [0, -1, NaN, Infinity]) await expect(ops.getGroupMembers('793803', timeout)).rejects.toThrow(/期限/);
+  });
+});

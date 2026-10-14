@@ -23,6 +23,7 @@ import type {
   KK9ChatRecordOptions,
   KK9Employee,
   KK9EmployeeSearchResult,
+  KK9GroupMember,
   KK9FileInfo,
   KK9ImageInfo,
   KK9Message,
@@ -436,6 +437,11 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   /** 只读搜索当前账号可见人员；内部全分页，不判断唯一或保存候选选择。 */
   public searchEmployees(keyword: string, timeoutMs?: number): Promise<KK9EmployeeSearchResult> {
     return this.bridgeOrgOps.searchEmployees(keyword, timeoutMs);
+  }
+
+  /** 指定原生群会话的全员资料；不按名称或当前窗口选择群。 */
+  public getGroupMembers(sessionId: string, timeoutMs?: number): Promise<KK9GroupMember[]> {
+    return this.bridgeOrgOps.getGroupMembers(sessionId, timeoutMs);
   }
 
   /** 原生可见组织查询；正常空不切换实现，失败抛错。 */

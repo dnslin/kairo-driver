@@ -20,11 +20,12 @@
  *   voice-file <target> <path>  将本地音频转为原生语音发送
  *   recall <msgId> <sessionId>  通过原生 IPC 撤回消息
  *   user <uid>                  按 UID 单点查询员工档案
+ *   group-members <sessionId> [timeoutMs=30000] 列出群全员ID、工号、姓名、部门、岗位
  *   org [timeoutMs=10000]       递归抽取企业组织架构全量员工
  *   listen                      启动实时事件监听 (message, at, recalled, 含图片与文件路径输出)
  */
 
-import { KK9Driver } from '../src/index.js';
+import { BridgeOrgOps, CdpClient, KK9Driver } from '../src/index.js';
 import type {
   KK9AppMsgOptions,
   KK9BizMsgOptions,
@@ -338,6 +339,29 @@ async function main() {
       break;
     }
 
+    case 'group-members': {
+      const target = requiredArgument(args[0], '原生群会话 ID');
+      const timeoutMs = args[1] === undefined ? 30000 : Number(args[1]);
+      // 只读列表无需安装Driver事件Hook，保留其他正在运行的实例。
+      const cdp = new CdpClient({ url: cdpUrl, pageMatch });
+      cdp.on('error', error => { console.error('群成员查询连接异常:', error); process.exitCode = 1; });
+      try {
+        await cdp.connect();
+        const members = await new BridgeOrgOps(cdp).getGroupMembers(target, timeoutMs);
+        console.log(`群会话 ${target} 共 ${members.length} 人（KK9原生名单，不保证服务器最新快照）`);
+        console.table(members.map(member => ({
+          ID: member.id,
+          工号: member.loginName ?? '未提供',
+          姓名: member.name ?? '未提供',
+          部门: member.departmentPaths?.join('；') ?? '未提供',
+          岗位: member.position ?? '未提供',
+        })));
+      } finally {
+        await cdp.disconnect();
+      }
+      break;
+    }
+
     case 'org': {
       const timeoutMs = parseInt(args[0] || '10000', 10);
       await driver.connect();
@@ -420,6 +444,7 @@ async function main() {
 
 【组织架构与通讯录】
   user <uid>                      单点查询员工详细档案
+  group-members <sessionId> [timeoutMs=30000] 列出指定群全部成员的五类资料
   org [timeoutMs=10000]           递归抽取企业组织架构全量员工列表
 
 【实时监听】

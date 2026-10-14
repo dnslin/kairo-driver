@@ -1,5 +1,5 @@
 import type { CdpClient } from '../cdp/client.js';
-import type { KK9Employee, KK9EmployeeSearchItem, KK9EmployeeSearchResult } from '../types/index.js';
+import type { KK9Employee, KK9EmployeeSearchItem, KK9EmployeeSearchResult, KK9GroupMember } from '../types/index.js';
 import { parseEmployee } from '../utils/employee.js';
 import { callIpcToData } from './rpc.js';
 import { DriverError } from '../utils/errors.js';
@@ -24,6 +24,52 @@ function profileText(value: unknown, context: string): string | null {
   if (typeof value !== 'string') throw new DriverError(`${context} 不是字符串`, 'IPC_INVALID_RESPONSE');
   return value.trim() ? value : null;
 }
+
+type OrgQuery = (method: string, args: unknown[], context: string) => Promise<unknown>;
+
+/** 两种全量查询共用总期限，包含原生等待和CDP等待。 */
+function createOrgQuery(cdp: CdpClient, timeoutMs: number, operation: string): OrgQuery {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new DriverError(`${operation}期限必须为有限正数，零期限已超时`, 'IPC_QUERY_FAILED');
+  const deadline = Date.now() + timeoutMs;
+  return async (method, args, context) => {
+    try {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`${operation}超时 (${timeoutMs}ms)`);
+      const result = await callIpcToData(cdp, method, args, Math.min(4000, remaining), remaining);
+      if (result.code !== 0) throw new Error(`失败 (${result.code}): ${result.error || result.message || ''}`);
+      if (Date.now() >= deadline) throw new Error(`${operation}超时 (${timeoutMs}ms)`);
+      return result.data;
+    } catch (error) {
+      throw new DriverError(`${operation} ${method} ${context}: ${String(error)}`, 'IPC_QUERY_FAILED', error instanceof Error ? error : undefined);
+    }
+  };
+}
+
+/** 搜索和群成员均从准确档案读取真实字段，部门独立取全部可见链。 */
+async function readEmployeeDetails(query: OrgQuery, uid: number): Promise<{ employee: KK9EmployeeSearchItem; profile: Record<string, unknown> }> {
+  const profile = await query('getMemberDetail', [uid], `UID ${uid}`);
+  if (!profile || typeof profile !== 'object' || !('id' in profile)) throw new DriverError(`getMemberDetail UID ${uid} 档案缺席或无效`, 'IPC_INVALID_RESPONSE');
+  if (searchUid(profile.id) !== uid) throw new DriverError(`getMemberDetail UID ${uid} 档案 UID 不符`, 'IPC_INVALID_RESPONSE');
+  const record = profile as Record<string, unknown>;
+  const name = profileText(record['name'], `getMemberDetail UID ${uid} 姓名`);
+  const loginName = profileText(record['login_name'], `getMemberDetail UID ${uid} login_name`);
+  const departments = await query('getAllDeptPaths', [uid], `UID ${uid}`);
+  if (!Array.isArray(departments)) throw new DriverError(`getAllDeptPaths UID ${uid} 未返回部门数组`, 'IPC_INVALID_RESPONSE');
+  const departmentRows: unknown[] = departments;
+  const paths = new Set<string>();
+  for (const department of departmentRows) {
+    if (!department || typeof department !== 'object' || !('deptPaths' in department) || !Array.isArray(department.deptPaths)) throw new DriverError(`getAllDeptPaths UID ${uid} 部门路径无效`, 'IPC_INVALID_RESPONSE');
+    const nodes: unknown[] = department.deptPaths;
+    const names: string[] = [];
+    for (const node of nodes) {
+      if (!node || typeof node !== 'object' || !('name' in node) || typeof node.name !== 'string' || !node.name.trim()) throw new DriverError(`getAllDeptPaths UID ${uid} 部门路径名称缺失或无效`, 'IPC_INVALID_RESPONSE');
+      names.push(node.name);
+    }
+    if (names.length) paths.add(names.join(' / '));
+  }
+  return { employee: { id: String(uid), name, loginName, departmentPaths: paths.size ? [...paths] : null }, profile: record };
+}
+
 export class BridgeOrgOps {
   constructor(private readonly cdp: CdpClient) {}
 
@@ -31,20 +77,7 @@ export class BridgeOrgOps {
   public async searchEmployees(keyword: string, timeoutMs = 30000): Promise<KK9EmployeeSearchResult> {
     const kwd = keyword.trim();
     if (!kwd) throw new DriverError('人员搜索关键词不能为空', 'IPC_QUERY_FAILED');
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new DriverError('人员搜索期限必须为有限正数，零期限已超时', 'IPC_QUERY_FAILED');
-    const deadline = Date.now() + timeoutMs;
-    const query = async (method: string, args: unknown[], context: string): Promise<unknown> => {
-      try {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) throw new Error(`人员搜索超时 (${timeoutMs}ms)`);
-        const result = await callIpcToData(this.cdp, method, args, Math.min(4000, remaining), remaining);
-        if (result.code !== 0) throw new Error(`失败 (${result.code}): ${result.error || result.message || ''}`);
-        if (Date.now() >= deadline) throw new Error(`人员搜索超时 (${timeoutMs}ms)`);
-        return result.data;
-      } catch (error) {
-        throw new DriverError(`${method} ${context}: ${String(error)}`, 'IPC_QUERY_FAILED', error instanceof Error ? error : undefined);
-      }
-    };
+    const query = createOrgQuery(this.cdp, timeoutMs, '人员搜索');
 
     const uids = new Set<number>();
     for (let pageNo = 1; ; pageNo++) {
@@ -62,28 +95,41 @@ export class BridgeOrgOps {
 
     const employees: KK9EmployeeSearchItem[] = [];
     for (const uid of uids) {
-      const profile = await query('getMemberDetail', [uid], `UID ${uid}`);
-      if (!profile || typeof profile !== 'object' || !('id' in profile)) throw new DriverError(`getMemberDetail UID ${uid} 档案缺席或无效`, 'IPC_INVALID_RESPONSE');
-      if (searchUid(profile.id) !== uid) throw new DriverError(`getMemberDetail UID ${uid} 档案 UID 不符`, 'IPC_INVALID_RESPONSE');
-      const name = profileText('name' in profile ? profile.name : null, `getMemberDetail UID ${uid} 姓名`);
-      const loginName = profileText('login_name' in profile ? profile.login_name : null, `getMemberDetail UID ${uid} login_name`);
-      const departments = await query('getAllDeptPaths', [uid], `UID ${uid}`);
-      if (!Array.isArray(departments)) throw new DriverError(`getAllDeptPaths UID ${uid} 未返回部门数组`, 'IPC_INVALID_RESPONSE');
-      const departmentRows: unknown[] = departments;
-      const paths = new Set<string>();
-      for (const department of departmentRows) {
-        if (!department || typeof department !== 'object' || !('deptPaths' in department) || !Array.isArray(department.deptPaths)) throw new DriverError(`getAllDeptPaths UID ${uid} 部门路径无效`, 'IPC_INVALID_RESPONSE');
-        const nodes: unknown[] = department.deptPaths;
-        const names: string[] = [];
-        for (const node of nodes) {
-          if (!node || typeof node !== 'object' || !('name' in node) || typeof node.name !== 'string' || !node.name.trim()) throw new DriverError(`getAllDeptPaths UID ${uid} 部门路径名称缺失或无效`, 'IPC_INVALID_RESPONSE');
-          names.push(node.name);
-        }
-        if (names.length) paths.add(names.join(' / '));
-      }
-      employees.push({ id: String(uid), name, loginName, departmentPaths: paths.size ? [...paths] : null });
+      const { employee } = await readEmployeeDetails(query, uid);
+      employees.push(employee);
     }
     return { employees, hasMore: false };
+  }
+
+  /** 群会话ID与群对象ID分离；处理原生返回的全员，不截断或用展示字段补真实资料。 */
+  public async getGroupMembers(sessionId: string, timeoutMs = 30000): Promise<KK9GroupMember[]> {
+    const id = searchUid(sessionId.trim());
+    if (id === null) throw new DriverError(`原生群会话 ID 无效: ${sessionId}`, 'INVALID_SESSION_ID');
+    const query = createOrgQuery(this.cdp, timeoutMs, `群成员查询 会话 ${id}`);
+    const session = await query('getSessionBySessionID', [id], `会话 ${id}`);
+    if (!session || typeof session !== 'object' || !('id' in session) || searchUid(session.id) !== id) {
+      throw new DriverError(`getSessionBySessionID 会话 ${id} 不存在或返回其他会话`, 'IPC_INVALID_RESPONSE');
+    }
+    const groupId = 'typeID' in session ? searchUid(session.typeID) : null;
+    if (!('type' in session) || session.type !== 1 || groupId === null) {
+      throw new DriverError(`getSessionBySessionID 会话 ${id} 不是有效原生群会话`, 'INVALID_SESSION_ID');
+    }
+    const data = await query('getGroupsAllMembers', [groupId], `会话 ${id} 群 ${groupId}`);
+    if (!Array.isArray(data)) throw new DriverError(`getGroupsAllMembers 会话 ${id} 群 ${groupId} 未返回成员数组`, 'IPC_INVALID_RESPONSE');
+    const members: unknown[] = data;
+    const uids = new Set<number>();
+    for (const member of members) {
+      const uid = member && typeof member === 'object' && 'id' in member ? searchUid(member.id) : null;
+      if (uid === null) throw new DriverError(`getGroupsAllMembers 会话 ${id} 群 ${groupId} 成员缺少有效 UID`, 'IPC_INVALID_RESPONSE');
+      uids.add(uid);
+    }
+    const result: KK9GroupMember[] = [];
+    for (const uid of uids) {
+      const { employee, profile } = await readEmployeeDetails(query, uid);
+      const position = profileText(profile['pos'], `getMemberDetail UID ${uid} 岗位`);
+      result.push({ ...employee, position });
+    }
+    return result;
   }
 
   /** 从原生可见根部门分页遍历；任何中断都抛错，不返回部分全量。 */
