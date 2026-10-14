@@ -157,7 +157,7 @@ async function sendToSession(targetSessionId: string, text: string) {
 
 ### astrbot_plugin_kairo 接入
 
-插件固定的 `8208e78b1134484f8b374edb33ee2d595e624591` / Driver 2.0.1 不包含本节的新能力。接入时更新准备脚本固定的源码提交、vendor 目录依赖和锁文件，继续应用现有两份音频补丁；本次未修改插件仓库，也未发布新标签或 npm 包。
+本节跨机器接入说明最初针对插件固定的 `8208e78b1134484f8b374edb33ee2d595e624591` / Driver 2.0.1 编写；当前文字语音修复所需的源码提交、依赖锁文件及音频补丁同步见下文语音说明。本次未修改插件仓库，也未发布新标签或 npm 包。
 
 发送侧 `bridge/src/bridge.ts` 的 `sendImage(file)`、`sendFile(file)` 和 `sendVoice({ filePath: file })` 调用形状不变，`file` 继续是插件下载到 Linux 的文件；保持原生目标与稳定 `operationId`。接收侧 `attachments.ts` 不再对消息中的 Windows 路径做本地读取、`attachmentRoots` 扫描或路径转换：图片调用 `downloadImage`，普通文件调用 `saveFile`，成功后仍由插件上传到 AstrBot。`Pick<IKK9Driver, 'downloadImage'>` 在需要保存文件的接收入口扩为 `Pick<IKK9Driver, 'downloadImage' | 'saveFile'>`。
 
@@ -198,7 +198,7 @@ async function sendDownloadedFile(
 
 接收失败应沿用插件的逐项 `attachment_error` 处理，不把不存在的本地路径当上传成功；不要仅因 `getOriginalImageUri()` 为空就提前拒绝仍有准确原图缓存的图片。普通文件未缓存时仍报告当前限制，不让插件直接调用 CDP 或猜测 KK 下载接口。
 
-文件语音继续在 Driver 机器读取 WAV/MP3、解码和重采样，通过 CDP 传 PCM 给 Windows 的 AMR 编码器；发送内容内联携带 AMR，不改为临时上传文件，也不支持任意音频格式。文字语音由 Driver 机器访问 Edge TTS，遵循下文代理规则。Linux 到 Windows 的真实文件语音编码已通过；本轮文字 TTS 返回 HTTP 403，不能把编码通过当作文字合成、消息送达或接收端播放通过。完整验证范围见 [远程附件验收](docs/KK9-STARTUP.md#linux-driver--windows-kk9-跨机器附件验证)。
+文件语音继续在 Driver 机器读取 WAV/MP3、解码和重采样，通过 CDP 传 PCM 给 Windows 的 AMR 编码器；发送内容内联携带 AMR，不改为临时上传文件，也不支持任意音频格式。文字语音由 Driver 机器访问 Edge TTS，遵循下文代理规则。跨机器附件阶段的文字 TTS 曾返回 HTTP 403；现已采用经真实合成验证的 SDK 新端点修复，见[独立文字语音验收](docs/KK9-STARTUP.md#edge-tts-403-修复与独立合成验收)。合成与编码成功不代表消息送达或接收端播放通过。
 
 ### 只读人员搜索
 
@@ -275,6 +275,10 @@ await driver.sendReply(
 
 文本语音合成读取运行 Driver 的 Node 进程环境变量：优先非空 `HTTPS_PROXY`，其次非空 `HTTP_PROXY`，首尾空白会移除；两者均未配置时保持 SDK 既有直连网络行为。指定代理失败保留 `VOICE_TTS_FAILED` 及原因，不回退直连。不会自动继承 AstrBot 的代理配置，也不读取 Windows 系统代理、`ALL_PROXY` 或新增 KK 配置；Windows 下需由启动终端或服务为该 Node 进程提供环境变量，设置示例见 [语音验证](docs/KK9-STARTUP.md#卡片与语音验证)。
 
+当前锁定 `node-edge-tts@1.2.11`，使用上游的 `api.msedgeservices.com/tts/cognitiveservices/websocket/v1` 和 `Ocp-Apim-Subscription-Key`；该发布包仍采用 Sec-MS-GEC v1，但已在现有代理下真实合成成功，并非自行实现或回放 v2 token。旧版本的超时、代理连接取消与资源关闭补丁已移植到 `patches/node-edge-tts@1.2.11.patch`。
+
+插件当前固定 `1c4223fee51296ff68aa8f18b98d406bcdd800c8`，不含此修复。接入时将源码提交固定到包含本次修复的 Driver 提交，同步 vendor、依赖与锁文件；消费项目的 `patchedDependencies` 改为 `node-edge-tts@1.2.11` 及其新补丁，删除旧 `1.2.10` 配置，保留 `@audio/decode-wav@1.5.0` 补丁。仅升级 SDK、不移植资源清理补丁不算完整升级。准确修复 SHA 以 Git 提交记录为准；不使用现有版本号或旧提交冒充修复版本，不修改插件或生产服务。
+
 `sendUrlCard({ title, summary, linkUrl, picUrl? }, options)` 使用原生链接字段；可不传图片，SDK 不伪造图片已下载或有效。`sendAppMessage({ title, content, linkUrl?, pcAppCode? }, options)` 的正文为原生 HTML；普通通知不要求应用编号，不要填造出的应用码。特定应用的打开能力须使用其真实配置。
 
 `sendBizMessage` 必须显式提供 `bizType: 1 | 2`（任务/日程展示样式）与 `bizUrl`。`bizUrl` 是相对于客户端 `ekp_outer_domain` 的路径，不是完整外部网址。该接口只发送通知，不创建真实业务对象；点击详情还依赖接收端实际业务站点配置。
@@ -302,12 +306,14 @@ await driver.sendChatRecord({
 
 ## 未发布变更
 
+- 修复：锁定经真实合成验证的 `node-edge-tts@1.2.11` 新服务端点，移植仍需要的超时、代理 CONNECT 取消及文件/WebSocket 清理补丁；代理优先级、KK 编码和发送防重不变。
+- 验证：语音相关54项通过；独立真实 MP3 解码4.176秒，最终 Driver 经 KK9 AMR 编码/回解4.18秒、有声、无聊天操作。构建、类型检查与lint通过；全套 `pnpm check` 被已有人员搜索工作区测试的定时器断言阻断，详情见开发说明。
 - 新增：`searchEmployees` 只读人员搜索，内部全分页、UID去重、真实工号和所有可见部门路径；失败不返回部分结果，不负责对话或选择状态。
 - 修复：人员搜索的剩余总期限同时约束CDP等待；只读专项的双连接故障进入退出流程，按本代归属清理资源，并分别保留原生首错及清理错误。
 - 新增：图片和普通文件通过现有 CDP 分块传输，统一采用 Driver 本机输入路径，无需 Windows 桥接或共享磁盘。
 - 修复：`downloadImage` 将准确原图保存到 Driver 本机，不再对 Windows 内部路径做宿主文件操作；新增 `saveFile` 保存已有缓存普通附件。
 - 保持：本地 CDP、原图选择、发送防重及 `sent/failed/unknown` 语义；语音继续采用既有数据传输，不新增连接框架、依赖或自动重试。
-- 验证：人员搜索评审修复后完整检查38文件505项通过，1项既有Linux专属用例在Windows跳过；授权真机只读专项通过。既有Linux → Windows 100 MiB文件往返、准确原图缓存保存与WAV/MP3编码结果，以及TTS 403、真实消息发送/原生云端原图下载及接收端播放未验收项，仍见启动说明；本轮未重跑这些真机媒体场景。
+- 历史验证（人员搜索阶段）：人员搜索评审修复后完整检查38文件505项通过，1项既有Linux专属用例在Windows跳过；授权真机只读专项通过。既有Linux → Windows 100 MiB文件往返、准确原图缓存保存与WAV/MP3编码结果，以及当时TTS 403、真实消息发送/原生云端原图下载及接收端播放未验收项，仍见启动说明；该阶段未重跑这些真机媒体场景。
 
 ## 2.0.1 变更记录
 

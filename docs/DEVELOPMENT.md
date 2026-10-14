@@ -415,3 +415,32 @@ README 的插件 TypeScript 示例另用 TypeScript 编译器内存 Program、No
 授权真机专项从公开ESM入口运行通过，3583/kairo搜索董仕林5761；运行ID `fb86b55f-ed14-489f-a0e3-1242510874d6`。每个搜索方法各一次，与独立原生全分页、真实工号和全部可见部门一致；会话793803/816219、读索引181/20、窗口816219不变，实时事件0；退出监听回1，自有Hook、binding、观察器、探针均无残留，在途0，两连接退出、exit0。首次运行因已有其他代桥接而拒绝接管，失败报告保留；后续独立观察发现原桥接已不存在后才重新运行，本轮未清除原桥接，其退出来源未核实。详见启动记录。
 
 真实单连接失联、异步error和期限故障没有在KK9上制造，这些分支由隔离行为回归覆盖；真机只证明本次账号的正常只读搜索和退出。临时烟测脚本已移除，保留必要JSON证据；没有发送、撤回、创建会话、标已读、提交、推送或合并。
+
+## Edge TTS 403 协议修复
+
+调查开始时依据远端 main `1c4223fee51296ff68aa8f18b98d406bcdd800c8` 与实际源码；保留当时人员搜索分支及已有工作区修改，调查验收阶段没有切分支、提交、推送或修改插件。未重新请求旧版服务确认已报告的403。后续按用户授权提交本次TTS修复，准确SHA以Git提交记录为准；人员搜索修改不纳入本次修复提交。
+
+### 原因与选择
+
+已确认代理确实承载旧服务请求，因此本次不是代理未生效。上游 [#490](https://github.com/rany2/edge-tts/issues/490) 记录旧端点与v1握手被拒；[#492](https://github.com/rany2/edge-tts/pull/492) 提供v2算法。实际检查 [node-edge-tts 1.2.11发布包](https://registry.npmjs.org/node-edge-tts/1.2.11) 的 `dist/drm.js` 与 `dist/edge-tts.js`：它未实现v2，而是把服务改为 `api.msedgeservices.com/tts/cognitiveservices/websocket/v1`，键参数改为 `Ocp-Apim-Subscription-Key`，移除旧Host覆盖。该路径与上游 [#491的新端点方案](https://github.com/rany2/edge-tts/pull/491) 一致；#491后来被#492替代，不代表当前Node发布包已采用#492。
+
+原始1.2.11发布包先在桥接机器172.16.3.76、既有 `http://127.0.0.1:7897` 代理下独立合成成功：25056字节MP3、24000Hz、100224采样、4.176秒、RMS 0.11202324327109202。因此采用最小且已经实测的Node SDK修复，不移植Python实现、不添加v2算法、临时token、新引擎、子进程、重试或备用端点。此证据只证明当前服务可接受该上游协议，不承诺服务今后继续接受v1。
+
+### 实现与消费方同步
+
+- `package.json` 精确锁定 `node-edge-tts: 1.2.11`，更新锁文件的SDK版本、包完整性与补丁哈希，其他依赖版本保持原样。
+- `patches/node-edge-tts@1.2.11.patch` 移植原有握手/整轮期限、代理底层AbortSignal取消、文件流和WebSocket关闭、错误传播及晚到消息隔离；保留1.2.11上游端点、元数据解析和未使用的流式接口。删除旧1.2.10补丁，更新 `pnpm-workspace.yaml`；WAV补丁不变。
+- `voice-ops.ts`、消息提交、公开类型与调用形状均不改：`HTTPS_PROXY`优先、`HTTP_PROXY`其次、空白trim、未配置直连、指定代理失败不回退；30秒合成期限、临时文件清理、MP3/WAV解码、8kHz重采样、KK9内置AMR编码、取消后不提交及operationId防重继续使用原路径。
+- 新增 `examples/verify-tts.ts`：使用本轮构建的真实语音准备实现和独立CdpClient，只合成、编码/回解和检查声音/时长；不创建Driver、不调用聊天IPC或清理既有Hook。
+
+插件须将当前固定提交 `1c4223fee51296ff68aa8f18b98d406bcdd800c8` 换成包含本次修改的Driver提交，准确修复SHA以Git提交记录为准。同步准备脚本、vendor、依赖与锁文件，并在消费项目配置 `node-edge-tts@1.2.11: patches/node-edge-tts@1.2.11.patch`，移除旧1.2.10条目，继续配置 `@audio/decode-wav@1.5.0` 补丁；源码包不会替消费项目自动应用补丁。仅替换版本号或仅保留旧SHA不能取得完整修复。
+
+### 实际验证与未通过项
+
+新增本地真实HTTP/WebSocket协议回归：仅接受新Host、路径及订阅键，完成实际SDK握手并写出音频；旧依赖先返回本地401，升级后通过，没有访问旧外部端点。代理回归更新为真实CONNECT到新Host，继续检查只选指定代理、失败不直连。`pnpm exec vitest run tests/voice-ops.test.ts tests/node-edge-tts-boundary.test.ts tests/native-media.test.ts` 的3文件54项全部通过，涵盖现有超时、连接关闭、错误、临时文件、编码、取消及防重。
+
+`pnpm install --frozen-lockfile` 成功。首次更新安装额外解析了pino-pretty和@types/ws的新版本；重新生成仅变更Edge的锁文件并冻结安装，已恢复这两个依赖及其原依赖图，未保留无关升级。
+
+两次 `pnpm check` 均通过build/typecheck，测试均为505通过、1失败、1跳过，未到lint；失败都位于已有工作区 `tests/bridge-search-deadline.test.ts:108` 的 `vi.getTimerCount() === 0`，实际为1，分别出现在getAllDeptPaths/unionSearch分支。没有修改该人员搜索测试、相关源码或断言，也不把全套check记为通过。另行 `pnpm lint` 首次指出新增握手回归的多余类型断言和RawData解码问题；修正后再次 `pnpm lint` 全部通过。LSP初始化仍退出code0，未把导航失败写为成功。
+
+最终Driver真实独立合成/KK9编码与回解成功：4395字节AMR、33440采样、实际4.18秒、显示5秒、RMS 0.1094697409780753。已有生产Hook前后均存在，脚本没有接管或释放它；独立CDP退出。准确命令与边界见[启动说明](KK9-STARTUP.md#edge-tts-403-修复与独立合成验收)。没有发送聊天消息、重启服务、改生产环境或把此结果当作接收端播放验收。

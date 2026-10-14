@@ -683,3 +683,23 @@ pnpm exec tsx examples/verify-native-employee-search.ts 3583 kairo 董仕林 576
 在已观察到空闲桥接基线后，重新执行上述完整专项，通过。运行ID `fb86b55f-ed14-489f-a0e3-1242510874d6`，报告 `tmp/employee-search-live-evidence.json`。搜索期间unionSearch/getMemberDetail/getAllDeptPaths各一次；全部原生可见结果、档案和部门链一致，hasMore=false。会话793803/816219及已读索引181/20、窗口816219不变，message/at/recalled均0。退出message监听1、自有Hook/binding/观察器/探针均false、在途0，两个CDP断开、exit0。
 
 专项现在分开记录原始查询失败与清理失败；独立CDP异步error也进入退出路径，Driver单连接失联时只清理仍归本代的远端资源。真实KK9故障未人为制造，不把隔离的10项入口故障/门禁回归和4项真实本地CDP期限回归称为真机故障验收；本轮没有发送、撤回、建会话或标已读操作。
+
+## Edge TTS 403 修复与独立合成验收
+
+本节更新旧记录中的文字TTS阻断结论，不改写历史失败。KK9为Windows `172.16.0.18:9222`，Driver独立进程运行于Windows `172.16.3.76`（LHGD241029099），Node v24.14.0、pnpm11.19.0。只使用本进程的现有代理地址，不改Mihomo规则、节点或生产进程环境。
+
+先用原始 `node-edge-tts@1.2.11` 发布包进行无补丁真实合成，MP3解码为24kHz、100224采样、4.176秒，证明上游新端点方案在当前代理下确实可用。随后精确锁定1.2.11并移植仍需要的资源清理补丁；该SDK仍使用v1，不将版本升级描述为已经实现v2。
+
+修复后复用 `pnpm check` 已完成的build产物执行：
+
+```cmd
+cmd /d /c "set HTTPS_PROXY=http://127.0.0.1:7897&& set CDP_URL=http://172.16.0.18:9222&& set NODE_ENV=production&& set LOG_LEVEL=warn&& pnpm exec tsx examples/verify-tts.ts"
+```
+
+`examples/verify-tts.ts` 仅创建独立CdpClient，通过构建后的 `prepareVoice({text})` 完成真实Edge MP3合成、解码、重采样和远端KK9内置AMR编码；再独立调用真实AMR解码器，检查有限采样、有声和时长。无需登录身份/会话发送门禁，因为不读取聊天、不创建Driver、不调用聊天IPC、不发送或撤回消息，也不安装或接管Hook。此脚本不能替代有身份门禁的发送专项。
+
+实际输出：AMR 4395字节、33440采样、4.18秒、显示5秒、RMS 0.1094697409780753、耗时3842毫秒。现场原有生产Hook存在，前后状态一致；没有执行其清理函数，独立CDP已断开，退出0。原始SDK探测音频目录及一次性脚本随后清理；Driver的TTS临时目录继续由原实现自动删除，成功/失败清理由行为回归覆盖。
+
+没有重试旧版403、发送测试消息、接管生产Hook、重启KK9/桥接/AstrBot或改变生产环境。这里证明合成和编码产物可解码且有有效声音/时长，不证明消息送达、接收端播放或Linux本轮成功合成；之前Linux403仍保留为历史证据。
+
+语音相关3文件54项通过，build/typecheck/lint通过；全套 `pnpm check` 因当时已有人员搜索工作区测试的定时器数量断言失败，未宣称完整检查通过。原因、补丁和插件同步要求见[开发说明](DEVELOPMENT.md#edge-tts-403-协议修复)。后续按用户授权提交修复，准确SHA以Git提交记录为准；未发布或修改插件固定提交。

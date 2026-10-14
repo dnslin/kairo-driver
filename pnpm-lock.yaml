@@ -4,7 +4,7 @@ settings:
   excludeLinksFromLockfile: false
 patchedDependencies:
   '@audio/decode-wav@1.5.0': 2b2a7dc402f58f9c699172f49ebf0f696ba70680b4799445cf85e75be321b378
-  node-edge-tts@1.2.10: 6a0571405657a00bb9119bebda924f5551329ab644bcd4e79b926d895d97e941
+  node-edge-tts@1.2.11: 48c6ab67ae614c6bd128c6d954498e00e4f57b0574499d6992c2207afc466e43
 importers:
   .:
     dependencies:
@@ -18,8 +18,8 @@ importers:
         specifier: ^3.0.2
         version: 3.0.2
       node-edge-tts:
-        specifier: ^1.2.10
-        version: 1.2.10(patch_hash=6a0571405657a00bb9119bebda924f5551329ab644bcd4e79b926d895d97e941)(supports-color@7.2.0)
+        specifier: 1.2.11
+        version: 1.2.11(patch_hash=48c6ab67ae614c6bd128c6d954498e00e4f57b0574499d6992c2207afc466e43)(supports-color@7.2.0)
       pino:
         specifier: ^9.6.0
         version: 9.14.0
@@ -1375,9 +1375,9 @@ packages:
   natural-compare@1.4.0:
     resolution:
       integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==
-  node-edge-tts@1.2.10:
+  node-edge-tts@1.2.11:
     resolution:
-      integrity: sha512-bV2i4XU54D45+US0Zm1HcJRkifuB3W438dWyuJEHLQdKxnuqlI1kim2MOvR6Q3XUQZvfF9PoDyR1Rt7aeXhPdQ==
+      integrity: sha512-u+sekYUq+Y0JbNt12tOAK3J+iwT8NaGGbIdx2dtX+n7QSXT5YGCIUqZL58UK4YbpvpRjKI0PtQFwDKwcs1uC/A==
     hasBin: true
   on-exit-leak-free@2.1.2:
     resolution:
@@ -2430,7 +2430,7 @@ snapshots:
   ms@2.1.3: {}
   nanoid@3.3.11: {}
   natural-compare@1.4.0: {}
-  node-edge-tts@1.2.10(patch_hash=6a0571405657a00bb9119bebda924f5551329ab644bcd4e79b926d895d97e941)(supports-color@7.2.0):
+  node-edge-tts@1.2.11(patch_hash=48c6ab67ae614c6bd128c6d954498e00e4f57b0574499d6992c2207afc466e43)(supports-color@7.2.0):
     dependencies:
       https-proxy-agent: 7.0.6(supports-color@7.2.0)
       ws: 8.21.3

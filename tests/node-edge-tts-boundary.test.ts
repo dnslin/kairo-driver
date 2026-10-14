@@ -8,7 +8,7 @@ import path from 'node:path';
 import tls, { type ConnectionOptions } from 'node:tls';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EdgeTTS } from 'node-edge-tts';
-import type { WebSocket } from 'ws';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { prepareVoice } from '../src/bridge/voice-ops.js';
 import type { CdpClient } from '../src/cdp/client.js';
 
@@ -133,6 +133,56 @@ afterEach(async () => {
 });
 
 describe('node-edge-tts 依赖边界', () => {
+  it('使用新服务地址与订阅键完成真实 WebSocket 合成，不覆盖为旧 Host', async () => {
+    const server = createHttpServer();
+    const sockets = new Set<Socket>();
+    server.on('connection', socket => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    const requests: Array<{ host: string | undefined; url: URL }> = [];
+    const websocketServer = new WebSocketServer({
+      server,
+      verifyClient(info) {
+        const url = new URL(info.req.url, 'https://api.msedgeservices.com');
+        requests.push({ host: info.req.headers.host, url });
+        return (
+          info.req.headers.host === 'api.msedgeservices.com' &&
+          url.pathname === '/tts/cognitiveservices/websocket/v1' &&
+          url.searchParams.has('Ocp-Apim-Subscription-Key') &&
+          !url.searchParams.has('TrustedClientToken')
+        );
+      },
+    });
+    const audio = await readFile(new URL('./fixtures/voice.mp3', import.meta.url));
+    websocketServer.on('connection', socket => {
+      socket.on('message', data => {
+        const bytes = Array.isArray(data)
+          ? Buffer.concat(data)
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : data;
+        if (!bytes.toString('utf8').includes('Path:ssml')) return;
+        socket.send(Buffer.concat([Buffer.from('Path:audio\r\n'), audio]));
+        socket.send('Path:turn.end');
+      });
+    });
+    const port = await listen(server);
+    vi.spyOn(tls, 'connect').mockImplementation(() => net.connect(port, '127.0.0.1'));
+    const outputPath = path.join(await createTempDirectory(), 'new-endpoint.mp3');
+    try {
+      await new EdgeTTS({ timeout: 1000 }).ttsPromise('新协议端点验证', outputPath);
+      expect(await readFile(outputPath)).toEqual(audio);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.url.searchParams.get('Sec-MS-GEC')).toBeTruthy();
+      expect(requests[0]!.url.searchParams.get('Sec-MS-GEC-Version')).toBeTruthy();
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => websocketServer.close(() => resolve()));
+      await closeServer(server);
+    }
+  });
+
   it('连接握手挂起时按 deadline 终止真实 WebSocket 底层连接', async () => {
     let markAccepted = (_socket: Socket): void => {};
     const accepted = new Promise<Socket>(resolve => {
@@ -297,7 +347,7 @@ describe('prepareVoice 文本合成代理路由', () => {
         originalCause: { message: expect.stringContaining('502') },
       });
 
-      expect(selected.requests).toEqual(['speech.platform.bing.com:443']);
+      expect(selected.requests).toEqual(['api.msedgeservices.com:443']);
       expect(secondary.requests).toEqual([]);
       expect(blockedConnections).toEqual([]);
       expect(cdp.evaluate).not.toHaveBeenCalled();
