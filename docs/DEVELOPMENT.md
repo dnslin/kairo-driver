@@ -25,6 +25,8 @@ pnpm check
 
 构建先清除自身生成目录，避免已删除的DOM实现残留在产物中。`pnpm verify` 使用包的ESM公开入口而非源码，要求已有本轮构建；仅核对授权身份、双目标有限历史与档案、窗口/读索引/事件不变及监听退出。身份/目标配置见启动说明。
 
+当前附件路径契约以 README 的“跨机器图片与普通文件”及本文末“跨机器附件（未发布）”为准：输入与保存目标属于 Driver 机器，KK9 缓存路径仅由 Driver 在远端解释；下列旧验收中的同机路径描述仍为历史事实。
+
 ## 修改要求
 
 保持 Driver 的客户端 I/O 边界，应用层的重连监督、持久化和业务处理由调用方负责。对消息方向、原生消息 ID、发送状态、实例失效或去重的修改，应在 `tests` 中补充相应行为回归。
@@ -331,4 +333,52 @@ T12c：删除三条过时的Vue/组件历史专用诊断，保留并迁移全部
 新增「代理 CONNECT 挂起时超时必须关闭代理 TCP 连接」回归，修复前明确失败，补丁后通过。最终 `pnpm install --frozen-lockfile && pnpm check` 的安装、构建、类型检查、33 文件 410 项测试与 lint 通过；锁文件仅更新 Edge 补丁哈希，依赖版本与依赖图不变。
 
 独立 Node 进程实际运行已安装的 `EdgeTTS.ttsPromise`，本地代理接受 CONNECT 后不返回响应：得到原始 `Timed out`，代理端观察到 TCP 关闭，没有生成音频或建立外网连接。此前真实 Edge 合成及 KK9 AMR 编码/回解证据仍保留，接收端播放不因本轮检查自动视为通过；没有发送聊天消息或重启服务。
+
+
+## 跨机器附件（未发布）
+
+本次只修改 Driver，不修改 `astrbot_plugin_kairo`。只读核实插件 `bridge/src/bridge.ts` 和 `attachments.ts`：发送输入来自桥接本机下载目录，没有发现必须保留“调用者传入 KK9 机器路径”的兼容约束；接收端原先直接读取 KK9 缓存，升级调用说明在 README。未新增兼容模式、共享磁盘、Windows 服务、监听端口、依赖、连接监督或发送重试。
+
+实现与公开契约：
+
+- `src/bridge/file-transfer.ts`：256 KiB 串行 CDP 真实文件传输，每请求 10 秒；远端独占临时目录和本机同目录 `.part` 发布。发送保留合法原文件名，非法 Windows 名称明确失败；两端短读短写按实际进度完成。
+- `message-ops.ts` / `image-ops.ts`：Driver 本机文件先分块传输，Windows 临时路径才进入原生上传。保留 100 MiB 普通文件、20 MiB 图片限制，原文件名、图片原生解码及缩略图规则、防重与 `sent/failed/unknown` 不变。传输失败或传输中取消为前置失败，不创建原生草稿。
+- `attachment-ops.ts` / `driver.ts` / `types/index.ts`：`downloadImage(image, fullPath)` 优先准确原图缓存，缓存 ENOENT 才下载准确原图；新增 `saveFile(fileInfo, fullPath)` 仅保存已缓存普通文件。目标属于 Driver 本机，完整校验后原子发布；不在宿主解析 Windows 路径，不用缩略图冒充原图，不扩展普通附件原生下载。
+- `fake-driver.ts`：`setCachedFile` 注入实际缓存字节，原图下载与文件保存同样原子发布，未注入或空原图明确失败。
+- `cdp/client.ts` 无需修改：HTTP/HTTPS 发现基址与返回的 WebSocket 地址均不限制本机；原样连接真实部署提供的可达地址。失效 Driver 仍由调用方重建。
+- `voice-ops.ts` 与依赖补丁无需修改：文件在 Driver 机器读取、解码和重采样，只通过 CDP 传 PCM 给 KK9 内置 AMR 编码器；发送内联 AMR，不传本机文件路径。
+
+临时文件不能根据四秒 IPC 等待结束就删除。远端真实 `main.js` 取证确认 `sendMessageNew` 先 await 资源上传，再发送与业务回调；`sendingImgBeforeHandle` await 文件复制。SDK 原生文件 IPC 独立保留本次完成监听和读计数：超时、取消或连接失联后的 unknown 不重发，实际原生完成且租约归零后才清理。未进入原生操作的文件按 60 秒空闲回收，每块刷新；不删除原生图片缓存。即时清理失败保留错误，后台迟到清理错误写远端控制台；原生永久不回包时保留仍可能在用的资源。客户端异常退出造成的遗留目录不会由新连接猜测并强删。
+
+实际验证：
+
+1. `pnpm exec vitest run tests/remote-send.test.ts` 修复前四项全部失败，证明原生仍使用宿主路径及传输失败边界缺失。
+2. 首次五文件集成回归 80 项中 78 通过；原生无文件夹具需删除新增的预建临时文件，继续保留 ENOENT 断言；图片无效输入改为验证无原生请求，不再固定错误措辞。修正后的 `pnpm exec vitest run tests/native-media.test.ts tests/image-download.test.ts` 58 项通过。
+3. 首次 `pnpm check` 构建、类型与 451 项测试通过，lint 报清理 finally 抛错及 WebSocket 数据解码类型问题；调整为清理后统一传播错误、完整解码 RawData，不禁用规则。最终 `pnpm check` 的 build/typecheck、36 文件 451 项及 lint 全部通过。没有重复运行已知无关的测试/示例额外全量类型检查。
+4. 临时去掉临时文件清理的 readers 条件，`pnpm exec vitest run tests/remote-send.test.ts -t "迟到完成"` 两项均因文件过早删除失败；恢复同一源码后两项通过，没有保留变异。
+5. Linux Node 使用本次构建真实连接 `172.16.0.18:9222`，执行 `examples/verify-remote-files.ts --large`：100 MiB 文件真实跨机往返且 SHA256 一致，缓存原图保存与 Windows nativeImage 640×360 解码一致，所有本轮临时文件释放。命令、摘要及未验证边界见启动说明。
+
+新增或更新的行为回归集中于 `file-transfer.test.ts`、`remote-send.test.ts`、`image-download.test.ts`、`cdp-remote.test.ts` 与既有 `native-media.test.ts`；同时复用语音、生命周期和操作状态全套回归。本次没有自动提交、推送、发布或改插件的固定版本。
+
+README 的插件 TypeScript 示例另用 TypeScript 编译器内存 Program、NodeNext 严格模式和本轮 dist 声明进行检查，诊断为 0、退出码 0；没有创建或保留一次性示例文件。这仅证明示例接口类型正确，不冒充插件仓库端到端验收。
+
+### 已授权跨机器消息发送补充
+
+新增 `examples/verify-remote-send.ts`，在真实Linux Node通过构建后的公开ESM入口发送图片、普通文件和WAV文件语音。身份、对端账号、精确群ID/名/接收对象及双确认门禁均先核对；可选会话参数仅限本次已授权双目标。未知发送只查询，不新建意图重发；消息保留、不撤回或切换会话。
+
+当前 `kairo / UID3583` 向董仕林私聊816219与测试123群793803各发送三条成功，正式ID依次为137854071/073/077与137855053/055/057。两张服务器原图和两个服务器文件重新下载到Linux，与各自输入逐字节一致；两语音真实AMR回解16160采样、duration3、32364字节播放WAV与正式AMR回解一致。用户随后反馈验证通过。准确命令、索引、门禁、证据和未完成的单条防重专项见启动说明。
+
+首次验收把数据库中的语音记录误当作已经生成播放filepath，语音发送成功后资源检查失败；正常最大索引历史读取会触发原生服务器同步并生成播放缓存，按该契约只读复核已发送语音成功，没有放宽WAV一致性断言、重发或修改生产代码。随后仅补群三条。两轮退出监听/采集函数恢复，活动窗口不变、临时传输和在途为0、无Driver Hook，SDK临时文件已删除；正式媒体缓存保留。新增验收脚本ESLint通过，未重试此前403的文字TTS。
+
+### PR #17 评审问题修复
+
+- 原图规范化按字段是否提供保留 `filepath_h/uri_h` 的显式空值，不再将其丢成 `undefined`。来源选择仍由现有原图规则负责；新增原生节点→规范化→公开Driver/Fake完整回归，拒绝把已有缩略图保存成原图，并保留已有目标。
+- Linux本地输入以 `O_RDONLY | O_NONBLOCK` 打开，随后仍用描述符 `stat().isFile()` 拒绝FIFO等非普通输入；无需等待写端，也不留下检查／打开间的替换窗口。Windows继续原有只读打开。新增Linux专属真实FIFO回归，核对前置失败、无原生提交及并发断开完成；不增加重试、监督或额外配置。
+- 远端释放的统一边界通过现有日志出口发出 `warn / Driver运行异常 / errorType: driver`，`runId` 为本次传输ID，可关联仍保留的远端Map项。随后仍抛原异常，原有失败／unknown保留清理错误；已确认sent不写入不合法的error、不降级或重发。保持现有日志白名单，不输出路径或原始异常正文，不增加公开字段。公开文件和图片发送的EPERM回归核对告警、同一正式ID、防重／查询无新增，以及原生缓存保留。
+
+新增回归首次在Windows准确失败4项（两个空原图字段、两个成功发送后缺少告警），Linux用例按平台跳过。最初的公开结果整对象等值断言还比较了每次新建的撤回闭包，改为核对真正的消费契约：sent、同一正式ID及仅一次原生提交；没有修改生产撤回行为。
+
+最终在Windows Node22.23、pnpm11.19运行 `pnpm check`，构建、类型检查、36文件455项测试与lint通过，1项Linux专属用例跳过。真实Debian Linux Node24.18另从本轮dist公开入口验证无写端FIFO直接失败、并发disconnect及时完成，全程未打开写端、原生IPC0，退出0；证据 `tmp/pr17-fixed-fifo.json`。未在Linux运行完整Vitest，未重新安装跨平台依赖。
+
+修复后执行 `examples/verify-remote-files.ts` 默认真机脚本：Linux输入786469字节经CDP传到Windows并保存回Linux，SHA256 `d1679c45335f37b8acdcdf92749e13f4c18c54b71cf17e0b097c90cc83f6763c` 一致；缓存原图640×360正确保存、本轮远端文件全部释放、消息操作0、退出0。没有向真实客户端制造EPERM或改变权限，没有重新发送六条已验收消息。
 

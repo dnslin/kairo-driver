@@ -479,8 +479,8 @@ export function normalizeNativeMessage(
                   ? 'file:///' + fp.replace(/\\/g, '/')
                   : undefined,
               uri: c['uri'] || c['uri_h'] ? toSafeString(c['uri'] || c['uri_h']) : undefined,
-              originalFilePath: c['filepath_h'] ? toSafeString(c['filepath_h']) : undefined,
-              originalUri: c['uri_h'] ? toSafeString(c['uri_h']) : undefined,
+              originalFilePath: c['filepath_h'] !== undefined ? toSafeString(c['filepath_h']) : undefined,
+              originalUri: c['uri_h'] !== undefined ? toSafeString(c['uri_h']) : undefined,
               mimeType: c['mimetype'] ? toSafeString(c['mimetype']) : 'image/png',
               width: typeof c['width'] === 'number' ? c['width'] : undefined,
               height: typeof c['height'] === 'number' ? c['height'] : undefined,

@@ -1,6 +1,6 @@
 # Kairo Driver
 
-面向 KK9 桌面客户端的 TypeScript Driver，通过本机 CDP 连接客户端，提供消息收发、会话管理和组织架构查询。
+面向 KK9 桌面客户端的 TypeScript Driver，通过本地或远程 CDP 连接客户端，提供消息收发、附件传输、会话管理和组织架构查询。Driver 可运行在 Linux，KK9 继续运行在 Windows。
 
 从 [Kairo](https://github.com/dnslin/kairo) 的 `packages/driver` 独立而来，保留包名 `@kairo/driver`。它是客户端 SDK，需要已登录的 KK9；不包含 Bot 服务、模型调用、知识库或 AstrBot 适配器。
 
@@ -25,6 +25,12 @@ pnpm lint
 ```
 
 当前按源码仓库使用，尚未发布到 npm。音频依赖的两条补丁由根目录 `pnpm-workspace.yaml` 配置；将本包安装到其他项目时，消费项目也需要配置这些补丁，安装包本身不会自动应用它们。
+
+## 远程 CDP
+
+`cdp.url` 接受可达的 HTTP/HTTPS 发现基址，例如 `http://172.16.0.18:9222`；保留路径前缀，去掉尾斜杠后追加 `/json`。不要填写 `/json`、WebSocket 地址、查询参数或片段。发现结果中的 `webSocketDebuggerUrl` 必须能从 Driver 机器访问，客户端按返回值连接，不自动改写主机、端口或 `ws/wss`。HTTPS/WSS 使用 Node 的正常证书校验。
+
+KK9 默认只监听 Windows 回环地址；通过 SSH 隧道或限定来源的 Windows 端口转发提供访问，不把无认证的 CDP 直接开放到公网。端口转发部署已真实验证返回 `ws://172.16.0.18:9222/...`，无需重写发现地址。失效实例仍须重建，应用层重连职责不变；无需在 Windows 部署桥接、HTTP 文件服务或共享磁盘。
 
 ## 接收消息
 
@@ -128,21 +134,71 @@ async function sendToSession(targetSessionId: string, text: string) {
 
 自定义 `SendOperationStore.update()` 必须在一次原子更新中保留已确认的 `sent/failed`，不能让后到的 `unknown` 清除正式 ID、业务错误或回执；返回实际保留的记录，不能先读再写实现这个约束。默认内存 Store 已执行此规则。按工号发送新增指纹字段 `targetLoginName` 和记录字段 `sessionId`，自定义 Store 必须保留它们，并把工号纳入同意图冲突比较；Store 方法未新增，不提供旧数据迁移或兼容路径。
 
-还支持图片、文件、富文本、引用回复、卡片、语音和撤回；完整方法见 [IKK9Driver](src/types/index.ts)。图片和文件路径属于运行 Driver 的机器，跨机器接入时由调用方传输实际文件。
+还支持图片、文件、富文本、引用回复、卡片、语音和撤回；完整方法见 [IKK9Driver](src/types/index.ts)。图片、普通文件和语音文件的输入路径均属于运行 Driver 的机器；Driver 自己传输图片和普通文件，不再要求调用方复制到 Windows。
 
-### 接收图片与原图下载
+### 跨机器图片与普通文件
 
-`KK9ImageInfo.originalFilePath/originalUri` 分别保留原生 `filepath_h/uri_h`，`filePath/uri` 可能是缩略图。读取收到的图片时优先使用原图字段；原图缓存不存在时调用：
+| 接口 | 路径与结果语义 |
+| --- | --- |
+| `sendImage(imagePath, options)` | 读取 Driver 本机图片，最多 20 MiB；SDK 分块传到 KK9，再由 KK9 解码、准备原图和缩略图、上传和发送。 |
+| `sendFile(filePath, options)` | 读取 Driver 本机普通文件，最多 100 MiB；SDK 分块传到 KK9，保留原文件名和扩展名，再由原生接口上传和发送。 |
+| `downloadImage(image, fullPath)` | 优先读取 KK9 的准确原图缓存；只有缓存不存在才由原生接口下载准确原图，然后保存到 Driver 本机 `fullPath`。返回本机绝对路径。 |
+| `saveFile(fileInfo, fullPath)` | 将 KK9 已缓存的普通附件保存到 Driver 本机 `fullPath`，返回本机绝对路径；未缓存明确抛 `DriverError(FILE_SAVE_FAILED)`，不新增普通文件下载协议。 |
+
+`KK9ImageInfo.filePath/originalFilePath` 和 `KK9FileInfo.filePath` 属于 KK9 机器，可能是 Windows 路径；不要在 Linux 上 `resolve/stat/readFile` 这些字段。`readImageAsBase64/saveImageToFile` 仍是纯本地工具，不提供远程文件传输；跨机器消息附件使用上述 Driver 方法。
+
+发送和接收均使用现有 CDP 连接，每块 256 KiB、串行传输、每次文件操作等待最多 10 秒，不把整份 100 MiB 文件一次编码成 Base64。Windows 临时目录由 SDK 独占创建和管理，不接受 Linux 路径作为原生文件路径。合法 Windows 文件名保持原样；无法表示的文件名会明确失败，不静默改名。
+
+上传阶段的临时文件在 60 秒空闲后回收，每块刷新期限。原生文件操作开始后保留租约：超时、取消或 `unknown` 只停止等待，不证明 KK9 已停止读取；等实际原生完成回包才删除 SDK 临时目录。正常完成和前置失败会请求清理，清理错误保留诊断；不会删除 KK9 自身的图片缓存。原生任务永久不回包时保留文件和自身监听；客户端异常退出后可能遗留临时目录，不在其他连接中猜测并强删。
+
+调用方先创建目标父目录。接收内容写入目标同目录的独占 `.part`，完整传输并检查长度、关闭文件后才重命名发布；失败不覆盖已有完整目标，清理本次部分文件。原图下载等待最多 30 秒；失败抛包含资源、路径和原始原因的 `DriverError(IMAGE_DOWNLOAD_FAILED)`。缓存保留期和接收附件应用大小限制仍由消费方负责。
+
+存在独立原图字段时不读取或下载缩略图，包括原图字段显式为空的情况；只有两个原图字段均未提供时才接受单一缓存或 `uri`。`hasOriginalImageSource/getOriginalImageUri` 继续表达相同来源规则。`FakeKK9Driver.setImageResource(uri, bytes)` 注入下载资源，`setCachedFile(kkPath, bytes)` 注入缓存；保存实际字节，未注入资源明确失败。
+
+### astrbot_plugin_kairo 接入
+
+插件固定的 `8208e78b1134484f8b374edb33ee2d595e624591` / Driver 2.0.1 不包含本节的新能力。接入时更新准备脚本固定的源码提交、vendor 目录依赖和锁文件，继续应用现有两份音频补丁；本次未修改插件仓库，也未发布新标签或 npm 包。
+
+发送侧 `bridge/src/bridge.ts` 的 `sendImage(file)`、`sendFile(file)` 和 `sendVoice({ filePath: file })` 调用形状不变，`file` 继续是插件下载到 Linux 的文件；保持原生目标与稳定 `operationId`。接收侧 `attachments.ts` 不再对消息中的 Windows 路径做本地读取、`attachmentRoots` 扫描或路径转换：图片调用 `downloadImage`，普通文件调用 `saveFile`，成功后仍由插件上传到 AstrBot。`Pick<IKK9Driver, 'downloadImage'>` 在需要保存文件的接收入口扩为 `Pick<IKK9Driver, 'downloadImage' | 'saveFile'>`。
+
+以下函数只取得插件本地文件，不承担 AstrBot 协议；调用方继续保留既有缓存复用、保留期、大小检查和上传逻辑：
 
 ```ts
-const localPath = await driver.downloadImage(message.images[0], 'D:/kairo/cache/original.png');
+import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import type { IKK9Driver, KK9Message } from '@kairo/driver';
+
+async function saveReceivedAttachments(
+  driver: Pick<IKK9Driver, 'downloadImage' | 'saveFile'>,
+  message: KK9Message,
+  cacheDirectory: string
+): Promise<{ images: string[]; file?: string }> {
+  await mkdir(cacheDirectory, { recursive: true });
+  const images: string[] = [];
+  for (const image of message.images ?? []) {
+    images.push(await driver.downloadImage(image, path.join(cacheDirectory, randomUUID())));
+  }
+  const file = message.fileInfo
+    ? await driver.saveFile(message.fileInfo, path.join(cacheDirectory, randomUUID()))
+    : undefined;
+  return { images, file };
+}
+
+async function sendDownloadedFile(
+  driver: IKK9Driver,
+  localFile: string,
+  targetSessionId: string,
+  operationId: string
+) {
+  const result = await driver.sendFile(localFile, { targetSessionId, operationId });
+  return result.status === 'unknown' ? driver.getSendStatus(operationId) : result;
+}
 ```
 
-调用方先创建目标父目录。`downloadImage(image, fullPath)` 复用 KK9 原生 `download`，等待最多 30 秒并确认目标已生成非空普通文件，成功返回绝对路径；失败抛出包含资源、路径及原生错误的 `DriverError(IMAGE_DOWNLOAD_FAILED)`。不发送消息、不切换会话，也不触发图片识别。存在原图字段时不会回退下载缩略图；只有单一 `uri` 的图片按该资源下载。文件传输、缓存保留和 20 MiB 等应用限制仍由消费方负责。
+接收失败应沿用插件的逐项 `attachment_error` 处理，不把不存在的本地路径当上传成功；不要仅因 `getOriginalImageUri()` 为空就提前拒绝仍有准确原图缓存的图片。普通文件未缓存时仍报告当前限制，不让插件直接调用 CDP 或猜测 KK 下载接口。
 
-`hasOriginalImageSource(image)` 判定独立原图字段是否存在，`getOriginalImageUri(image)` 返回可用的原图 URI；Driver、Fake 和消费方复用这两项规则。字段显式为空仍表示独立原图，不能改用缩略图。下载超时不保证原生后台任务已经取消；需要持久缓存的消费方应为每次尝试指定不同临时文件，成功后再重命名发布，避免中断文件或迟到写入污染完整缓存。
-
-`FakeKK9Driver.setImageResource(uri, bytes)` 注入图片资源，`downloadImage` 写入同样的实际字节；未注入资源会明确失败，不生成占位图片。
+文件语音继续在 Driver 机器读取 WAV/MP3、解码和重采样，通过 CDP 传 PCM 给 Windows 的 AMR 编码器；发送内容内联携带 AMR，不改为临时上传文件，也不支持任意音频格式。文字语音由 Driver 机器访问 Edge TTS，遵循下文代理规则。Linux 到 Windows 的真实文件语音编码已通过；本轮文字 TTS 返回 HTTP 403，不能把编码通过当作文字合成、消息送达或接收端播放通过。完整验证范围见 [远程附件验收](docs/KK9-STARTUP.md#linux-driver--windows-kk9-跨机器附件验证)。
 
 ### 按工号首次联系与文本通知
 
@@ -214,13 +270,20 @@ await driver.sendChatRecord({
 
 ## 运行边界
 
-- KK9 必须保持登录，CDP 端口只绑定 `127.0.0.1`。
+- KK9 必须保持登录。默认启动只绑定 `127.0.0.1`；远程部署通过受限隧道或端口转发访问，发现返回的 WebSocket 地址必须从 Driver 机器可达。
 - Driver 失效或调用 `disconnect()` 后，需要创建新实例再连接。调用方负责监听 `health`、恢复连接和安排重试；Kairo 应用原有的连接监督器没有包含在本包中。
 - Driver 依赖 KK9 客户端内部接口，客户端升级后需要验证相关收发能力。
 - `pnpm test` 是自动测试，不连接真实 KK9。真机命令会读取客户端数据，部分命令还会发送、撤回或标已读；必须限定授权身份与原生目标，操作范围见启动说明。
 - 本机菜单撤回仍保留 `event-bridge.ts` 中已验收的Vue总线、会话撤回通知、`addRevokeMsg`及组件重建用 `MutationObserver`。这些依赖尚无已证明等价的无Vue替代；它们不用于发送、历史读取或补聊天气泡。“无DOM点击自动化”不等于“无任何Vue/DOM依赖”。C3/C4现行范围的证据与本轮运行结果见[开发说明](docs/DEVELOPMENT.md#c3-逐类媒体证据收口)和[启动记录](docs/KK9-STARTUP.md#c4-最终构建入口只读验收)。
 - 原生发送不承诺当前客户端立即显示新气泡；不通过切窗口或伪造Vue刷新掩盖差异。`unknown` 只查询原意图，不直接重发。
 - `pnpm verify` 从 `@kairo/driver` 的构建后ESM入口运行授权双目标只读烟测，先运行 `pnpm build`（或已有成功的 `pnpm check`）；不会自动构建或发送。环境与输出范围见启动说明。
+
+## 未发布变更
+
+- 新增：图片和普通文件通过现有 CDP 分块传输，统一采用 Driver 本机输入路径，无需 Windows 桥接或共享磁盘。
+- 修复：`downloadImage` 将准确原图保存到 Driver 本机，不再对 Windows 内部路径做宿主文件操作；新增 `saveFile` 保存已有缓存普通附件。
+- 保持：本地 CDP、原图选择、发送防重及 `sent/failed/unknown` 语义；语音继续采用既有数据传输，不新增连接框架、依赖或自动重试。
+- 验证：完整检查 36 文件 451 项通过；真实 Linux → Windows 100 MiB 文件往返、准确原图缓存保存与 WAV/MP3 编码通过。文字 TTS 403、真实消息发送/原生云端原图下载及接收端播放尚未验收，详见启动说明。
 
 ## 2.0.1 变更记录
 

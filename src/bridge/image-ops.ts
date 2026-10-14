@@ -1,7 +1,11 @@
 import path from 'node:path';
-import { stat } from 'node:fs/promises';
+import {
+  uploadLocalFile,
+  releaseRemoteFile,
+  REMOTE_FILE_LEASE_SCRIPT,
+} from './file-transfer.js';
 import type { CdpClient } from '../cdp/client.js';
-import type { KK9ImageInfo, SendOptions, SendOutcome } from '../types/index.js';
+import type { SendOptions, SendOutcome } from '../types/index.js';
 import {
   encodeRendererPayload,
   RENDERER_IPC_HELPERS_SCRIPT,
@@ -10,54 +14,36 @@ import {
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
 import { createNativeMessageKey, isCdpUnavailableBeforeSend } from './send-status.js';
-import { DriverError } from '../utils/errors.js';
-import { callIpcToData } from './rpc.js';
-import { getOriginalImageUri } from '../utils/image.js';
 
-/** 复用 KK9 的资源下载，不经过编辑器或消息发送。 */
-export async function downloadNativeImage(
-  cdp: CdpClient,
-  image: KK9ImageInfo,
-  fullPath: string
-): Promise<string> {
-  const uri = getOriginalImageUri(image);
-  const target = path.resolve(fullPath);
-  if (!uri) throw new DriverError(`图片缺少可下载的原图 URI；目标 ${target}`, 'IMAGE_DOWNLOAD_FAILED');
-  try {
-    const response = await callIpcToData<{ path: string }>(
-      cdp, 'download', [{ uri, fullPath: target, override: true }], 30000
-    );
-    if (response.code !== 0) {
-      throw new Error(`download (${response.code}): ${response.error || response.message || '原生下载失败'}`);
-    }
-    if (!response.data?.path || path.resolve(response.data.path) !== target) {
-      throw new Error('download 未返回指定的本地文件路径');
-    }
-    const file = await stat(target);
-    if (!file.isFile() || file.size < 1) throw new Error('download 未生成非空普通文件');
-    return target;
-  } catch (error) {
-    throw new DriverError(
-      `下载原图 ${uri} 到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
-      'IMAGE_DOWNLOAD_FAILED', error instanceof Error ? error : undefined
-    );
-  }
-}
 
 export async function sendNativeImage(
   cdp: CdpClient,
   imagePath: string,
   options: SendOptions = {},
-  nativeKey?: string
+  nativeKey?: string,
+  signal?: AbortSignal
 ): Promise<SendOutcome> {
   const startTime = Date.now();
   const cdpWasUnavailable = isCdpUnavailableBeforeSend(cdp);
   if (cdpWasUnavailable)
     return { status: 'failed', error: '图片发送前CDP未连接', isPreTrigger: true };
+  const sourcePath = path.resolve(imagePath);
+  let remote;
+  try {
+    remote = await uploadLocalFile(cdp, sourcePath, 20 * 1024 * 1024, signal);
+  } catch (error) {
+    return { status: 'failed', error: '图片准备失败: ' + sourcePath + '；' + String(error), isPreTrigger: true };
+  }
+  if (signal?.aborted) {
+    let error = '图片传输后发送已取消，未提交原生发送';
+    try { await releaseRemoteFile(cdp, remote); }
+    catch (cleanupError) { error += '；远端图片清理失败: ' + String(cleanupError); }
+    return { status: 'failed', error, isPreTrigger: true };
+  }
   const encoded = encodeRendererPayload({
     target: options.targetSessionId || '',
     msgFlag: nativeKey ?? createNativeMessageKey('image', options.operationId),
-    fullPath: path.resolve(imagePath),
+    remoteFileId: remote.id,
     timeout: options.verifyTimeoutMs ?? 8000,
   });
   const script = `
@@ -68,10 +54,16 @@ export async function sendNativeImage(
       ${NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
+      ${REMOTE_FILE_LEASE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
       const cancellation = beginNativeSend(data.msgFlag);
-      const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
+      let fileLease;
+      const callIpc = (channel, ...args) => fileLease && (channel === 'sendingImgBeforeHandle' || channel === 'sendMessageNew')
+        ? callKairoFileIpc(fileLease, 4000, cancellation.signal, channel, ...args)
+        : callKairoIpcWithSignal(cancellation.signal, channel, ...args);
       try {
+        try { fileLease = takeKairoFileLease(data.remoteFileId); data.fullPath = fileLease.path; }
+        catch (error) { return { status: 'failed', error: '远端图片不可用: ' + String(error), isPreTrigger: true }; }
         let context, artwork, thumbPath, artworkPath;
         try {
           context = await readNativeSendContext(data.target);
@@ -149,23 +141,33 @@ export async function sendNativeImage(
         const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
         if (submission.failure) return submission.failure;
         return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
-      } finally { cancellation.finish(); }
+      } finally {
+        try { fileLease?.release(); }
+        finally { cancellation.finish(); }
+      }
     })()
   `;
+  let outcome: SendOutcome;
   try {
     const result = await cdp.evaluate<SendOutcome>(
       script,
       (options.verifyTimeoutMs ?? 8000) + 12000
     );
-    if (!result || !['sent', 'failed', 'unknown'].includes(result.status))
-      return { status: 'unknown', error: '底层图片IPC未返回有效结果', isPreTrigger: false };
-    return { ...result, verifyLatencyMs: Date.now() - startTime };
+    outcome = !result || !['sent', 'failed', 'unknown'].includes(result.status)
+      ? { status: 'unknown', error: '底层图片IPC未返回有效结果', isPreTrigger: false }
+      : result;
   } catch (error) {
-    return {
+    outcome = {
       status: 'unknown',
       error: `底层图片IPC发送异常: ${error instanceof Error ? error.message : String(error)}`,
       isPreTrigger: false,
-      verifyLatencyMs: Date.now() - startTime,
     };
   }
+  if (outcome.error) outcome.error = '图片 ' + sourcePath + '；' + outcome.error;
+  try { await releaseRemoteFile(cdp, remote); }
+  catch (error) {
+    if (outcome.status !== 'sent')
+      outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端图片清理失败: ' + String(error);
+  }
+  return { ...outcome, verifyLatencyMs: Date.now() - startTime };
 }

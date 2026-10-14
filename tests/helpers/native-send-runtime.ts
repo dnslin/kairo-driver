@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import type { CdpClient } from '../../src/cdp/client.js';
 import { FakeIpcRenderer, runRendererScript } from './renderer-runtime.js';
 
@@ -182,7 +183,11 @@ export function createNativeSendRuntime(
       } else send(channel, request);
     };
   }
-  const window: Record<string, unknown> = { ipcRenderer: ipc };
+  const require = createRequire(import.meta.url);
+  const window: Record<string, unknown> = {
+    ipcRenderer: ipc,
+    require: (name: string) => name === 'electron' ? { ipcRenderer: ipc } : require(name) as unknown,
+  };
   const context: Record<string, unknown> = { window, setTimeout, clearTimeout, AbortController };
   let connected = true;
   const cdp = {

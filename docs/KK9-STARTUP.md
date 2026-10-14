@@ -21,6 +21,8 @@ $env:PAGE_MATCH = "renderer.html"
 
 `PAGE_MATCH` 必须使用实际目标 URL 中稳定的片段。不要把客户端凭据写入仓库。
 
+远程部署时，Driver 的 `CDP_URL` 指向可达的 HTTP/HTTPS 基址，不能是 `/json` 或 WebSocket 地址。KK9 可能仍仅监听 `127.0.0.1`，应查看真实监听再用受限端口转发或 SSH 隧道；不依赖 `--remote-debugging-address=0.0.0.0` 必然生效。本轮 Windows 端口转发地址为 `http://172.16.0.18:9222`，返回的 WebSocket 地址也使用该 IP。Driver 不无证据改写发现地址；转发必须同时支持 HTTP 发现与 WebSocket，HTTPS/WSS 证书须被运行 Driver 的 Node 正常信任。
+
 ## 基本诊断
 
 在仓库根目录运行：
@@ -541,4 +543,96 @@ pnpm exec tsx tmp/pr13-fix-dist-smoke.ts
 - 清理后窗口仍为50981，816219读索引/最大索引均为2；message监听1、目标回执监听0、Hook/观察器/binding均不存在、在途0，完整回到读取前基线。Driver及核对连接均disconnected；报告为 `tmp/pr13-fix-dist-smoke-evidence.json`。
 
 本轮真机证明搜索样本、精确状态恢复和无发送的自有连接失联清理。慢分页超时、真实在途发送取消和同Hook并发回执仅通过执行实际生成脚本的受控回归验证，没有在真机制造慢查询或额外消息。接收端展示、通知和已读仍未验证，前序消息保留，不把这些边界写成通过。
+
+
+## Linux Driver + Windows KK9 跨机器附件验证
+
+### 本轮范围与授权
+
+本轮真实 KK9 为 `172.16.0.18:9222`，Windows 主机 `K3-APPLICATION`，KK9 9.0.1 / Electron 22.3.18 / Node 16.17.1。独立只读身份查询得到 `kairo / UID 3583`，不是前文历史测试账号 `0123040139 / UID 5761`。没有将旧授权套到新账号，也没有自行选择联系人；本轮没有发送、撤回、切换、创建会话或标已读，没有读取聊天正文、安装 Driver Hook 或修改插件。
+
+Driver 真正运行于 Debian WSL 的 Linux Node v24.18.0，主机 `LHGD241029099`。源码与构建产物从本地工作区加载，传输输入和目标均在 Linux `/tmp`；没有挂载目标 Windows 目录，也没有使用 SMB、Windows 桥接/文件服务或额外端口。
+
+### 文件、缓存图片与清理
+
+先通过本轮 `pnpm check` 生成构建，再实际执行（没有重复构建）：
+
+```text
+wsl.exe -d Debian -- env NODE_ENV=production LOG_LEVEL=warn CDP_URL=http://172.16.0.18:9222 /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/examples/verify-remote-files.ts --large
+```
+
+`examples/verify-remote-files.ts` 复用构建后的公开 `CdpClient` 与同一构建的内部附件实现，只操作本轮生成的文件。普通文件从 Linux 通过 CDP 上传到真实 Windows 独占临时路径，再通过 `saveNativeFile` 分块保存回 Linux；Windows 路径保留 `中文附件.bin`，未使用 Linux 输入路径作为原生路径。
+
+结果：
+
+- 普通文件 **104857600 字节（100 MiB）** 往返一致；SHA256 为 `dc9368657a26378db22b625e81dd3cbf54d69bacc4b81116ee01e2c90cb18121`。
+- 原图与缩略图分别上传到 Windows；`downloadNativeImage` 在两种缓存均存在时保存原图，Linux 结果与原图真实字节一致且不同于缩略图。远端 Electron `nativeImage` 实际解码为 **640×360**。
+- 未缓存普通文件明确失败，已有完整目标内容不变，本机无残留 `.part`。
+- 三个本轮 Windows 临时文件逐个请求释放，远端 `existsSync` 均为 false；Linux 临时目录删除，独立 CDP 断开，进程退出码 **0**。
+
+这证明真实跨机器文件传输和缓存保存，不证明原生服务器上传、真实入站事件、消息发送回执或接收端打开附件。本轮原图是自建缓存，不是对生产聊天图片或云端原图下载的验收；原生 `download` 新跨机链路由实际生成脚本的确定性回归覆盖，但尚未取得当前账号的授权真机资源验收。
+
+### 文件语音与文字 TTS
+
+实际命令：
+
+```text
+wsl.exe -d Debian -- /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/.voice-remote-smoke.mjs
+```
+
+该临时脚本加载真实 `prepareVoice` 源码，用 TypeScript 内存转译处理模块加载；音频依赖未替换。自建 WAV 和已有 MP3 素材均写入 Linux `/tmp`，真实 Windows 内置 `app.asar/dist/electron/lib/amrnb.js` 完成编码/回解，没有调用任何发送 IPC。
+
+| 输入 | 源字节 | 8 kHz 输入采样 | AMR 回解采样 | 返回 duration | AMR 字节 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 16 kHz 双声道 2.013 秒 WAV | 128876 | 16104 | 16160 | 3 | 2127 |
+| 真实 MP3 素材 | 6336 | 8448 | 8480 | 2 | 1119 |
+
+两种产物均有真实 `#!AMR\n` 头，结果仅携带 `duration/data`，不携带 Linux 文件路径。WAV 不足整帧的末尾有效声音保留，末尾 RMS 为 0.17789653143935824。验证后删除临时脚本和 Linux 输入目录，独立 CDP 关闭。
+
+真实文字 TTS 沿用 Linux 进程已有的 `HTTPS_PROXY/HTTP_PROXY` 规则，返回 `VOICE_TTS_FAILED`，原始原因 `Unexpected server response: 403`。未切换代理或直连路线、未重试、未伪造合成成功；没有进入 AMR 编码，新增 TTS 临时目录为 0。当前仍缺可成功访问 Edge TTS 的运行网络条件，不将既有历史 Windows 合成记录当成本轮 Linux 合成通过。
+
+### 已授权双目标真实发送补充
+
+用户明确授权后，原生重新核对当前 `kairo / UID 3583`、董仕林 `UID 5761 / 0123040139`（私聊 `816219`）及精确群 `测试123 / 793803 / 接收对象29467`。没有沿用旧账号授权；每个目标只发送一张自建图片、一个自建普通文件和一条自建 WAV 文件语音，共六条，保留供用户核对，不撤回、不切换或创建会话。用户随后反馈“验证通过了”。
+
+| 目标 | 图片正式ID / 索引 | 文件正式ID / 索引 | 文件语音正式ID / 索引 |
+| --- | --- | --- | --- |
+| 董仕林私聊816219 | 137854071 / 3 | 137854073 / 4 | 137854077 / 5 |
+| 测试123群793803 | 137855053 / 179 | 137855055 / 180 | 137855057 / 181 |
+
+六条均有 `sent`、负草稿关联业务回执 `code0` 及准确原生正式记录；身份、接收对象、原生类型和意图键逐条核对。两张图片经准确服务器原图 URI 重新下载到 Linux，与1771字节输入逐字节一致，尺寸640×360；两个262181字节普通文件从 `getIMFileHis` 获取对应服务器资源，原生 `download` 不传 `type`、排除缓存命中，再用 `saveFile` 保存到 Linux，内容与各自输入逐字节一致。普通文件原生提交的是 Windows 临时路径，不是 Linux 路径。
+
+两条文件语音均为真实 AMR 2127字节、回解16160采样（2.02秒）、显示3秒；客户端正常历史同步生成的32364字节播放WAV与正式AMR回解逐字节一致，结尾有声。首次私聊验证误以为直接数据库查询必有播放 `filepath`，在语音已发送后退出；只读检查和原版 `main.js` 证明，缓存完整的数据库读取不生成 WAV，最大索引的正常历史查询才触发服务器同步与原生音频缓存生成。修正验收读取方式后，只读复核既有137854077，不重发私聊；后续仅向群发送剩余三条。没有修改生产语音实现或即时气泡刷新。
+
+本地验收入口 `examples/verify-remote-send.ts` 使用已构建的公开 ESM 包、原生身份核对和双确认门禁；参数依次为登录UID、登录账号、私聊ID、对端UID、对端账号、群ID、群接收对象、精确群名，可选第九参数只能选择其中一个已授权原生会话。默认会真实发送六条；每次生成新意图，不能把重跑脚本当作重试未知发送。
+
+本轮实际执行（首次不带最后的群ID；修正后仅补群）：
+
+```text
+wsl.exe -d Debian -- env NODE_ENV=production LOG_LEVEL=warn CDP_URL=http://172.16.0.18:9222 KK9_REAL_TEST_CONFIRM=3583:816219:793803 KK9_STAGE1_CONFIRM=3583:5761:816219 /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/examples/verify-remote-send.ts 3583 kairo 816219 5761 0123040139 793803 29467 测试123 793803
+```
+
+私聊图片/文件及群三条完成重复 `operationId` 与只读状态查询核对，每个意图仅一次原生插入及发送；私聊语音因首次资源检查提前退出，没有在原实例内完成这两项，未创建新实例冒充同一操作重试。两轮退出均恢复采集函数及原有监听，活动窗口不变、传输租约回到0、在途发送0、Driver Hook不存在，Windows提交临时文件和Linux临时目录已清理；原生正式图片/语音缓存保留。
+
+证据为 `tmp/remote-send-05a70ecc-d135-4ba1-8501-5946f8a26f04.json`（保留首次失败）、`tmp/remote-voice-recheck-137854077.json`（只读播放资源复核）、`tmp/remote-send-c7d8419d-7752-4de5-acb6-d629fec5a6e8.json`（群三条完整通过）。不在报告保存音频Base64或其他历史正文。新增验收脚本的ESLint已通过；没有重试文字TTS、发送文字消息或自动撤回。
+
+### 评审修复后的只读真机回归
+
+原图显式空字段、Linux FIFO和成功后清理告警修复完成后，再次运行默认无消息脚本，而不是重新发送已验收消息：
+
+```text
+wsl.exe -d Debian -- env NODE_ENV=production LOG_LEVEL=warn CDP_URL=http://172.16.0.18:9222 /home/dnslin/.nvm/versions/node/v24.18.0/bin/node /mnt/d/Person/kairo-driver/examples/verify-remote-files.ts
+```
+
+本轮786469字节跨机往返，SHA256 `d1679c45335f37b8acdcdf92749e13f4c18c54b71cf17e0b097c90cc83f6763c` 一致；已有缓存文件和640×360原图保存成功，远端临时文件全部释放，消息操作0、退出0。Linux公开构建入口另用真实无写端FIFO验证直接前置失败及并发断开及时完成，不打开任何写端、原生IPC0，结果在 `tmp/pr17-fixed-fifo.json`；不把隔离CDP当作KK9故障验收。
+
+Windows最终 `pnpm check` 的构建、类型、36文件455项测试和lint通过，1项Linux专属FIFO回归跳过，该行为由上述Linux公开入口另行实际验证。原图缺失和EPERM清理告警通过完整入口确定性回归覆盖；没有在真实KK9制造权限错误或重新发送消息。释放失败使用既有日志告警，保持已确认sent和原生读取租约，不新增重发或自动强删。
+
+### 尚未验证的边界
+
+- HTTP 端口转发已实测；HTTPS/WSS 仅有配置/不降级行为回归，没有实际 TLS 部署验收。
+- 真实文字 TTS 被 403 阻断；代码回归验证了失败传播与清理，不能替代成功合成。
+- 原生永久悬挂时仍保留可能在用的临时文件和自身完成监听；异常退出导致远端 Map 丢失时可能遗留 SDK 临时目录。正常完成、传输失败/取消、迟到原生完成释放均有回归，不能据此声称真机已制造所有故障场景。
+
+原实现完整质量检查为 `pnpm check`：build/typecheck、36文件451项测试和lint通过。纯字节往返、缓存保存与编码、已授权真实发送、服务器原图/文件下载及用户验证反馈分别保留证据，不把Fake或同机回归冒充真机验收。独立接收设备的逐项操作细节没有自动采集，文字TTS成功及真实TLS部署仍未验证。
 

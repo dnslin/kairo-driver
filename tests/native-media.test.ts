@@ -11,6 +11,7 @@ import { prepareVoice } from '../src/bridge/voice-ops.js';
 import { KK9Driver } from '../src/driver.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
 import { getDriverTestInternals } from './helpers/driver-internals.js';
+import { setDriverLogSink, type DriverLogEntry } from '../src/utils/logger.js';
 import {
   createRendererRuntime,
   FakeIpcRenderer,
@@ -638,8 +639,16 @@ describe('原生图片准备与提交', () => {
         return { code: 0, data: { thumbPath, artworkPath } };
       },
     });
+    let started!: () => void;
+    const submitted = new Promise<void>(resolve => { started = resolve; });
+    const send = native.ipc.send.bind(native.ipc);
+    native.ipc.send = (channel, request) => {
+      if (request.args[0] === 'sendMessageNew') started();
+      send(channel, request);
+    };
     // Electron是外部运行时边界；固定素材的真实解码结果由KK9生成，发送脚本实际执行。
     const resized = vi.fn(() => ({ toPNG: () => thumbnail }));
+    const requireNative = native.window['require'] as (name: string) => unknown;
     native.window['require'] = (name: string) => {
       if (name === 'fs') return fs;
       if (name === 'file-type')
@@ -656,7 +665,7 @@ describe('原生图片准备与提交', () => {
             }),
           },
         };
-      throw new Error('未声明的原生依赖 ' + name);
+      return requireNative(name);
     };
     return {
       ...native,
@@ -664,6 +673,7 @@ describe('原生图片准备与提交', () => {
       resized,
       thumbPath,
       artworkPath,
+      submitted,
       ops: new BridgeMessageOps(native.cdp),
     };
   }
@@ -695,6 +705,40 @@ describe('原生图片准备与提交', () => {
     expect(result.receipt?.draftId).toBe('-1');
   });
 
+  it('公开图片发送成功后清理失败仍告警且不重复准备或发送', async () => {
+    const native = imageRuntime();
+    const logs: DriverLogEntry[] = [];
+    let failedDirectory = '';
+    const requireNative = native.window['require'] as (name: string) => unknown;
+    native.window['require'] = (name: string) => name === 'fs' ? {
+      ...fs, rmSync: (directory: fs.PathLike) => {
+        failedDirectory = String(directory);
+        throw Object.assign(new Error('测试远端图片删除失败'), { code: 'EPERM' });
+      },
+    } : requireNative(name);
+    const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1' } });
+    getDriverTestInternals(driver).bridgeMessageOps = native.ops;
+    const options = { targetSessionId: '93001', operationId: 'cleanup-failure-image' };
+    setDriverLogSink(entry => logs.push(entry));
+    try {
+      const result = await driver.sendImage(native.file, options);
+      expect(result.status).toBe('sent');
+      expect(logs).toContainEqual(expect.objectContaining({
+        level: 'warn', event: 'Driver运行异常', errorType: 'driver', runId: expect.any(String),
+      }));
+      expect(await driver.sendImage(native.file, options)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(await driver.getSendStatus(options.operationId)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(native.records).toHaveLength(1);
+      expect(native.drafts).toHaveLength(1);
+      expect(native.resized).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(failedDirectory)).toBe(true);
+      expect(fs.readFileSync(native.artworkPath)).toEqual(source);
+    } finally {
+      setDriverLogSink(undefined);
+      if (failedDirectory) fs.rmSync(failedDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('有PNG头但无法解码的损坏图片不准备或提交', async () => {
     const native = imageRuntime();
     fs.writeFileSync(native.file, source.subarray(0, 32));
@@ -719,15 +763,15 @@ describe('原生图片准备与提交', () => {
     expect(await native.ops.sendImage(path.dirname(native.file), options)).toMatchObject({
       status: 'failed',
       isPreTrigger: true,
-      error: expect.stringContaining('非普通文件'),
     });
+    expect(native.ipc.sent).toEqual([]);
     fs.writeFileSync(native.file, '');
     fs.truncateSync(native.file, 20 * 1024 * 1024 + 1);
     expect(await native.ops.sendImage(native.file, options)).toMatchObject({
       status: 'failed',
       isPreTrigger: true,
-      error: expect.stringContaining('20MB'),
     });
+    expect(native.ipc.sent).toEqual([]);
     fs.writeFileSync(native.file, '不是图片');
     expect(await native.ops.sendImage(native.file, options)).toMatchObject({
       status: 'failed',
@@ -827,6 +871,7 @@ describe('原生图片准备与提交', () => {
       targetSessionId: '93001',
       verifyTimeoutMs: 6000,
     });
+    await native.submitted;
     await vi.advanceTimersByTimeAsync(4500);
     expect(await pending).toMatchObject({ status: 'sent' });
     const unknown = imageRuntime({ callback: false });
@@ -836,6 +881,7 @@ describe('原生图片准备与提交', () => {
       verifyTimeoutMs: 100,
     };
     const waiting = unknown.ops.sendImage(unknown.file, options);
+    await unknown.submitted;
     await vi.advanceTimersByTimeAsync(101);
     expect(await waiting).toMatchObject({ status: 'unknown', isPreTrigger: false });
     expect(await unknown.ops.sendImage(unknown.file, options)).toMatchObject({ status: 'unknown' });
