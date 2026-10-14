@@ -6,6 +6,7 @@ import {
   encodeRendererPayload,
   RENDERER_IPC_HELPERS_SCRIPT,
   NATIVE_SEND_CONTEXT_SCRIPT,
+  NATIVE_USER_SEND_CONTEXT_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
 
@@ -68,19 +69,25 @@ export async function sendNativeStructuredMessage(
   cdp: CdpClient,
   message: NativeStructuredMessage,
   options: SendOptions,
-  nativeKey?: string
+  nativeKey?: string,
+  signal?: AbortSignal
 ): Promise<SendOutcome> {
   const unsupported = unsupportedOptionsResult(options);
   if (unsupported) return unsupported;
 
   const startTime = Date.now();
   const cdpWasUnavailable = isCdpUnavailableBeforeSend(cdp);
+  const targetLoginName = options.targetLoginName;
+  const timeout = options.verifyTimeoutMs ?? 8000;
+  const cdpTimeoutMs = timeout + (targetLoginName ? 20000 : 12000);
   const payloadData = {
     target: options.targetSessionId || '',
+    targetLoginName,
     msgFlag: nativeKey ?? createNativeMessageKey(message.kind),
     contentType: message.contentType,
     content: message.content,
-    timeout: options.verifyTimeoutMs ?? 8000,
+    timeout,
+    deadlineMs: targetLoginName ? cdpTimeoutMs - 2000 : undefined,
   };
   const encoded = encodeRendererPayload(payloadData);
 
@@ -89,15 +96,15 @@ export async function sendNativeStructuredMessage(
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      ${NATIVE_SEND_CONTEXT_SCRIPT}
+      ${targetLoginName ? NATIVE_USER_SEND_CONTEXT_SCRIPT : NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
-      const cancellation = beginNativeSend(data.msgFlag);
+      const cancellation = beginNativeSend(data.msgFlag, data.deadlineMs);
       const callIpc = (channel, ...args) => callKairoIpcWithSignal(cancellation.signal, channel, ...args);
       try {
       let context;
-      try { context = await readNativeSendContext(data.target); }
+      try { context = await ${targetLoginName ? 'readNativeUserSendContext(data.targetLoginName)' : 'readNativeSendContext(data.target)'}; }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
       const { identity, session: targetSes, receiver } = context;
       const myUid = identity.id;
@@ -167,20 +174,18 @@ export async function sendNativeStructuredMessage(
         msgFlag: data.msgFlag
       };
 
-      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
+      const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal, data.targetLoginName);
       if (submission.failure) return submission.failure;
       const confirmedMessage = submission.confirmedMessage;
 
-      return { status: 'sent', messageId: String(confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+      return { status: 'sent', messageId: String(confirmedMessage.id), ...(data.targetLoginName ? { sessionId: String(confirmedMessage.sessionID) } : {}), receipt: submission.receipt, isPreTrigger: false };
       } finally { cancellation.finish(); }
     })()
   `;
 
+  if (signal?.aborted) return { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
   try {
-    const result = await cdp.evaluate<SendOutcome>(
-      script,
-      (options.verifyTimeoutMs ?? 8000) + 12000
-    );
+    const result = await cdp.evaluate<SendOutcome>(script, cdpTimeoutMs);
     if (!result || !['sent', 'failed', 'unknown'].includes(result.status)) {
       return { status: 'unknown', error: '原生结构化消息未返回有效结果', isPreTrigger: false };
     }

@@ -319,10 +319,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    */
   public async sendFile(filePath: string, options: SendFileOptions = {}): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
-    return this.attachNativeRecall(
-      await this.bridgeMessageOps.sendFile(filePath, options),
-      targetSessionId
-    );
+    const hasLoginTarget = options.targetLoginName !== undefined;
+    const result = await this.bridgeMessageOps.sendFile(filePath, options);
+    return this.attachNativeRecall(result, hasLoginTarget ? result.sessionId : targetSessionId);
   }
   /**
    * 只查询发送操作状态，不触发新的发送动作
@@ -346,10 +345,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
    */
   public async sendImage(imagePath: string, options: SendOptions = {}): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
-    return this.attachNativeRecall(
-      await this.bridgeMessageOps.sendImage(imagePath, options),
-      targetSessionId
-    );
+    const hasLoginTarget = options.targetLoginName !== undefined;
+    const result = await this.bridgeMessageOps.sendImage(imagePath, options);
+    return this.attachNativeRecall(result, hasLoginTarget ? result.sessionId : targetSessionId);
   }
 
   /** 发送链接图文卡片。 */
@@ -358,8 +356,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     options: SendOptions = {}
   ): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
+    const hasLoginTarget = options.targetLoginName !== undefined;
     const result = await this.bridgeMessageOps.sendUrlCard(card, options);
-    return this.attachNativeRecall(result, targetSessionId);
+    return this.attachNativeRecall(result, hasLoginTarget ? result.sessionId : targetSessionId);
   }
 
   /** 发送业务任务或通知卡片。 */
@@ -368,8 +367,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     options: SendOptions = {}
   ): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
+    const hasLoginTarget = options.targetLoginName !== undefined;
     const result = await this.bridgeMessageOps.sendBizMessage(message, options);
-    return this.attachNativeRecall(result, targetSessionId);
+    return this.attachNativeRecall(result, hasLoginTarget ? result.sessionId : targetSessionId);
   }
 
   /** 发送工作台微应用通知卡片。 */
@@ -378,8 +378,9 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     options: SendOptions = {}
   ): Promise<SendResult> {
     const targetSessionId = options.targetSessionId;
+    const hasLoginTarget = options.targetLoginName !== undefined;
     const result = await this.bridgeMessageOps.sendAppMessage(message, options);
-    return this.attachNativeRecall(result, targetSessionId);
+    return this.attachNativeRecall(result, hasLoginTarget ? result.sessionId : targetSessionId);
   }
 
   /** 发送合并聊天记录卡片。 */

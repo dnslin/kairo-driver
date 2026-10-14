@@ -151,14 +151,23 @@ export class BridgeMessageOps {
       options.operationId === undefined ? randomUUID() : options.operationId.trim();
     if (!operationId) throw new SendError('operationId不能为空');
     const targetSessionId = options.targetSessionId?.trim();
-    const effectiveOptions = kind === 'text-to-user'
-      ? targetLoginName ? { ...options, operationId } : null
+    const supportsLoginTarget = kind === 'url-card' || kind === 'biz-message' || kind === 'app-message' || kind === 'image' || kind === 'file';
+    const optionLoginName = options.targetLoginName;
+    const loginName = kind === 'text-to-user' ? targetLoginName
+      : typeof optionLoginName === 'string' ? optionLoginName.trim() : undefined;
+    const hasLoginTarget = kind === 'text-to-user' || optionLoginName !== undefined;
+    const targetError = optionLoginName !== undefined && !supportsLoginTarget ? '此发送方法不支持targetLoginName'
+      : hasLoginTarget && options.targetSessionId !== undefined ? 'targetLoginName与targetSessionId不能同时指定'
+      : hasLoginTarget && !loginName ? '按工号发送必须提供准确非空工号'
+      : undefined;
+    const effectiveOptions = targetError ? null : hasLoginTarget
+      ? { ...options, operationId, ...(supportsLoginTarget ? { targetLoginName: loginName } : {}) }
       : targetSessionId && /^-?[0-9]+$/.test(targetSessionId) && Number.isSafeInteger(Number(targetSessionId))
         ? { ...options, operationId, targetSessionId }
         : null;
     const fingerprint = createSendOperationFingerprint({
-      targetSessionId: options.targetSessionId?.trim(),
-      targetLoginName,
+      targetSessionId,
+      targetLoginName: loginName,
       messageType: kind,
       content: {
         payload: content,
@@ -172,7 +181,7 @@ export class BridgeMessageOps {
     const key = createNativeMessageKey(kind, operationId);
     this.inFlight.get(controller)!.key = key;
     if (!effectiveOptions)
-      outcome = { status: 'failed', error: kind === 'text-to-user' ? '按工号发送必须提供准确非空工号' : '发送必须指定明确原生会话ID', isPreTrigger: true };
+      outcome = { status: 'failed', error: targetError ?? '发送必须指定明确原生会话ID', isPreTrigger: true };
     else if (controller.signal.aborted)
       outcome = { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
     else if (isCdpUnavailableBeforeSend(this.cdp))
@@ -394,7 +403,7 @@ export class BridgeMessageOps {
             key,
             [],
             undefined,
-            undefined,
+            bound.targetLoginName,
             remote.id
           );
       } catch (error) {
@@ -509,7 +518,7 @@ export class BridgeMessageOps {
       picUrl: card.picUrl ?? '',
       // 远端图片由 KK9 自己下载；不预先伪造 isValid 或本地路径。
     };
-    return this.executeOperation('url-card', options, content, (nativeKey, effectiveOptions) => {
+    return this.executeOperation('url-card', options, content, (nativeKey, effectiveOptions, signal) => {
       const error = getCardInputError('url-card', content);
       if (error) {
         return Promise.resolve<SendOutcome>({
@@ -522,7 +531,8 @@ export class BridgeMessageOps {
         this.cdp,
         { kind: 'url-card', contentType: 10, content },
         effectiveOptions,
-        nativeKey
+        nativeKey,
+        signal
       );
     });
   }
@@ -536,7 +546,7 @@ export class BridgeMessageOps {
       bizUrl: message.bizUrl,
       bizType: message.bizType,
     };
-    return this.executeOperation('biz-message', options, content, (nativeKey, effectiveOptions) => {
+    return this.executeOperation('biz-message', options, content, (nativeKey, effectiveOptions, signal) => {
       const error = getCardInputError('biz-message', content);
       if (error) {
         return Promise.resolve<SendOutcome>({
@@ -549,7 +559,8 @@ export class BridgeMessageOps {
         this.cdp,
         { kind: 'biz-message', contentType: 17, content },
         effectiveOptions,
-        nativeKey
+        nativeKey,
+        signal
       );
     });
   }
@@ -562,7 +573,7 @@ export class BridgeMessageOps {
       ...(message.linkUrl !== undefined ? { linkUrl: message.linkUrl } : {}),
       ...(message.pcAppCode !== undefined ? { pcAppCode: message.pcAppCode } : {}),
     };
-    return this.executeOperation('app-message', options, content, (nativeKey, effectiveOptions) => {
+    return this.executeOperation('app-message', options, content, (nativeKey, effectiveOptions, signal) => {
       const error = getCardInputError('app-message', content);
       if (error) {
         return Promise.resolve<SendOutcome>({
@@ -575,7 +586,8 @@ export class BridgeMessageOps {
         this.cdp,
         { kind: 'app-message', contentType: 8, content },
         effectiveOptions,
-        nativeKey
+        nativeKey,
+        signal
       );
     });
   }

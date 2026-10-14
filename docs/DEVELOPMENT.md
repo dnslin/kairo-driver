@@ -474,3 +474,16 @@ Fake群查询现与真实实现对齐：非法会话ID、非群目标及无效�
 本轮只执行一次最终 `pnpm check`，build/typecheck、38文件537项测试及lint全部通过，1项既有Linux专属用例跳过。此前人员搜索定时器断言失败本轮未出现，未改其源码/断言，也不宣称修复了该既有问题；历史失败记录保留。
 
 复用本轮构建，通过 `pnpm exec tsx -e` 动态导入 `@kairo/driver` 公开包入口，实际调用Fake及执行原生脚本的Bridge：正常群五字段一致，上述8类错误分类一致，Fake会话与发送记录不变。该烟测为隔离运行时，不连接真实KK9；本次仅改Fake错误分类与测试，未重复上节真机查询、发送或制造真实故障。README、计划与任务状态同步；尚未提交、推送或合并。
+
+## 定向卡片与附件合入 Driver
+
+将 AstrBot 插件原先维护的 `@kairo/driver` 定向发送补丁合入六个源码文件：公开发送选项、`BridgeMessageOps`、卡片/图片原生提交、Driver 门面及 Fake。保留当前 main 的群全员查询，不覆盖新接口；编译产物继续由标准 build/prepack 生成，不提交 `dist` 或另留 Driver 自身补丁。
+
+`targetLoginName` 仅支持三类通知卡片、图片和文件，与 `targetSessionId` 互斥。准确工号复用既有原生人员查找、权限与 sessionID0 首次提交，业务回执关联正式会话；不预发文本、不依赖当前窗口。文件传输租约、取消、unknown 防重及操作指纹保持现有语义。`sendTextToUser` 仍只复制其两个公开选项，不增加兼容入口。Driver 门面在 await 前固定是否使用工号目标，调用方修改选项也不会改变成功后的日志或快捷撤回会话。
+
+移植回归使用本仓库 Vitest 与既有 `native-send-runtime`，直接执行真实生成脚本，不把插件的安装路径或第二套渲染器替身搬入 Driver。源码入口隔离烟测先观察到原实现工号公告返回前置 failed/零草稿；合入后同场景 sent、正式私聊94001、准确接收者91003、contentType8，重复操作仍只有一个草稿。本轮未连接或发送真实 KK9 消息，不能以此代替接收端呈现验收。
+
+实际执行 `pnpm exec prettier --write tests/native-user-cards.test.ts tests/native-user-media.test.ts` 后，`pnpm check` 的 build/typecheck、40文件706项测试及lint全部通过，1项既有Linux专属用例在Windows跳过。新增169项行为回归覆盖三类卡片及两类附件的首次/已有会话、准确工号、原生失败与回执、防重、取消/截止、真实字节和迟到读取租约。原有人员搜索定时器断言本轮未失败，未改动该实现或测试，不宣称修复历史偶发失败。
+
+审查临时把应用通知门面的工号模式固定为false，执行 `pnpm exec vitest run tests/native-user-cards.test.ts -t "公开应用通知门面"`，新回归因已确认卡片缺少快捷撤回而准确失败；恢复正确源码后同项通过。恢复后源码快照与全套通过时一致，没有保留变异。未发送、撤回或切换真实KK9会话；原有真机验收不扩展为新增定向媒体/卡片的接收端验收。
+

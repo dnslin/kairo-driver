@@ -397,8 +397,10 @@ export interface KK9RecalledEvent {
 
 
 export interface SendOptions {
-  /** 必须提供原生会话ID；缺省返回failed，不使用当前窗口或会话名称。 */
+  /** 原生会话ID；通知卡片及图片可改用targetLoginName，不使用当前窗口或会话名称。 */
   targetSessionId?: string;
+  /** sendAppMessage/sendUrlCard/sendBizMessage/sendImage支持准确工号；与targetSessionId互斥。 */
+  targetLoginName?: string;
   /** 稳定发送意图ID；重复调用仅查询或返回原结果，不再次提交。 */
   operationId?: string;
   verifyTimeoutMs?: number;
@@ -409,8 +411,10 @@ export interface SendOptions {
 }
 
 export interface SendFileOptions {
-  /** 必须提供原生会话ID；缺省返回failed，不使用当前窗口或会话名称。 */
+  /** 原生会话ID；可改用targetLoginName，不使用当前窗口或会话名称。 */
   targetSessionId?: string;
+  /** 准确工号；与targetSessionId互斥，支持首次联系。 */
+  targetLoginName?: string;
   /** 稳定发送意图ID；重复调用仅查询或返回原结果，不再次提交。 */
   operationId?: string;
   verifyTimeoutMs?: number;

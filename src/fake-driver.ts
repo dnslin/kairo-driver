@@ -434,29 +434,29 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async sendImage(imagePath: string, options?: SendOptions): Promise<SendResult> {
-    return this.executeSendAction('image', 'image', imagePath, options);
+    return this.executeSendAction('image', 'image', imagePath, options, false, options?.targetLoginName?.trim());
   }
 
   public async sendFile(filePath: string, options?: SendFileOptions): Promise<SendResult> {
-    return this.executeSendAction('file', 'file', filePath, options);
+    return this.executeSendAction('file', 'file', filePath, options, false, options?.targetLoginName?.trim());
   }
 
   public async sendUrlCard(card: KK9UrlCardOptions, options?: SendOptions): Promise<SendResult> {
-    return this.executeSendAction('url-card', 'urlCard', card, options, false);
+    return this.executeSendAction('url-card', 'urlCard', card, options, false, options?.targetLoginName?.trim());
   }
 
   public async sendBizMessage(
     message: KK9BizMsgOptions,
     options?: SendOptions
   ): Promise<SendResult> {
-    return this.executeSendAction('biz-message', 'bizMessage', message, options, false);
+    return this.executeSendAction('biz-message', 'bizMessage', message, options, false, options?.targetLoginName?.trim());
   }
 
   public async sendAppMessage(
     message: KK9AppMsgOptions,
     options?: SendOptions
   ): Promise<SendResult> {
-    return this.executeSendAction('app-message', 'appMessage', message, options, false);
+    return this.executeSendAction('app-message', 'appMessage', message, options, false, options?.targetLoginName?.trim());
   }
 
   public async sendChatRecord(
@@ -565,7 +565,13 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     }
     let targetEmployee: KK9Employee | undefined;
     let targetError: string | undefined;
-    if (targetLoginName !== undefined && !textError) {
+    const optionLoginName = options?.targetLoginName;
+    if (optionLoginName !== undefined && !['url-card', 'biz-message', 'app-message', 'image', 'file'].includes(operationType)) {
+      targetError = '此发送方法不支持targetLoginName';
+    } else if (targetLoginName !== undefined && options?.targetSessionId !== undefined) {
+      targetError = 'targetLoginName与targetSessionId不能同时指定';
+    }
+    if (targetLoginName !== undefined && !textError && !targetError) {
       if (!targetLoginName) {
         targetError = '发送必须指定准确工号';
       } else if (!this.currentUserId?.trim()) {
@@ -593,7 +599,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     } else if (!supportsReplyAndMentions && (replyTo !== undefined || mentions !== undefined)) {
       outcome = {
         status: 'failed',
-        error: '原生卡片与语音消息不支持replyTo或mentions',
+        error: '原生卡片、图片、文件与语音消息不支持replyTo或mentions',
         isPreTrigger: true,
       };
     } else {

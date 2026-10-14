@@ -10,6 +10,7 @@ import {
   encodeRendererPayload,
   RENDERER_IPC_HELPERS_SCRIPT,
   NATIVE_SEND_CONTEXT_SCRIPT,
+  NATIVE_USER_SEND_CONTEXT_SCRIPT,
   CONFIRM_SENT_MESSAGE_SCRIPT,
   SUBMIT_NATIVE_MESSAGE_SCRIPT,
 } from './renderer-script.js';
@@ -40,23 +41,28 @@ export async function sendNativeImage(
     catch (cleanupError) { error += '；远端图片清理失败: ' + String(cleanupError); }
     return { status: 'failed', error, isPreTrigger: true };
   }
+  const targetLoginName = options.targetLoginName;
+  const timeout = options.verifyTimeoutMs ?? 8000;
+  const cdpTimeoutMs = timeout + (targetLoginName ? 20000 : 12000);
   const encoded = encodeRendererPayload({
     target: options.targetSessionId || '',
+    targetLoginName,
     msgFlag: nativeKey ?? createNativeMessageKey('image', options.operationId),
     remoteFileId: remote.id,
-    timeout: options.verifyTimeoutMs ?? 8000,
+    timeout,
+    deadlineMs: targetLoginName ? cdpTimeoutMs - 2000 : undefined,
   });
   const script = `
     (async () => {
       const electron = window.require ? window.require('electron') : null;
       const ipc = window.ipcRenderer || electron?.ipcRenderer;
       ${RENDERER_IPC_HELPERS_SCRIPT}
-      ${NATIVE_SEND_CONTEXT_SCRIPT}
+      ${targetLoginName ? NATIVE_USER_SEND_CONTEXT_SCRIPT : NATIVE_SEND_CONTEXT_SCRIPT}
       ${CONFIRM_SENT_MESSAGE_SCRIPT}
       ${SUBMIT_NATIVE_MESSAGE_SCRIPT}
       ${REMOTE_FILE_LEASE_SCRIPT}
       const data = JSON.parse(decodeURIComponent(${encoded}));
-      const cancellation = beginNativeSend(data.msgFlag);
+      const cancellation = beginNativeSend(data.msgFlag, data.deadlineMs);
       let fileLease;
       const callIpc = (channel, ...args) => fileLease && (channel === 'sendingImgBeforeHandle' || channel === 'sendMessageNew')
         ? callKairoFileIpc(fileLease, 4000, cancellation.signal, channel, ...args)
@@ -66,7 +72,7 @@ export async function sendNativeImage(
         catch (error) { return { status: 'failed', error: '远端图片不可用: ' + String(error), isPreTrigger: true }; }
         let context, artwork, thumbPath, artworkPath;
         try {
-          context = await readNativeSendContext(data.target);
+          context = await ${targetLoginName ? 'readNativeUserSendContext(data.targetLoginName)' : 'readNativeSendContext(data.target)'};
           const fs = window.require('fs');
           const fileType = window.require('file-type');
           const nativeImage = electron.nativeImage;
@@ -138,9 +144,9 @@ export async function sendNativeImage(
           type: 0,
           msgFlag: data.msgFlag
         };
-        const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal);
+        const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal, data.targetLoginName);
         if (submission.failure) return submission.failure;
-        return { status: 'sent', messageId: String(submission.confirmedMessage.id), receipt: submission.receipt, isPreTrigger: false };
+        return { status: 'sent', messageId: String(submission.confirmedMessage.id), ...(data.targetLoginName ? { sessionId: String(submission.confirmedMessage.sessionID) } : {}), receipt: submission.receipt, isPreTrigger: false };
       } finally {
         try { fileLease?.release(); }
         finally { cancellation.finish(); }
@@ -149,10 +155,7 @@ export async function sendNativeImage(
   `;
   let outcome: SendOutcome;
   try {
-    const result = await cdp.evaluate<SendOutcome>(
-      script,
-      (options.verifyTimeoutMs ?? 8000) + 12000
-    );
+    const result = await cdp.evaluate<SendOutcome>(script, cdpTimeoutMs);
     outcome = !result || !['sent', 'failed', 'unknown'].includes(result.status)
       ? { status: 'unknown', error: '底层图片IPC未返回有效结果', isPreTrigger: false }
       : result;

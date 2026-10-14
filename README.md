@@ -76,7 +76,7 @@ T04 双目标SDK回显、真实新入站、本机人工本人消息、历史不�
 
 会话 `id` 是原生 `sessionID` 的字符串形式；`receiverId` 是私聊对端 UID，其他类型为原生 `typeID`；`nativeType` 保留原生类型数字。`type` 区分 `private`、`group`、`discussion`、`service` 和 `unknown`。原生会话列表不提供窗口 `active` 状态。
 
-例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。按会话发送、撤回、历史和已读操作使用明确原生会话；首次联系可使用下文的 `sendTextToUser()` 按准确工号发送。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。数据查询和发送不读取当前窗口，SDK不再提供窗口切换接口。
+例如原生会话 `716791` 的对端 UID 是 `3585`；界面事件标识 `0-3585` 不是公开会话 ID。按会话发送、撤回、历史和已读操作使用明确原生会话；首次联系可用下文 `sendTextToUser()`，或用三类通知卡片、图片及文件的 `targetLoginName` 按准确工号发送。`getEmployeeBySession()` 接受原生会话 ID 或会话实体；查询 UID 请使用 `getUserProfile()`。数据查询和发送不读取当前窗口，SDK不再提供窗口切换接口。
 
 已直接删除 `getCurrentSession/selectSession`、`KK9Session.active`、`SelectorsConfig/DriverConfig.selectors`、`PreSendCheckResult`、`SessionOps/MessageOps/SendOps`、`DEFAULT_SELECTORS/resolveSelectors` 与 `DomError`，没有兼容别名。`src/dom` 已删除；保留的 `parseEmployee/parseEmployeeList` 与 `readImageAsBase64/saveImageToFile` 分别位于 `src/utils/employee.ts`、`src/utils/image.ts`，仍由包入口导出。
 
@@ -110,7 +110,7 @@ const history = await driver.getRecentMessages(session, 10);
 
 ## 发送消息
 
-`sendText()` 和既有媒体发送必须提供明确原生 `targetSessionId`；缺省、界面标识或会话名称均不会改投当前窗口。文本直接读取原生身份与指定会话，预插入草稿、订阅本次业务回执后提交，不读聊天编辑器、按钮或 Vue。下面的函数使用上例中已连接的 `driver`，只有调用函数时才会发送：
+`sendText()`、语音和合并转发必须提供明确原生 `targetSessionId`；三类通知卡片、图片和文件可改用准确工号 `targetLoginName`，两种目标互斥。缺省、界面标识或会话名称均不会改投当前窗口。文本直接读取原生身份与指定会话，预插入草稿、订阅本次业务回执后提交，不读聊天编辑器、按钮或 Vue。下面的函数使用上例中已连接的 `driver`，只有调用函数时才会发送：
 
 ```ts
 import { randomUUID } from 'node:crypto';
@@ -276,6 +276,21 @@ async function notifyUser(loginName: string, text: string, operationId: string) 
 
 专项示例的Driver连接单独失联时，独立采集连接会先取消并等候本次消息键的任务退出，再清理本代Hook与绑定，不清理其他代资源。业务回执等待器属于发送任务；Hook关闭仅解除自己的观察登记，不移除其他任务的回执监听。
 
+### 按工号发送卡片、图片和文件
+
+`sendAppMessage`、`sendUrlCard`、`sendBizMessage`、`sendImage` 和 `sendFile` 的选项支持 `targetLoginName`，与 `targetSessionId` 二选一；工号去首尾空白后精确匹配，保留大小写及前导零。支持首次联系和已有私聊，不先发文本建立会话，不查询当前窗口或切换聊天。语音、合并转发及普通文本发送不接受此选项；工号文本继续使用 `sendTextToUser`。
+
+```ts
+async function sendImageToEmployee(loginName: string, imagePath: string, operationId: string) {
+  const result = await driver.sendImage(imagePath, { targetLoginName: loginName, operationId });
+  return result.status === 'unknown' ? driver.getSendStatus(operationId) : result;
+}
+```
+
+附件输入仍是 Driver 所在机器上的本地路径，图片 20 MiB、文件 100 MiB，保留既有实际字节传输、原图/缩略图检查和临时文件清理。三类卡片字段、业务路径要求不变；卡片及附件不支持引用或提及。原生业务回执确认后返回正式 `sessionId`，日志和快捷撤回绑定该会话；成功不代表送达或接收端呈现。重复操作 ID 只返回原结果，改变工号或内容会冲突，unknown 不重发。查无工号、歧义、身份变化及权限拒绝均不改投其他员工。
+
+这些能力已作为 Driver 源码实现，不再需要消费项目额外维护 `@kairo/driver` 定向发送补丁；音频依赖的两份补丁仍按安装说明配置。本轮隔离验证不连接真实 KK9，首次媒体/卡片的接收端呈现仍需授权人工验收。
+
 
 ### 原生富文本、提及与引用
 
@@ -338,6 +353,7 @@ await driver.sendChatRecord({
 ## 未发布变更
 
 - 修复：锁定经真实合成验证的 `node-edge-tts@1.2.11` 新服务端点，移植仍需要的超时、代理 CONNECT 取消及文件/WebSocket 清理补丁；代理优先级、KK 编码和发送防重不变。
+- 新增：三类通知卡片、图片和文件支持准确工号 `targetLoginName`，直接发送首次/已有私聊；与原生会话目标互斥，正式会话回执、防重、取消及附件清理沿用现有路径。消费项目不再需要另加 Driver 定向发送补丁。
 - 验证：语音相关54项通过；独立真实 MP3 解码4.176秒，最终 Driver 经 KK9 AMR 编码/回解4.18秒、有声、无聊天操作。构建、类型检查与lint通过；全套 `pnpm check` 被已有人员搜索工作区测试的定时器断言阻断，详情见开发说明。
 - 新增：`getGroupMembers` 和 `group-members` 只读列出群全部成员的ID、真实工号、姓名、全部可见部门路径和岗位；缺失字段为null，失败不返回部分名单，不保证KK9服务器最新快照。
 - 修复：Fake群查询的目标错误码与真实实现对齐，补齐私聊/讨论组/服务号等场景的跨实现错误契约回归，避免模拟测试与真实运行进入不同错误处理分支。
