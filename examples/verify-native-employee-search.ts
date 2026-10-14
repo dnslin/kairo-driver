@@ -15,7 +15,7 @@ const driver = new KK9Driver({ cdp: config, rejectExistingBridge: true });
 const cdp = new CdpClient(config);
 const runId = randomUUID();
 const realtimeEvents = { message: 0, at: 0, recalled: 0 };
-const failures: Array<{ 阶段: string; 类型: string; 代码: string | null; 原因: string }> = [];
+const failures: Array<{ 阶段: string; 类型: string; 代码: string | number | null; 原因: string }> = [];
 const report: Record<string, unknown> = {
   运行ID: runId,
   入口: '@kairo/driver → dist/index.js（已构建产物）',
@@ -29,6 +29,8 @@ let stage = '参数校验';
 let connected = false;
 let probeAttempted = false;
 let before: SearchSnapshot | undefined;
+let exiting = false;
+let independentError: Error | undefined;
 
 function check(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -42,7 +44,7 @@ function fail(error: unknown, phase = stage): void {
   failures.push({
     阶段: phase,
     类型: error instanceof assert.AssertionError ? '断言失败' : error instanceof Error ? '执行失败' : '未知失败',
-    代码: typeof code === 'string' ? code : null,
+    代码: typeof code === 'string' || typeof code === 'number' ? code : null,
     原因: error instanceof Error ? error.message : String(error),
   });
   report['通过'] = false;
@@ -54,11 +56,37 @@ for (const event of ['message', 'at', 'recalled'] as const) {
   driver.on(event, () => { realtimeEvents[event]++; });
 }
 driver.on('error', error => { fail(error, 'Driver错误事件'); });
+// 独立连接没有Driver代为监听；退出期间也必须保留真实诊断，不能触发uncaughtException。
+cdp.on('error', error => {
+  const cause = error instanceof Error ? error : new Error(String(error));
+  independentError ??= cause;
+  fail(cause, '独立CDP错误事件');
+});
+
+async function awaitMain<T>(operation: () => Promise<T>): Promise<T> {
+  // 只竞速当前实际操作，不把整段主流程放到后台；finally通过断开Driver终止在途搜索。
+  if (exiting) return await operation();
+  if (independentError) throw independentError;
+  let onError!: (error: Error) => void;
+  const errorSignal = new Promise<never>((_resolve, reject) => {
+    onError = error => { reject(independentError ?? error); };
+  });
+  cdp.once('error', onError);
+  try {
+    return await Promise.race([operation(), errorSignal]);
+  } finally {
+    cdp.off('error', onError);
+  }
+}
 
 async function query<T>(method: string, parameters: unknown[] = []): Promise<T> {
   stage = `独立原生查询：${method}`;
-  const response = await callIpcToData<T>(cdp, method, parameters);
-  check(response.code === 0, `独立原生查询失败：${method}`);
+  const response = await awaitMain(() => callIpcToData<T>(cdp, method, parameters));
+  if (response.code !== 0) {
+    const reasons = [response.error, response.message].filter(reason => typeof reason === 'string' && reason.length > 0);
+    throw Object.assign(new Error(`独立原生查询失败：${method} (${response.code}): ${reasons.join('；') || '原生未提供原因'}`),
+      { code: response.code });
+  }
   check(response.data !== undefined && response.data !== null, `独立原生查询缺少数据：${method}`);
   return response.data;
 }
@@ -95,7 +123,7 @@ interface SearchSnapshot extends SearchSurface {
 
 async function snapshot(): Promise<SearchSnapshot> {
   stage = '独立观察窗口与资源';
-  const surface = await cdp.evaluate<SearchSurface>(`(() => {
+  const surface = await awaitMain(() => cdp.evaluate<SearchSurface>(`(() => {
     const ipc = window.ipcRenderer || window.require('electron').ipcRenderer;
     const editor = document.querySelector('.chat-editor, .message-editor, .chat-sendArea')?.__vue__;
     const hook = window.__kairo_bridge_cleanup;
@@ -111,7 +139,7 @@ async function snapshot(): Promise<SearchSnapshot> {
       pendingSends: window.__kairo_pending_sends?.size || 0,
       searchProbe: !!window.__kairo_employee_search_probe,
     };
-  })()`);
+  })()`));
   const conversations = await query<{ sessionsInfo?: SessionRow[] }>('getConversations');
   check(Array.isArray(conversations.sessionsInfo), '原生会话快照缺少sessionsInfo数组');
   // 严格白名单：不保存lastMessage、会话名或任何聊天正文。
@@ -132,7 +160,7 @@ async function snapshot(): Promise<SearchSnapshot> {
 async function installProbe(): Promise<void> {
   stage = '安装自有透明观察器';
   probeAttempted = true;
-  await cdp.evaluate(`(() => {
+  await awaitMain(() => cdp.evaluate(`(() => {
     if (window.__kairo_employee_search_probe) throw new Error('已有人员搜索观察器，拒绝覆盖');
     const ipc = window.ipcRenderer || window.require('electron').ipcRenderer;
     const originalSend = ipc.send;
@@ -160,11 +188,11 @@ async function installProbe(): Promise<void> {
     };
     ipc.send = observedSend;
     window.__kairo_employee_search_probe = probe;
-  })()`);
+  })()`));
 }
 
-async function cleanupProbe(): Promise<void> {
-  if (!probeAttempted) return;
+async function cleanupProbe(): Promise<Record<string, number>> {
+  if (!probeAttempted) return {};
   stage = '恢复自有透明观察器';
   const observed = await cdp.evaluate<{
     owned: boolean; restored?: boolean; counts?: Record<string, number>;
@@ -180,8 +208,7 @@ async function cleanupProbe(): Promise<void> {
   const counts = observed.counts ?? {};
   check(Object.keys(counts).every(method => ['unionSearch', 'getMemberDetail', 'getAllDeptPaths'].includes(method)),
     '搜索出现白名单外data方法，不能证明未建会话、草稿、发送或标已读');
-  check((counts['unionSearch'] ?? 0) > 0 && (counts['getMemberDetail'] ?? 0) > 0 &&
-    (counts['getAllDeptPaths'] ?? 0) > 0, '搜索未观察到完整原生搜索、档案与部门读取');
+  return counts;
 }
 
 try {
@@ -196,7 +223,7 @@ try {
     搜索词: keyword.trim(),
   };
   stage = '连接独立CDP';
-  await cdp.connect();
+  await awaitMain(() => cdp.connect());
   connected = true;
   before = await snapshot();
   report['查询前基线'] = before;
@@ -206,20 +233,16 @@ try {
   check(String(identity.id) === uid && identity.login_name === login, '原生实际登录UID或login_name与指定账号不符');
   report['原生登录身份严格核对'] = true;
   stage = '连接只读Driver';
-  await driver.connect();
+  await awaitMain(() => driver.connect());
   const beforeSearch = await snapshot();
   report['搜索前资源'] = beforeSearch;
   await installProbe();
-  let result: KK9EmployeeSearchResult;
-  try {
-    stage = '执行Driver.searchEmployees';
-    result = await driver.searchEmployees(keyword);
-  } finally {
-    // 独立分页与快照不计入SDK搜索期间的原生方法计数。
-    const searchStage = stage;
-    await cleanupProbe();
-    stage = searchStage;
-  }
+  stage = '执行Driver.searchEmployees';
+  const result: KK9EmployeeSearchResult = await awaitMain(() => driver.searchEmployees(keyword));
+  // 搜索失败由外层先记录首错，再在finally恢复探针；清理错误不能覆盖原生失败。
+  const counts = await cleanupProbe();
+  check((counts['unionSearch'] ?? 0) > 0 && (counts['getMemberDetail'] ?? 0) > 0 &&
+    (counts['getAllDeptPaths'] ?? 0) > 0, '搜索未观察到完整原生搜索、档案与部门读取');
   const afterSearch = await snapshot();
   report['搜索后资源'] = afterSearch;
   stage = '核对搜索前后会话、窗口与资源';
@@ -297,12 +320,29 @@ try {
   stage = '核对无实时事件派发';
   assert.deepEqual(realtimeEvents, { message: 0, at: 0, recalled: 0 }, '搜索不得派发message、at或recalled');
 } catch (error) {
-  fail(error);
+  if (error !== independentError) fail(error);
 } finally {
+  exiting = true;
+  // 先断Driver，使竞速退出的在途查询拒绝，不能在恢复探针后继续下一页或档案查询。
+  try { await driver.disconnect(); } catch (error) { fail(error, 'Driver退出'); }
   if (connected && probeAttempted) {
     try { await cleanupProbe(); } catch (error) { fail(error, '最终清理自有观察器'); }
   }
-  try { await driver.disconnect(); } catch (error) { fail(error, 'Driver退出'); }
+  if (connected && cdp.getStatus() === 'connected') {
+    try {
+      const generationId = driver.getStartupGenerationId();
+      // Driver自身失联时，健康独立连接只释放仍归本代所有的远端Hook及binding。
+      await cdp.evaluate(`(() => {
+        const cleanup = window.__kairo_bridge_cleanup;
+        if (typeof cleanup !== 'function' || cleanup.generationId !== ${JSON.stringify(generationId)}) return;
+        const binding = window.__kairo_native_bridge;
+        try { cleanup(); }
+        finally {
+          if (window.__kairo_native_bridge === binding) delete window.__kairo_native_bridge;
+        }
+      })()`);
+    } catch (error) { fail(error, '独立CDP清理本代Hook与binding'); }
+  }
   if (connected) {
     try {
       const after = await snapshot();

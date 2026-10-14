@@ -399,3 +399,19 @@ README 的插件 TypeScript 示例另用 TypeScript 编译器内存 Program、No
 复用该构建运行两次 `examples/verify-native-employee-search.ts`：3583/kairo分别搜索董仕林5761和kairo3583，公开Driver结果与独立原生分页、真实工号及全部可见部门链一致。每次搜索仅各一次unionSearch/getMemberDetail/getAllDeptPaths；会话集合、窗口816219、已读索引5/181不变，实时事件0。退出message监听回1、自有Hook/binding/观察器false、在途0，两个CDP断开，进程exit0。
 
 专项首次运行误把原生 `sessionsInfo` 数组当成字典并拒绝，未进入Driver搜索；保留失败报告后按已核实原生数组修正快照模型，两次真机通过。此后单独运行 `pnpm exec eslint examples/verify-native-employee-search.ts` 通过；生产源码、类型和测试在完整检查通过后未再改变，没有冒称修正前脚本成功。真实同名、多部门、多页、缺工号、故障及超时未制造，相关边界由行为回归覆盖；两条真实样本只证明本次可见结果，不代表全公司或目录快照。临时协议/烟测脚本已移除，必要JSON证据保留；未发送、撤回、创建会话、标已读、提交、推送或发布。
+
+### 人员搜索评审修复
+
+修复范围仅为搜索期限及人员搜索专项。公开搜索类型、全分页、UID去重和只读契约不变。共享 `callIpcToData(cdp, method, args?, timeoutMs?, cdpWaitBudgetMs?)` 新增可选第五参数：第四参数是渲染进程IPC期限，第五参数是CDP等待预算上限，实际等待取该预算与 `timeoutMs + 1000` 的较小值；省略时保留既有调用语义。只有搜索入口传入剩余整轮预算，其他查询未改，不新增依赖、重试、缓存或连接框架。
+
+专项删除搜索期间的内层finally：成功后恢复透明观察器，再验收方法完整性；失败先记录原始错误，再从唯一退出路径分别清理。独立查询保留方法、原生数字错误码及error/message。独立CDP的异步error会中断当前操作，临时竞速监听在当前操作结束后释放；退出期间仍保留错误记录。先退出Driver终止在途搜索，再用健康独立连接恢复本次探针，并仅释放仍归本启动代次的Hook和binding，不删除其他代实例资源。
+
+新增17项行为回归。修复前期限回归3失败、23通过，专项入口回归5失败、5通过，均准确命中已复现问题。修复后 `pnpm exec vitest run tests/bridge-search-deadline.test.ts tests/bridge-org-ops.test.ts tests/native-employee-search-example.test.ts tests/bridge-rpc.test.ts tests/native-user-text-example-cleanup.test.ts tests/driver.test.ts tests/fake-driver.test.ts` 七文件119项通过。专项测试执行实际入口、Bridge/RPC/EventBridge和生成渲染脚本，覆盖双错、单连接失联、其他代资源保护、异步及退出error、迟到回复不继续查询。
+
+末端期限回归覆盖最后一位候选的部门回复恰好到期、超期及期限前返回。临时仅跳过最后一次部门返回后的期限检查，两项拒绝回归准确失败；恢复后源码与修复版逐字一致。最终 `pnpm check` 通过build/typecheck、38文件505项测试和lint，1项既有Linux专属用例在Windows跳过。首次完整检查在测试全部通过后发现两处新lint诊断：移除竞速后的重复判错分支、按WebSocket字节类型解码后重新完整通过；没有抑制规则或弱化断言。
+
+复用最终构建执行真实CdpClient与本地HTTP/WebSocket烟测：连接保持在线但不回Runtime.evaluate，80ms预算实测85ms拒绝，无后续查询，连接正常退出；证据 `tmp/employee-search-deadline-fixed-evidence.json`。这是隔离调试协议验证，不是真机故障验收。
+
+授权真机专项从公开ESM入口运行通过，3583/kairo搜索董仕林5761；运行ID `fb86b55f-ed14-489f-a0e3-1242510874d6`。每个搜索方法各一次，与独立原生全分页、真实工号和全部可见部门一致；会话793803/816219、读索引181/20、窗口816219不变，实时事件0；退出监听回1，自有Hook、binding、观察器、探针均无残留，在途0，两连接退出、exit0。首次运行因已有其他代桥接而拒绝接管，失败报告保留；后续独立观察发现原桥接已不存在后才重新运行，本轮未清除原桥接，其退出来源未核实。详见启动记录。
+
+真实单连接失联、异步error和期限故障没有在KK9上制造，这些分支由隔离行为回归覆盖；真机只证明本次账号的正常只读搜索和退出。临时烟测脚本已移除，保留必要JSON证据；没有发送、撤回、创建会话、标已读、提交、推送或合并。

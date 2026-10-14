@@ -18,13 +18,15 @@ export interface IpcResponse<T = unknown> {
  * @param cdp CdpClient 实例
  * @param method RPC 方法名 (如 'getConversations', 'getChildDeptsAndMembers', 'getMemberDetail')
  * @param args 方法入参
- * @param timeoutMs 超时时间 (毫秒)
+ * @param timeoutMs 渲染进程 IPC 请求超时时间 (毫秒)
+ * @param cdpWaitBudgetMs CDP 等待预算上限 (毫秒)，默认 timeoutMs + 1000；实际等待取两者较小值
  */
 export async function callIpcToData<T = unknown>(
   cdp: CdpClient,
   method: string,
   args: unknown[] = [],
-  timeoutMs = 10000
+  timeoutMs = 10000,
+  cdpWaitBudgetMs = timeoutMs + 1000
 ): Promise<IpcResponse<T>> {
   const script = `
     (async () => {
@@ -47,7 +49,7 @@ export async function callIpcToData<T = unknown>(
   `;
 
   try {
-    const res = await cdp.evaluate<IpcResponse<T>>(script, timeoutMs + 1000);
+    const res = await cdp.evaluate<IpcResponse<T>>(script, Math.min(timeoutMs + 1000, cdpWaitBudgetMs));
     if (!res) {
       throw new DriverError(`IPC toData [${method}] 未获得返回值`, 'IPC_NO_RESPONSE');
     }

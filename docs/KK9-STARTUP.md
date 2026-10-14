@@ -666,3 +666,20 @@ pnpm exec tsx examples/verify-native-employee-search.ts 3583 kairo kairo 3583
 首轮专项因脚本将原生sessionsInfo数组误判为字典而失败，在连接独立CDP后的基线阶段结束，没有进入搜索或操作会话；失败报告 `tmp/employee-search-initial-live-failure.json` 保留。修正快照数组模型后两样本通过，随后专项ESLint通过。最终生产检查为build/typecheck、36文件488项通过及1项既有Linux用例跳过、lint通过；首次检查的Fake全局函数引用lint错误已修正并重跑完整检查。
 
 真实同名候选、多部门、多页、缺工号及查询故障/超时没有在本轮真机制造；这些条件由执行实际生成IPC脚本和Fake行为回归覆盖，不冒充真机实测。没有发会议通知或重跑前序媒体、撤回和TTS专项；本轮只读查询允许KK9内部刷新档案/头像缓存，不代表文件系统完全无写入。
+
+### 评审修复后的复验
+
+本轮复用最终 `pnpm check` 的构建（build/typecheck、38文件505项及lint通过，1项既有Linux专属用例跳过），执行：
+
+```powershell
+$env:CDP_URL = "http://172.16.0.18:9222"
+pnpm exec tsx examples/verify-native-employee-search.ts 3583 kairo 董仕林 5761
+```
+
+首次运行ID `e4acb9d9-cd4d-4fcb-b1da-b96f8e8f953d`：原生身份核对通过，但已有其他代桥接 `3041e719-169e-4c01-a1b9-80bf338fdaac`，脚本按门禁拒绝接管，未进入搜索；原有Hook、观察器、binding、监听和会话/窗口/读索引保持原样，两连接退出，exit1。证据 `tmp/employee-search-bridge-conflict-evidence.json`。没有关闭其他进程或删除原有桥接。
+
+随后仅通过独立连接执行构建后Bridge查询，原生身份、5761真实工号前导零及部门null对照通过，前后基线一致、连接退出；证据 `tmp/employee-search-shared-hook-evidence.json`。该次观察的基线显示原桥接已不存在，其退出来源未核实；此补充验证不替代完整专项。
+
+在已观察到空闲桥接基线后，重新执行上述完整专项，通过。运行ID `fb86b55f-ed14-489f-a0e3-1242510874d6`，报告 `tmp/employee-search-live-evidence.json`。搜索期间unionSearch/getMemberDetail/getAllDeptPaths各一次；全部原生可见结果、档案和部门链一致，hasMore=false。会话793803/816219及已读索引181/20、窗口816219不变，message/at/recalled均0。退出message监听1、自有Hook/binding/观察器/探针均false、在途0，两个CDP断开、exit0。
+
+专项现在分开记录原始查询失败与清理失败；独立CDP异步error也进入退出路径，Driver单连接失联时只清理仍归本代的远端资源。真实KK9故障未人为制造，不把隔离的10项入口故障/门禁回归和4项真实本地CDP期限回归称为真机故障验收；本轮没有发送、撤回、建会话或标已读操作。

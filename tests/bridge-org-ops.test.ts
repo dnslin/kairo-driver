@@ -168,6 +168,48 @@ describe('只读人员搜索', () => {
     await expect(ops.searchEmployees('张三', 30)).rejects.toThrow(/getMemberDetail.*1.*超时/);
   });
 
+  it.each([30, 31])('末端部门在第%s毫秒返回也拒绝完整成功，保留方法与UID', async elapsed => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(1000);
+    const methods: unknown[] = [];
+    const ops = nativeOrg(({ args: [method, uid] }) => {
+      methods.push(method);
+      if (method === 'unionSearch') return { code: 0, data: { users: [{ id: 1 }, { id: 2 }] } };
+      if (method === 'getMemberDetail') return { code: 0, data: { id: uid, name: '张三', login_name: `000${String(uid)}` } };
+      if (method === 'getAllDeptPaths') {
+        if (uid === 2) vi.setSystemTime(1000 + elapsed);
+        return { code: 0, data: [{ deptPaths: [{ id: 10, name: '研发中心' }, { id: 11, name: '后端组' }] }] };
+      }
+      throw new Error('搜索不允许其他原生操作');
+    });
+    await expect(ops.searchEmployees('张三', 30)).rejects.toThrow(/getAllDeptPaths.*UID 2.*超时/);
+    expect(methods).toEqual(['unionSearch', 'getMemberDetail', 'getAllDeptPaths', 'getMemberDetail', 'getAllDeptPaths']);
+  });
+
+  it('末端部门在期限前返回准确完整结果，不丢先前候选与多部门', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(1000);
+    const ops = nativeOrg(({ args: [method, uid] }) => {
+      if (method === 'unionSearch') return { code: 0, data: { users: [{ id: 1 }, { id: 2 }] } };
+      if (method === 'getMemberDetail') return { code: 0, data: { id: uid, name: '张三', login_name: `000${String(uid)}` } };
+      if (method === 'getAllDeptPaths') {
+        if (uid === 2) vi.setSystemTime(1029);
+        return { code: 0, data: uid === 1 ? [] : [
+          { deptPaths: [{ id: 10, name: '研发中心' }, { id: 11, name: '后端组' }] },
+          { deptPaths: [{ id: 20, name: '项目中心' }, { id: 21, name: '平台组' }] },
+        ] };
+      }
+      throw new Error('搜索不允许其他原生操作');
+    });
+    await expect(ops.searchEmployees('张三', 30)).resolves.toEqual({
+      employees: [
+        { id: '1', name: '张三', loginName: '0001', departmentPaths: null },
+        { id: '2', name: '张三', loginName: '0002', departmentPaths: ['研发中心 / 后端组', '项目中心 / 平台组'] },
+      ],
+      hasMore: false,
+    });
+  });
+
   it('空关键词或无效期限在任何原生查询前拒绝', async () => {
     const ops = nativeOrg(() => { throw new Error('不得访问原生'); });
     await expect(ops.searchEmployees('  ')).rejects.toThrow(/关键词/);

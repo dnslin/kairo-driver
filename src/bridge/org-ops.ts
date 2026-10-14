@@ -37,7 +37,7 @@ export class BridgeOrgOps {
       try {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error(`人员搜索超时 (${timeoutMs}ms)`);
-        const result = await callIpcToData(this.cdp, method, args, Math.min(4000, remaining));
+        const result = await callIpcToData(this.cdp, method, args, Math.min(4000, remaining), remaining);
         if (result.code !== 0) throw new Error(`失败 (${result.code}): ${result.error || result.message || ''}`);
         if (Date.now() >= deadline) throw new Error(`人员搜索超时 (${timeoutMs}ms)`);
         return result.data;

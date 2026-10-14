@@ -202,7 +202,7 @@ async function sendDownloadedFile(
 
 ### 只读人员搜索
 
-`searchEmployees(keyword, timeoutMs?)` 搜索当前登录账号可见人员。关键词去首尾空白，匹配规则沿用 KK9 原生搜索；Driver 内部每页200条读完，再按 UID 去重并读取真实档案和所有可见部门路径。默认整轮期限30秒；空关键词、无效期限、原生失败或超时抛出 `DriverError`，不返回部分成功。
+`searchEmployees(keyword, timeoutMs?)` 搜索当前登录账号可见人员。关键词去首尾空白，匹配规则沿用 KK9 原生搜索；Driver 内部每页200条读完，再按 UID 去重并读取真实档案和所有可见部门路径。默认整轮期限30秒，同时限制原生请求及CDP等待；空关键词、无效期限、原生失败或超时抛出 `DriverError`，不返回部分成功。
 
 ```ts
 const result = await driver.searchEmployees('张三');
@@ -303,10 +303,11 @@ await driver.sendChatRecord({
 ## 未发布变更
 
 - 新增：`searchEmployees` 只读人员搜索，内部全分页、UID去重、真实工号和所有可见部门路径；失败不返回部分结果，不负责对话或选择状态。
+- 修复：人员搜索的剩余总期限同时约束CDP等待；只读专项的双连接故障进入退出流程，按本代归属清理资源，并分别保留原生首错及清理错误。
 - 新增：图片和普通文件通过现有 CDP 分块传输，统一采用 Driver 本机输入路径，无需 Windows 桥接或共享磁盘。
 - 修复：`downloadImage` 将准确原图保存到 Driver 本机，不再对 Windows 内部路径做宿主文件操作；新增 `saveFile` 保存已有缓存普通附件。
 - 保持：本地 CDP、原图选择、发送防重及 `sent/failed/unknown` 语义；语音继续采用既有数据传输，不新增连接框架、依赖或自动重试。
-- 验证：完整检查 36 文件 451 项通过；真实 Linux → Windows 100 MiB 文件往返、准确原图缓存保存与 WAV/MP3 编码通过。文字 TTS 403、真实消息发送/原生云端原图下载及接收端播放尚未验收，详见启动说明。
+- 验证：人员搜索评审修复后完整检查38文件505项通过，1项既有Linux专属用例在Windows跳过；授权真机只读专项通过。既有Linux → Windows 100 MiB文件往返、准确原图缓存保存与WAV/MP3编码结果，以及TTS 403、真实消息发送/原生云端原图下载及接收端播放未验收项，仍见启动说明；本轮未重跑这些真机媒体场景。
 
 ## 2.0.1 变更记录
 
