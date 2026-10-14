@@ -13,6 +13,8 @@ import type {
   KK9BizMsgOptions,
   KK9ChatRecordOptions,
   KK9Employee,
+  KK9EmployeeSearchItem,
+  KK9EmployeeSearchResult,
   KK9FileInfo,
   KK9ImageInfo,
   KK9Message,
@@ -103,6 +105,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private sessions: KK9Session[] = [];
   private messages: KK9Message[] = [];
   private employees: KK9Employee[] = [];
+  private searchEmployeeProfiles: KK9EmployeeSearchItem[] = [];
   private currentBehavior: FakeSendBehavior = { mode: 'success' };
   private behaviorSequence: FakeSendBehavior[] = [];
   private readonly sendOperationStore: SendOperationStore;
@@ -163,6 +166,52 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   public setEmployees(employees: KK9Employee[]): void {
     this.employees = employees;
+  }
+
+  /** 独立注入真实搜索档案，不从组织架构展示字段推断工号。 */
+  public setSearchEmployees(employees: KK9EmployeeSearchItem[]): void {
+    const profiles = new Map<string, { employee: KK9EmployeeSearchItem; paths: Set<string> }>();
+    for (const employee of employees) {
+      const numericId = Number(employee.id);
+      if (!Number.isSafeInteger(numericId) || numericId <= 0) {
+        throw new DriverError('员工搜索档案 UID 必须为正安全整数', 'IPC_QUERY_FAILED');
+      }
+      const id = String(numericId);
+      let profile = profiles.get(id);
+      if (!profile) {
+        profile = { employee: { id, name: null, loginName: null, departmentPaths: null }, paths: new Set() };
+        profiles.set(id, profile);
+      }
+      if (!profile.employee.name && typeof employee.name === 'string' && employee.name.trim()) {
+        profile.employee.name = employee.name;
+      }
+      if (!profile.employee.loginName && typeof employee.loginName === 'string' && employee.loginName.trim()) {
+        profile.employee.loginName = employee.loginName;
+      }
+      for (const departmentPath of employee.departmentPaths ?? []) {
+        if (typeof departmentPath === 'string' && departmentPath.trim()) profile.paths.add(departmentPath);
+      }
+    }
+    this.searchEmployeeProfiles = [...profiles.values()].map(({ employee, paths }) => ({
+      ...employee,
+      departmentPaths: paths.size ? [...paths] : null,
+    }));
+  }
+
+  public searchEmployees(keyword: string, timeoutMs = 30000): Promise<KK9EmployeeSearchResult> {
+    const startedAt = Date.now();
+    const query = keyword.trim();
+    if (!query) return Promise.reject(new DriverError('员工搜索关键词不能为空', 'IPC_QUERY_FAILED'));
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.reject(new DriverError(`员工搜索总期限必须为正有限毫秒数：${timeoutMs}`, 'IPC_QUERY_FAILED'));
+    }
+    const employees = this.searchEmployeeProfiles
+      .filter(employee => employee.name?.includes(query) || employee.loginName?.includes(query))
+      .map(employee => ({ ...employee, departmentPaths: employee.departmentPaths ? [...employee.departmentPaths] : null }));
+    if (Date.now() - startedAt >= timeoutMs) {
+      return Promise.reject(new DriverError(`员工搜索超过总期限，超时 ${timeoutMs}ms`, 'IPC_QUERY_FAILED'));
+    }
+    return Promise.resolve({ employees, hasMore: false });
   }
 
   /** 注入服务器图片资源；下载写入实际字节，不制造消息回声。 */

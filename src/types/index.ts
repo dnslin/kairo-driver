@@ -283,6 +283,24 @@ export interface KK9Employee {
   updatedAt: number;
 }
 
+/** 只读搜索候选；不使用员工展示逻辑的工号或姓名回退。 */
+export interface KK9EmployeeSearchItem {
+  /** 真实人员 UID，规范为字符串，用于去重与绑定候选。 */
+  id: string;
+  /** 档案真实姓名；未提供为 null。 */
+  name: string | null;
+  /** 仅来自原生档案 login_name；未提供为 null，不能用 UID 替代。 */
+  loginName: string | null;
+  /** 原生提供的所有可见部门完整路径；未提供为 null，应展示“部门未提供”。 */
+  departmentPaths: string[] | null;
+}
+
+/** 只有当前账号的本次搜索分页全部读完才返回；不表示全公司可见或姓名唯一。 */
+export interface KK9EmployeeSearchResult {
+  employees: KK9EmployeeSearchItem[];
+  hasMore: false;
+}
+
 
 export interface CdpConfig {
   url: string;
@@ -454,6 +472,8 @@ export interface IKK9Driver extends EventEmitter {
   recallMessage(messageId: string, session: KK9Session | string): Promise<boolean>;
 
   // 组织架构与员工档案
+  /** 内部全分页并按 UID 去重；失败/超时抛错，不返回部分成功；不操作会话或发送。 */
+  searchEmployees(keyword: string, timeoutMs?: number): Promise<KK9EmployeeSearchResult>;
   getOrgEmployees(timeoutMs?: number): Promise<KK9Employee[]>;
   getUserProfile(userId: number | string): Promise<KK9Employee | null>;
   getEmployeeBySession(session: string | KK9Session): Promise<KK9Employee | null>;

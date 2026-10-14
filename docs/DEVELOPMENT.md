@@ -382,3 +382,36 @@ README 的插件 TypeScript 示例另用 TypeScript 编译器内存 Program、No
 
 修复后执行 `examples/verify-remote-files.ts` 默认真机脚本：Linux输入786469字节经CDP传到Windows并保存回Linux，SHA256 `d1679c45335f37b8acdcdf92749e13f4c18c54b71cf17e0b097c90cc83f6763c` 一致；缓存原图640×360正确保存、本轮远端文件全部释放、消息操作0、退出0。没有向真实客户端制造EPERM或改变权限，没有重新发送六条已验收消息。
 
+## 只读人员搜索
+
+新增 `searchEmployees(keyword, timeoutMs?)`、`KK9EmployeeSearchItem` 和 `KK9EmployeeSearchResult`，位于现有 `BridgeOrgOps`、Driver、Fake及包入口；不改变现有工号发送、档案展示或Store。内部全分页后按UID读取档案及全部部门路径，不增加依赖、缓存、重试、游标或选择状态。
+
+当前远端 KK9 `main.js` 与真实只读调用已核对：`unionSearch(type:user)` 通过 `getUsersByKwd` 使用数据库 `limit/offset`，原始短页表示结束，不按去重后的候选数停止；匹配基于当前账号权限/等级范围内的原生summary。`getMemberDetail` 只提供默认部门链，全部部门必须调用 `getAllDeptPaths(UID)`，返回多条 `{ deptInfo, deptPaths }`，每条链按祖先到叶子排序且受可见权限限制。未提供部门返回null，不能从职位或默认部门补齐。
+
+搜索候选独立于 `parseEmployee` 的展示回退。工号仅取原生 `login_name`；缺姓名/工号返回null，非空值保留原文与工号前导零。错UID、档案缺席、畸形路径、任意查询失败及整轮超时均抛带方法/页码/UID及原生原因的DriverError，不丢候选后宣称完整。默认总期限30000ms，每次原生请求受剩余期限约束。Fake通过独立 `setSearchEmployees` 注入候选，不读取展示工号。
+
+新增14项原生行为回归首次全部因方法未实现失败；接入后 `pnpm exec vitest run tests/bridge-org-ops.test.ts tests/driver.test.ts tests/fake-driver.test.ts` 3文件92项通过。临时把结束条件改成去重UID数量后，“按原始页长度”回归准确捕获后页同名漏人；已恢复原始页长度条件。源码Bridge真机调用已确认董仕林5761的真实工号0123040139及部门null，当前账号3583/kairo返回部门“测试”；Fake实际调用保留两个同名UID并合并同人多部门，发送记录为空。
+
+本机默认Node14不能运行锁定pnpm；使用已有 `C:/Users/dongshilin/AppData/Local/pi-node/current/node.exe`（22.23.0）及pnpm11.19，不升级依赖或改运行配置。LSP仍初始化退出code0；实际引用由现有调用检索与行为回归补足。jshookmcp附着忽略远端wsEndpoint连接默认端口的问题已报告，改用现有CdpClient独立只读取证，没有修改客户端安装包或共享工具。
+
+最终 `pnpm check` 通过build/typecheck、36文件488项测试及lint，1项既有Linux专属FIFO回归在Windows跳过。首次完整检查仅新增Fake测试的三处 `structuredClone` 全局引用触发ESLint no-undef；改为明确使用 `globalThis.structuredClone`，保留深拷贝和全部状态断言后重新完整通过，没有改全局规则或弱化测试。
+
+复用该构建运行两次 `examples/verify-native-employee-search.ts`：3583/kairo分别搜索董仕林5761和kairo3583，公开Driver结果与独立原生分页、真实工号及全部可见部门链一致。每次搜索仅各一次unionSearch/getMemberDetail/getAllDeptPaths；会话集合、窗口816219、已读索引5/181不变，实时事件0。退出message监听回1、自有Hook/binding/观察器false、在途0，两个CDP断开，进程exit0。
+
+专项首次运行误把原生 `sessionsInfo` 数组当成字典并拒绝，未进入Driver搜索；保留失败报告后按已核实原生数组修正快照模型，两次真机通过。此后单独运行 `pnpm exec eslint examples/verify-native-employee-search.ts` 通过；生产源码、类型和测试在完整检查通过后未再改变，没有冒称修正前脚本成功。真实同名、多部门、多页、缺工号、故障及超时未制造，相关边界由行为回归覆盖；两条真实样本只证明本次可见结果，不代表全公司或目录快照。临时协议/烟测脚本已移除，必要JSON证据保留；未发送、撤回、创建会话、标已读、提交、推送或发布。
+
+### 人员搜索评审修复
+
+修复范围仅为搜索期限及人员搜索专项。公开搜索类型、全分页、UID去重和只读契约不变。共享 `callIpcToData(cdp, method, args?, timeoutMs?, cdpWaitBudgetMs?)` 新增可选第五参数：第四参数是渲染进程IPC期限，第五参数是CDP等待预算上限，实际等待取该预算与 `timeoutMs + 1000` 的较小值；省略时保留既有调用语义。只有搜索入口传入剩余整轮预算，其他查询未改，不新增依赖、重试、缓存或连接框架。
+
+专项删除搜索期间的内层finally：成功后恢复透明观察器，再验收方法完整性；失败先记录原始错误，再从唯一退出路径分别清理。独立查询保留方法、原生数字错误码及error/message。独立CDP的异步error会中断当前操作，临时竞速监听在当前操作结束后释放；退出期间仍保留错误记录。先退出Driver终止在途搜索，再用健康独立连接恢复本次探针，并仅释放仍归本启动代次的Hook和binding，不删除其他代实例资源。
+
+新增17项行为回归。修复前期限回归3失败、23通过，专项入口回归5失败、5通过，均准确命中已复现问题。修复后 `pnpm exec vitest run tests/bridge-search-deadline.test.ts tests/bridge-org-ops.test.ts tests/native-employee-search-example.test.ts tests/bridge-rpc.test.ts tests/native-user-text-example-cleanup.test.ts tests/driver.test.ts tests/fake-driver.test.ts` 七文件119项通过。专项测试执行实际入口、Bridge/RPC/EventBridge和生成渲染脚本，覆盖双错、单连接失联、其他代资源保护、异步及退出error、迟到回复不继续查询。
+
+末端期限回归覆盖最后一位候选的部门回复恰好到期、超期及期限前返回。临时仅跳过最后一次部门返回后的期限检查，两项拒绝回归准确失败；恢复后源码与修复版逐字一致。最终 `pnpm check` 通过build/typecheck、38文件505项测试和lint，1项既有Linux专属用例在Windows跳过。首次完整检查在测试全部通过后发现两处新lint诊断：移除竞速后的重复判错分支、按WebSocket字节类型解码后重新完整通过；没有抑制规则或弱化断言。
+
+复用最终构建执行真实CdpClient与本地HTTP/WebSocket烟测：连接保持在线但不回Runtime.evaluate，80ms预算实测85ms拒绝，无后续查询，连接正常退出；证据 `tmp/employee-search-deadline-fixed-evidence.json`。这是隔离调试协议验证，不是真机故障验收。
+
+授权真机专项从公开ESM入口运行通过，3583/kairo搜索董仕林5761；运行ID `fb86b55f-ed14-489f-a0e3-1242510874d6`。每个搜索方法各一次，与独立原生全分页、真实工号和全部可见部门一致；会话793803/816219、读索引181/20、窗口816219不变，实时事件0；退出监听回1，自有Hook、binding、观察器、探针均无残留，在途0，两连接退出、exit0。首次运行因已有其他代桥接而拒绝接管，失败报告保留；后续独立观察发现原桥接已不存在后才重新运行，本轮未清除原桥接，其退出来源未核实。详见启动记录。
+
+真实单连接失联、异步error和期限故障没有在KK9上制造，这些分支由隔离行为回归覆盖；真机只证明本次账号的正常只读搜索和退出。临时烟测脚本已移除，保留必要JSON证据；没有发送、撤回、创建会话、标已读、提交、推送或合并。

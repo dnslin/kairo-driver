@@ -22,6 +22,7 @@ import type {
   KK9BizMsgOptions,
   KK9ChatRecordOptions,
   KK9Employee,
+  KK9EmployeeSearchResult,
   KK9FileInfo,
   KK9ImageInfo,
   KK9Message,
@@ -430,6 +431,11 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
 
     log.info({ messageId: event.messageId, sender: event.sender }, '捕获到消息撤回事件并派发');
     this.emit('recalled', event);
+  }
+
+  /** 只读搜索当前账号可见人员；内部全分页，不判断唯一或保存候选选择。 */
+  public searchEmployees(keyword: string, timeoutMs?: number): Promise<KK9EmployeeSearchResult> {
+    return this.bridgeOrgOps.searchEmployees(keyword, timeoutMs);
   }
 
   /** 原生可见组织查询；正常空不切换实现，失败抛错。 */
