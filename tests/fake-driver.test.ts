@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FakeKK9Driver } from '../src/fake-driver.js';
 import { InMemorySendOperationStore } from '../src/send-operation.js';
-import type { KK9Employee, KK9Message, KK9Session } from '../src/types/index.js';
+import type { KK9Employee, KK9EmployeeSearchItem, KK9Message, KK9Session } from '../src/types/index.js';
 import { createNativeMessageKey } from '../src/bridge/send-status.js';
 
 describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
@@ -217,6 +217,146 @@ describe('FakeKK9Driver 故障注入与契约实现测试 (IKK9Driver)', () => {
 
     const fromGroup = await driver.getEmployeeBySession('93002');
     expect(fromGroup).toBeNull();
+  });
+
+  it('员工搜索保留同名不同 UID，并按 UID 合并全部部门路径与缺失档案字段', async () => {
+    driver.setSearchEmployees([
+      { id: '91002', name: null, loginName: null, departmentPaths: ['总部 / 研发', '', '   '] },
+      { id: '91003', name: '同名员工', loginName: 'EMP-003', departmentPaths: ['总部 / 财务'] },
+      { id: '091002', name: '同名员工', loginName: 'EMP-002', departmentPaths: ['总部 / 研发', '总部 / 测试'] },
+      { id: '91002', name: '', loginName: '', departmentPaths: null },
+    ]);
+
+    const employees: KK9EmployeeSearchItem[] = [
+      { id: '91002', name: '同名员工', loginName: 'EMP-002', departmentPaths: ['总部 / 研发', '总部 / 测试'] },
+      { id: '91003', name: '同名员工', loginName: 'EMP-003', departmentPaths: ['总部 / 财务'] },
+    ];
+    await expect(driver.searchEmployees(' 同名员工 ')).resolves.toEqual({ employees, hasMore: false });
+    await expect(driver.searchEmployees('EMP-002')).resolves.toEqual({ employees: [employees[0]], hasMore: false });
+  });
+
+  it('员工搜索仅使用独立注入的姓名或真实工号，空字段不以 UID 或展示档案回退', async () => {
+    driver.setEmployees([{ id: 91001, name: '展示姓名', loginName: '展示工号', updatedAt: 1 }]);
+    await expect(driver.searchEmployees('展示')).resolves.toEqual({ employees: [], hasMore: false });
+    driver.setSearchEmployees([
+      { id: '91001', name: null, loginName: null, departmentPaths: null },
+      { id: '91002', name: '只有姓名', loginName: '', departmentPaths: [] },
+      { id: '91003', name: '  ', loginName: 'EMP-003', departmentPaths: ['', '  '] },
+    ]);
+
+    await expect(driver.searchEmployees('91001')).resolves.toEqual({ employees: [], hasMore: false });
+    await expect(driver.searchEmployees('只有姓名')).resolves.toEqual({
+      employees: [{ id: '91002', name: '只有姓名', loginName: null, departmentPaths: null }],
+      hasMore: false,
+    });
+    await expect(driver.searchEmployees('EMP-003')).resolves.toEqual({
+      employees: [{ id: '91003', name: null, loginName: 'EMP-003', departmentPaths: null }],
+      hasMore: false,
+    });
+  });
+
+  it('员工搜索按字面子串过滤并返回空结果，不扩展拼音、正则或部门关键词', async () => {
+    const employee: KK9EmployeeSearchItem = {
+      id: '91002', name: ' 董仕林 ', loginName: ' EMP.002 ', departmentPaths: [' 总部 / 研发 '],
+    };
+    driver.setSearchEmployees([
+      employee,
+      { id: '91003', name: '其他员工', loginName: 'EMPX003', departmentPaths: null },
+    ]);
+
+    await expect(driver.searchEmployees('  仕林\t', 1000)).resolves.toEqual({ employees: [employee], hasMore: false });
+    await expect(driver.searchEmployees('EMP.')).resolves.toEqual({ employees: [employee], hasMore: false });
+    for (const keyword of ['dongshilin', '.*', '研发', '不存在']) {
+      await expect(driver.searchEmployees(keyword)).resolves.toEqual({ employees: [], hasMore: false });
+    }
+  });
+
+  it.each(['', '0', '-1', '1.5', 'NaN', 'Infinity', '9007199254740992'])(
+    '员工搜索档案拒绝无效 UID（%j）', id => {
+      expect(() => driver.setSearchEmployees([{ id, name: '员工', loginName: null, departmentPaths: null }]))
+        .toThrow('UID 必须为正安全整数');
+    }
+  );
+
+  it.each(['', ' \t\n '])('员工搜索拒绝空白关键词（%j）', async keyword => {
+    await expect(driver.searchEmployees(keyword)).rejects.toMatchObject({
+      name: 'DriverError', code: 'IPC_QUERY_FAILED', message: expect.stringMatching(/关键词/),
+    });
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    '员工搜索拒绝无效总期限（%s）并提供期限诊断', async timeoutMs => {
+      await expect(driver.searchEmployees('员工', timeoutMs)).rejects.toMatchObject({
+        name: 'DriverError', code: 'IPC_QUERY_FAILED', message: expect.stringMatching(/期限|超时/),
+      });
+    }
+  );
+
+  it('员工搜索隔离注入对象与每次返回的对象和路径数组', async () => {
+    const employee: KK9EmployeeSearchItem = {
+      id: '91002', name: '原始员工', loginName: 'EMP-002', departmentPaths: ['总部 / 研发'],
+    };
+    const injected = [employee];
+    driver.setSearchEmployees(injected);
+    employee.name = '篡改注入姓名';
+    employee.departmentPaths!.push('篡改注入路径');
+    injected.length = 0;
+
+    const first = await driver.searchEmployees('原始员工');
+    expect(first).toEqual({
+      employees: [{ id: '91002', name: '原始员工', loginName: 'EMP-002', departmentPaths: ['总部 / 研发'] }],
+      hasMore: false,
+    });
+    first.employees[0]!.id = '篡改返回UID';
+    first.employees[0]!.name = '篡改返回姓名';
+    first.employees[0]!.loginName = '篡改返回工号';
+    first.employees[0]!.departmentPaths!.push('篡改返回路径');
+    first.employees.push({ id: '额外候选', name: '原始员工', loginName: null, departmentPaths: null });
+
+    await expect(driver.searchEmployees('EMP-002')).resolves.toEqual({
+      employees: [{ id: '91002', name: '原始员工', loginName: 'EMP-002', departmentPaths: ['总部 / 研发'] }],
+      hasMore: false,
+    });
+    driver.setSearchEmployees([]);
+    await expect(driver.searchEmployees('原始员工')).resolves.toEqual({ employees: [], hasMore: false });
+  });
+
+  it('员工搜索不修改会话、历史、发送记录或已读状态，也不派发事件', async () => {
+    const session: KK9Session = {
+      id: '93001', name: '已有会话', type: 'private', nativeType: 0, receiverId: '91002',
+      unread: true, unreadCount: 2, unreadAt: true,
+    };
+    const message: KK9Message = {
+      id: '1001', messageId: '1001', msgIdx: 1, sessionId: session.id, sessionName: session.name,
+      sessionType: session.type, sender: '历史发送人', content: '已有历史', time: '12:00',
+      isMe: false, direction: 'inbound', timestamp: 100,
+    };
+    driver.setSessions([session]);
+    driver.setMessages([message]);
+    driver.setSearchEmployees([{ id: '91002', name: '待查员工', loginName: 'EMP-002', departmentPaths: null }]);
+    await driver.sendText('已有发送记录', { operationId: '搜索前发送', targetSessionId: session.id });
+    const sessionsBefore = globalThis.structuredClone(await driver.getSessions());
+    const historyBefore = globalThis.structuredClone(await driver.getRecentMessages(session));
+    const callsBefore = globalThis.structuredClone(driver.recordedCalls);
+    const events: string[] = [];
+    driver.on('status', () => events.push('status'));
+    driver.on('message', () => events.push('message'));
+    driver.on('at', () => events.push('at'));
+    driver.on('recalled', () => events.push('recalled'));
+    driver.on('error', () => events.push('error'));
+    driver.on('heartbeat', () => events.push('heartbeat'));
+    driver.on('health', () => events.push('health'));
+
+    await driver.searchEmployees('待查员工');
+    await driver.searchEmployees('没有匹配');
+    await expect(driver.searchEmployees(' ')).rejects.toMatchObject({ code: 'IPC_QUERY_FAILED' });
+    await expect(driver.searchEmployees('待查员工', 0)).rejects.toMatchObject({ code: 'IPC_QUERY_FAILED' });
+
+    expect(await driver.getSessions()).toEqual(sessionsBefore);
+    expect(await driver.getRecentMessages(session)).toEqual(historyBefore);
+    expect(driver.recordedCalls).toEqual(callsBefore);
+    expect(driver.markSessionReadCallsCount).toBe(0);
+    expect(events).toEqual([]);
   });
 
 

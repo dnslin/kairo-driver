@@ -636,3 +636,33 @@ Windows最终 `pnpm check` 的构建、类型、36文件455项测试和lint通�
 
 原实现完整质量检查为 `pnpm check`：build/typecheck、36文件451项测试和lint通过。纯字节往返、缓存保存与编码、已授权真实发送、服务器原图/文件下载及用户验证反馈分别保留证据，不把Fake或同机回归冒充真机验收。独立接收设备的逐项操作细节没有自动采集，文字TTS成功及真实TLS部署仍未验证。
 
+## 只读人员搜索验收
+
+先运行 `pnpm check`，或复用本轮已通过检查的构建；专项不重复构建，只从 `@kairo/driver` 公开ESM入口调用。参数依次为登录UID、登录账号、搜索词、候选UID：
+
+```powershell
+$env:CDP_URL = "http://172.16.0.18:9222"
+pnpm exec tsx examples/verify-native-employee-search.ts 3583 kairo 董仕林 5761
+```
+
+其他环境应指定其真实CDP地址和已授权身份/搜索范围。脚本先无参读取原生实际登录档案并严格核对账号，再执行搜索；独立全分页与逐UID真实档案/全部可见部门链对照，检查UID无重复与hasMore=false。透明观察只允许搜索期间出现 `unionSearch/getMemberDetail/getAllDeptPaths`，对比会话集合、最大/已读索引、窗口与事件，退出检查自身Hook、监听、观察器及在途回到基线。
+
+不创建会话、插草稿、发送、撤回、切窗口或标已读。报告 `tmp/employee-search-live-evidence.json` 只保存范围、方法计数、核对摘要及必要会话/资源元数据，不保存完整候选资料、凭据或聊天正文；原生失败保留诊断，不把替身回归记作真机通过。
+
+### 本轮实际结果
+
+在Windows Node22.23/pnpm11.19运行以下两条，均复用最终 `pnpm check` 构建，不另跑build。PowerShell的PATH临时使用已有 `C:/Users/dongshilin/AppData/Local/pi-node/current`，pnpm由该Node执行现有 `C:/Users/dongshilin/AppData/Roaming/npm/node_modules/pnpm/bin/pnpm.cjs`；没有升级或修改系统Node。
+
+```powershell
+$env:CDP_URL = "http://172.16.0.18:9222"
+pnpm exec tsx examples/verify-native-employee-search.ts 3583 kairo 董仕林 5761
+pnpm exec tsx examples/verify-native-employee-search.ts 3583 kairo kairo 3583
+```
+
+两次分别通过：董仕林5761真实工号0123040139保留前导零，原生部门为空所以返回null；当前账号3583/kairo返回真实部门路径“测试”。每次仅1页1个UID，与独立全分页、档案和getAllDeptPaths一致；搜索期间只有unionSearch/getMemberDetail/getAllDeptPaths各1次，没有草稿、发送、建会话或已读请求。会话793803/816219及读索引181/5保持不变，窗口816219不变，message/at/recalled均0。
+
+退出后客户端message监听1、自有Hook/binding/原生发送观察器/搜索观察器均false，在途0，两连接disconnected、exit0。董仕林运行ID `42e6a985-85f7-4500-a747-13ca1d657df9`，证据 `tmp/employee-search-peer-live-evidence.json`；非空部门运行ID `6c17bbba-93ae-4b73-9734-613d2d1d289a`，证据 `tmp/employee-search-live-evidence.json`。前序协议对照另存 `tmp/employee-search-protocol.json`。
+
+首轮专项因脚本将原生sessionsInfo数组误判为字典而失败，在连接独立CDP后的基线阶段结束，没有进入搜索或操作会话；失败报告 `tmp/employee-search-initial-live-failure.json` 保留。修正快照数组模型后两样本通过，随后专项ESLint通过。最终生产检查为build/typecheck、36文件488项通过及1项既有Linux用例跳过、lint通过；首次检查的Fake全局函数引用lint错误已修正并重跑完整检查。
+
+真实同名候选、多部门、多页、缺工号及查询故障/超时没有在本轮真机制造；这些条件由执行实际生成IPC脚本和Fake行为回归覆盖，不冒充真机实测。没有发会议通知或重跑前序媒体、撤回和TTS专项；本轮只读查询允许KK9内部刷新档案/头像缓存，不代表文件系统完全无写入。

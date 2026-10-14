@@ -200,6 +200,28 @@ async function sendDownloadedFile(
 
 文件语音继续在 Driver 机器读取 WAV/MP3、解码和重采样，通过 CDP 传 PCM 给 Windows 的 AMR 编码器；发送内容内联携带 AMR，不改为临时上传文件，也不支持任意音频格式。文字语音由 Driver 机器访问 Edge TTS，遵循下文代理规则。Linux 到 Windows 的真实文件语音编码已通过；本轮文字 TTS 返回 HTTP 403，不能把编码通过当作文字合成、消息送达或接收端播放通过。完整验证范围见 [远程附件验收](docs/KK9-STARTUP.md#linux-driver--windows-kk9-跨机器附件验证)。
 
+### 只读人员搜索
+
+`searchEmployees(keyword, timeoutMs?)` 搜索当前登录账号可见人员。关键词去首尾空白，匹配规则沿用 KK9 原生搜索；Driver 内部每页200条读完，再按 UID 去重并读取真实档案和所有可见部门路径。默认整轮期限30秒；空关键词、无效期限、原生失败或超时抛出 `DriverError`，不返回部分成功。
+
+```ts
+const result = await driver.searchEmployees('张三');
+const candidates = result.employees.map(employee => ({
+  uid: employee.id,
+  name: employee.name ?? '姓名未提供',
+  loginName: employee.loginName ?? '工号未提供',
+  department: employee.departmentPaths?.join('；') ?? '部门未提供',
+}));
+```
+
+- 返回 `{ employees, hasMore: false }`；只有原生分页全部完成才成功返回，正常无匹配返回空数组。不能把首页的一位当成唯一，也不能把模糊搜索结果或当前账号可见范围称为“全公司只有一个”。查询不是人员目录的事务快照。
+- `id` 是规范化字符串 UID，同人多部门只保留一个候选；同名不同 UID 全部保留。`loginName` 仅取档案真实 `login_name`，保留大小写和前导零；姓名或工号缺失为 `null`，不用 UID 或展示回退值替代。
+- `departmentPaths` 是所有原生提供的可见部门链，按祖先到叶子以 ` / ` 连接；未提供为 `null`，应显示“部门未提供”。不从职位推断，不补不可见的祖先部门。
+- 搜索不创建会话、不插草稿、不发送、不标已读或派发聊天事件。Driver 不处理中文对话，不保存候选序号或用户选择；调用方负责保存“序号→UID”的映射，不按姓名绑定。缺工号时不能把 UID 当成 `sendTextToUser` 的工号。
+- `FakeKK9Driver.setSearchEmployees()` 独立注入真实搜索候选，支持姓名或工号字面子串匹配，不模拟原生拼音/summary扩展；不从 `setEmployees()` 的展示字段推断真实工号。
+
+真机专项使用构建后的公开入口，方法见 [只读人员搜索验收](docs/KK9-STARTUP.md#只读人员搜索验收)。
+
 ### 按工号首次联系与文本通知
 
 `sendTextToUser(loginName, text, options?)` 接受准确 `login_name`，不是显示名、UID或会话名称；只去掉工号首尾空白，大小写必须准确。无需对方已在会话列表，也无需先手动聊天。选项 `SendToUserOptions` 只包含 `operationId` 和 `verifyTimeoutMs`；入口只复制这两个字段，复用普通发送选项不会产生引用、提及或会话目标，空正文仍前置失败。本接口不支持本人设备会话。
@@ -280,6 +302,7 @@ await driver.sendChatRecord({
 
 ## 未发布变更
 
+- 新增：`searchEmployees` 只读人员搜索，内部全分页、UID去重、真实工号和所有可见部门路径；失败不返回部分结果，不负责对话或选择状态。
 - 新增：图片和普通文件通过现有 CDP 分块传输，统一采用 Driver 本机输入路径，无需 Windows 桥接或共享磁盘。
 - 修复：`downloadImage` 将准确原图保存到 Driver 本机，不再对 Windows 内部路径做宿主文件操作；新增 `saveFile` 保存已有缓存普通附件。
 - 保持：本地 CDP、原图选择、发送防重及 `sent/failed/unknown` 语义；语音继续采用既有数据传输，不新增连接框架、依赖或自动重试。
