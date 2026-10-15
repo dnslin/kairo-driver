@@ -138,7 +138,8 @@ describe('原生卡片与语音发送集成', () => {
     });
     const pending = ops.sendVoice(
       { text: '受控准备' },
-      { targetSessionId: '93001', operationId: 'op-cancel-voice' }
+      { targetSessionId: '93001', operationId: 'op-cancel-voice' },
+      91001
     );
     await started;
     const cancelling = ops.cancelPendingSends();
@@ -151,41 +152,123 @@ describe('原生卡片与语音发送集成', () => {
   it('链接和应用通知在无界面环境使用各自原生字段，不伪造图片资源或应用编号', async () => {
     const native = createNativeSendRuntime();
     const ops = new BridgeMessageOps(native.cdp);
-    const url = await ops.sendUrlCard({ title: '测试链接', summary: '无图片测试', linkUrl: 'https://example.com' }, { targetSessionId: '93001' });
-    const app = await ops.sendAppMessage({ title: '测试通知', content: '<p><b>仅测试</b></p>', linkUrl: 'https://example.com' }, { targetSessionId: '93002' });
+    const url = await ops.sendUrlCard(
+      { title: '测试链接', summary: '无图片测试', linkUrl: 'https://example.com' },
+      { targetSessionId: '93001' }
+    );
+    const app = await ops.sendAppMessage(
+      { title: '测试通知', content: '<p><b>仅测试</b></p>', linkUrl: 'https://example.com' },
+      { targetSessionId: '93002' }
+    );
     expect(url.status).toBe('sent');
     expect(app.status).toBe('sent');
-    expect(native.drafts[0]).toMatchObject({ contentType: 10, sessionID: 93001, content: { title: '测试链接', summary: '无图片测试', linkUrl: 'https://example.com' } });
+    expect(native.drafts[0]).toMatchObject({
+      contentType: 10,
+      sessionID: 93001,
+      content: { title: '测试链接', summary: '无图片测试', linkUrl: 'https://example.com' },
+    });
     expect(native.drafts[0]?.['content']).not.toHaveProperty('isValid');
-    expect(native.drafts[1]).toMatchObject({ contentType: 8, sessionID: 93002, content: { title: '测试通知', content: '<p><b>仅测试</b></p>', linkUrl: 'https://example.com' } });
+    expect(native.drafts[1]).toMatchObject({
+      contentType: 8,
+      sessionID: 93002,
+      content: {
+        title: '测试通知',
+        content: '<p><b>仅测试</b></p>',
+        linkUrl: 'https://example.com',
+      },
+    });
     expect(native.drafts[1]?.['content']).not.toHaveProperty('pcAppCode');
   });
 
   it('业务通知必须明确原生类型与相对详情路径，不把外部网址拼到业务域名后', async () => {
     const native = createNativeSendRuntime();
     const ops = new BridgeMessageOps(native.cdp);
-    const invalid = await ops.sendBizMessage({ title: '测试', content: '不创建任务', bizType: 1, bizUrl: 'https://example.com' }, { targetSessionId: '93001' });
-    expect(invalid).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringContaining('ekp_outer_domain') });
+    const invalid = await ops.sendBizMessage(
+      { title: '测试', content: '不创建任务', bizType: 1, bizUrl: 'https://example.com' },
+      { targetSessionId: '93001' }
+    );
+    expect(invalid).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('ekp_outer_domain'),
+    });
     expect(native.drafts).toEqual([]);
-    const valid = await ops.sendBizMessage({ title: '测试', content: '不创建任务', summary: ['仅展示通知'], bizType: 1, bizUrl: '/' }, { targetSessionId: '93001' });
+    const valid = await ops.sendBizMessage(
+      { title: '测试', content: '不创建任务', summary: ['仅展示通知'], bizType: 1, bizUrl: '/' },
+      { targetSessionId: '93001' }
+    );
     expect(valid.status).toBe('sent');
-    expect(native.drafts[0]).toMatchObject({ contentType: 17, content: { bizType: 1, bizUrl: '/', summary: ['仅展示通知'] } });
+    expect(native.drafts[0]).toMatchObject({
+      contentType: 17,
+      content: { bizType: 1, bizUrl: '/', summary: ['仅展示通知'] },
+    });
   });
 
   it('合并从来源会话读取真实正文、作者、ID和索引，按原顺序生成详情条目', async () => {
     const native = createNativeSendRuntime();
     native.records.push(
-      { id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原作者甲', sendTime: 1700000001, contentType: 0, content: '第一条原文', msgFlag: '' },
-      { id: 82, msgIdx: 8, sessionID: 93001, sender: 91002, senderName: '原作者乙', sendTime: 1700000002, contentType: 4, content: JSON.stringify({ content: [{ type: 0, text: '第二条原文' }] }), msgFlag: '' }
+      {
+        id: 81,
+        msgIdx: 7,
+        sessionID: 93001,
+        sender: 91001,
+        senderName: '原作者甲',
+        sendTime: 1700000001,
+        contentType: 0,
+        content: '第一条原文',
+        msgFlag: '',
+      },
+      {
+        id: 82,
+        msgIdx: 8,
+        sessionID: 93001,
+        sender: 91002,
+        senderName: '原作者乙',
+        sendTime: 1700000002,
+        contentType: 4,
+        content: JSON.stringify({ content: [{ type: 0, text: '第二条原文' }] }),
+        msgFlag: '',
+      }
     );
-    const result = await new BridgeMessageOps(native.cdp).sendChatRecord({ sourceSessionId: '93001', msgArray: [{ messageId: '82', msgIdx: 8 }, { messageId: '81', msgIdx: 7 }] }, { targetSessionId: '93002' });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      {
+        sourceSessionId: '93001',
+        msgArray: [
+          { messageId: '82', msgIdx: 8 },
+          { messageId: '81', msgIdx: 7 },
+        ],
+      },
+      { targetSessionId: '93002' }
+    );
     expect(result.status).toBe('sent');
-    const merged = native.drafts[0]?.['content'] as { sessionID: number; sessionType: number; typeID: number; msgArray: Array<Record<string, unknown>> };
+    const merged = native.drafts[0]?.['content'] as {
+      sessionID: number;
+      sessionType: number;
+      typeID: number;
+      msgArray: Array<Record<string, unknown>>;
+    };
     expect(merged).toMatchObject({ sessionID: 93001, sessionType: 0, typeID: 91002 });
-    expect(merged.msgArray.map(item => [item['id'], item['msgIdx'], item['senderID'], item['senderName'], item['sendTime']])).toEqual([[81, 7, 91001, '原作者甲', '1700000001'], [82, 8, 91002, '原作者乙', '1700000002']]);
+    expect(
+      merged.msgArray.map(item => [
+        item['id'],
+        item['msgIdx'],
+        item['senderID'],
+        item['senderName'],
+        item['sendTime'],
+      ])
+    ).toEqual([
+      [81, 7, 91001, '原作者甲', '1700000001'],
+      [82, 8, 91002, '原作者乙', '1700000002'],
+    ]);
     const bodies = merged.msgArray.map(item => {
       const content = item['content'];
-      if (!content || typeof content !== 'object' || !('content' in content) || !Array.isArray(content.content)) throw new Error('详情正文不是原生节点');
+      if (
+        !content ||
+        typeof content !== 'object' ||
+        !('content' in content) ||
+        !Array.isArray(content.content)
+      )
+        throw new Error('详情正文不是原生节点');
       const node: unknown = content.content[0];
       return node && typeof node === 'object' && 'text' in node ? node.text : undefined;
     });
@@ -203,16 +286,46 @@ describe('原生卡片与语音发送集成', () => {
     });
     native.records.push(
       { id: 80, msgIdx: 6, sessionID: 93001, msgFlag: 'C:op:原操作' },
-      { id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原生账号', sendTime: 1700000001, contentType: 13, content: JSON.stringify(reply(80)), msgFlag: '' },
+      {
+        id: 81,
+        msgIdx: 7,
+        sessionID: 93001,
+        sender: 91001,
+        senderName: '原生账号',
+        sendTime: 1700000001,
+        contentType: 13,
+        content: JSON.stringify(reply(80)),
+        msgFlag: '',
+      },
       { id: 82, msgIdx: 8, sessionID: 93001, msgFlag: '' },
-      { id: 83, msgIdx: 9, sessionID: 93001, sender: 91002, senderName: '员工甲', sendTime: 1700000002, contentType: 13, content: JSON.stringify(reply(82)), msgFlag: '' }
+      {
+        id: 83,
+        msgIdx: 9,
+        sessionID: 93001,
+        sender: 91002,
+        senderName: '员工甲',
+        sendTime: 1700000002,
+        contentType: 13,
+        content: JSON.stringify(reply(82)),
+        msgFlag: '',
+      }
     );
     const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
-      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }, { messageId: '83', msgIdx: 9 }] },
+      {
+        sourceSessionId: '93001',
+        msgArray: [
+          { messageId: '81', msgIdx: 7 },
+          { messageId: '83', msgIdx: 9 },
+        ],
+      },
       { targetSessionId: '93002' }
     );
     expect(result.status).toBe('sent');
-    const merged = native.drafts[0]?.['content'] as { msgArray: Array<{ content: { replyedContent: unknown; replyedContentType: number; replyContent: unknown } }> };
+    const merged = native.drafts[0]?.['content'] as {
+      msgArray: Array<{
+        content: { replyedContent: unknown; replyedContentType: number; replyContent: unknown };
+      }>;
+    };
     expect(merged.msgArray.map(item => item.content.replyedContent)).toEqual([
       { content: [{ type: 0, text: '消息已被撤回' }] },
       { content: [{ type: 0, text: '引用原文' }] },
@@ -226,49 +339,123 @@ describe('原生卡片与语音发送集成', () => {
 
   it('合并引用目标查询失败时保留错误且不提交旧引用正文', async () => {
     const native = createNativeSendRuntime({ queryCode: 627 });
-    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 91001, senderName: '原生账号', sendTime: 1700000001, contentType: 13,
-      content: { replyedMsgId: 80, replyedContentType: 4, replyedContent: { content: [{ type: 0, text: '旧引用正文' }] }, replyContent: { content: [{ type: 0, text: '回复正文' }] } }, msgFlag: '' });
+    native.records.push({
+      id: 81,
+      msgIdx: 7,
+      sessionID: 93001,
+      sender: 91001,
+      senderName: '原生账号',
+      sendTime: 1700000001,
+      contentType: 13,
+      content: {
+        replyedMsgId: 80,
+        replyedContentType: 4,
+        replyedContent: { content: [{ type: 0, text: '旧引用正文' }] },
+        replyContent: { content: [{ type: 0, text: '回复正文' }] },
+      },
+      msgFlag: '',
+    });
     const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
       { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
       { targetSessionId: '93002' }
     );
-    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringMatching(/getMessageByMsgId.*627/) });
+    expect(result).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringMatching(/getMessageByMsgId.*627/),
+    });
     expect(native.drafts).toEqual([]);
   });
 
   it('对端创建私聊的合并标题使用与对端UID对应的创建者名称', async () => {
     const native = createNativeSendRuntime();
-    Object.assign(native.sessions[0]!, { typeID: 91001, typeName: '原生账号', creater: 91002, createrName: '实际对端' });
-    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 91002, senderName: '实际对端', sendTime: 1700000001, contentType: 0, content: '测试正文', msgFlag: '' });
+    Object.assign(native.sessions[0]!, {
+      typeID: 91001,
+      typeName: '原生账号',
+      creater: 91002,
+      createrName: '实际对端',
+    });
+    native.records.push({
+      id: 81,
+      msgIdx: 7,
+      sessionID: 93001,
+      sender: 91002,
+      senderName: '实际对端',
+      sendTime: 1700000001,
+      contentType: 0,
+      content: '测试正文',
+      msgFlag: '',
+    });
     const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
       { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
       { targetSessionId: '93002' }
     );
     expect(result.status).toBe('sent');
     expect(native.drafts[0]?.['content']).toMatchObject({ typeID: 91002, typeName: '实际对端' });
-    expect(normalizeNativeMessage(native.drafts[0])[0]?.content).toBe('原生账号与实际对端的聊天记录');
+    expect(normalizeNativeMessage(native.drafts[0])[0]?.content).toBe(
+      '原生账号与实际对端的聊天记录'
+    );
   });
 
   it('合并索引指向另一消息时在创建草稿前失败，不借另一会话或假ID补齐', async () => {
     const native = createNativeSendRuntime();
-    native.records.push({ id: 82, msgIdx: 8, sessionID: 93001, sender: 91001, senderName: '本人', sendTime: 1700000000, contentType: 0, content: '不是请求的消息' });
-    const result = await new BridgeMessageOps(native.cdp).sendChatRecord({ sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 8 }] }, { targetSessionId: '93002' });
-    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringContaining('81') });
+    native.records.push({
+      id: 82,
+      msgIdx: 8,
+      sessionID: 93001,
+      sender: 91001,
+      senderName: '本人',
+      sendTime: 1700000000,
+      contentType: 0,
+      content: '不是请求的消息',
+    });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 8 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('81'),
+    });
     expect(native.drafts).toEqual([]);
   });
 
   it('合并来源UID0不能冒充真实作者，也不创建草稿', async () => {
     const native = createNativeSendRuntime();
-    native.records.push({ id: 81, msgIdx: 7, sessionID: 93001, sender: 0, senderName: '未知用户', sendTime: 1700000000, contentType: 0, content: '缺少作者' });
-    const result = await new BridgeMessageOps(native.cdp).sendChatRecord({ sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] }, { targetSessionId: '93002' });
-    expect(result).toMatchObject({ status: 'failed', isPreTrigger: true, error: expect.stringContaining('真实作者') });
+    native.records.push({
+      id: 81,
+      msgIdx: 7,
+      sessionID: 93001,
+      sender: 0,
+      senderName: '未知用户',
+      sendTime: 1700000000,
+      contentType: 0,
+      content: '缺少作者',
+    });
+    const result = await new BridgeMessageOps(native.cdp).sendChatRecord(
+      { sourceSessionId: '93001', msgArray: [{ messageId: '81', msgIdx: 7 }] },
+      { targetSessionId: '93002' }
+    );
+    expect(result).toMatchObject({
+      status: 'failed',
+      isPreTrigger: true,
+      error: expect.stringContaining('真实作者'),
+    });
     expect(native.drafts).toEqual([]);
   });
 
   it('卡片原生617业务失败即使有正ID也不能判sent', async () => {
     const native = createNativeSendRuntime({ businessCode: 617 });
-    const result = await new BridgeMessageOps(native.cdp).sendAppMessage({ title: '测试拒绝', content: '不伪造成功' }, { targetSessionId: '93001' });
-    expect(result).toMatchObject({ status: 'failed', isPreTrigger: false, error: expect.stringContaining('617') });
+    const result = await new BridgeMessageOps(native.cdp).sendAppMessage(
+      { title: '测试拒绝', content: '不伪造成功' },
+      { targetSessionId: '93001' }
+    );
+    expect(result).toMatchObject({
+      status: 'failed',
+      isPreTrigger: false,
+      error: expect.stringContaining('617'),
+    });
   });
 
   it('卡片显式传入 replyTo 或 mentions 时触发前失败并写入操作状态', async () => {
@@ -327,7 +514,12 @@ describe('原生卡片与语音发送集成', () => {
       evaluate: vi.fn((script: string) => runRendererScript(script, runtime.context)),
     } as unknown as CdpClient;
     const operations = new BridgeMessageOps(cdp, store);
-    const input = { title: '未知结果', content: '发送动作已触发', bizType: 1 as const, bizUrl: '/' };
+    const input = {
+      title: '未知结果',
+      content: '发送动作已触发',
+      bizType: 1 as const,
+      bizUrl: '/',
+    };
     const options = {
       targetSessionId: String(session.id),
       operationId: 'op-card-unknown',
@@ -359,7 +551,8 @@ describe('原生卡片与语音发送集成', () => {
 
     const result = await new BridgeMessageOps(native.cdp, store).sendVoice(
       { text: '合成失败' },
-      { targetSessionId: String(session.id), operationId: 'op-voice-prepare-failed' }
+      { targetSessionId: String(session.id), operationId: 'op-voice-prepare-failed' },
+      91001
     );
 
     expect(result).toMatchObject({
@@ -382,8 +575,8 @@ describe('原生卡片与语音发送集成', () => {
     const input = { text: '只合成一次' } as const;
     const options = { targetSessionId: String(session.id), operationId: 'op-voice-deduplicate' };
 
-    const first = await operations.sendVoice(input, options);
-    const replay = await operations.sendVoice(input, options);
+    const first = await operations.sendVoice(input, options, 91001);
+    const replay = await operations.sendVoice(input, options, 91001);
     const queried = await operations.getSendStatus(options.operationId);
     expect(first).toMatchObject({ status: 'sent', messageId: '135700000' });
     expect(replay).toEqual(first);
@@ -412,7 +605,8 @@ describe('原生卡片与语音发送集成', () => {
 
     const result = await new BridgeMessageOps(native.cdp).sendVoice(
       { text: '只发给指定目标' },
-      { targetSessionId: String(session.id) }
+      { targetSessionId: String(session.id) },
+      91001
     );
 
     expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
@@ -425,7 +619,11 @@ describe('原生卡片与语音发送集成', () => {
     native.runtime.editor.activedSes = null;
     vi.mocked(prepareVoice).mockResolvedValue({ duration: 1, data: 'IyFBTVIK' });
 
-    const result = await new BridgeMessageOps(native.cdp).sendVoice({ text: '没有发送目标' });
+    const result = await new BridgeMessageOps(native.cdp).sendVoice(
+      { text: '没有发送目标' },
+      {},
+      91001
+    );
 
     expect(result).toMatchObject({
       status: 'failed',
@@ -448,12 +646,12 @@ describe('原生卡片与语音发送集成', () => {
     expect(result).toMatchObject({ status: 'sent', messageId: '135700000' });
   });
 
-
   it('不支持的语音选项在调用 TTS 前失败', async () => {
     const native = createSuccessfulNativeRuntime();
     const result = await new BridgeMessageOps(native.cdp).sendVoice(
       { text: '不应上传到语音服务' },
-      { targetSessionId: String(session.id), mentions: [{ uid: 91002, name: '员工甲' }] }
+      { targetSessionId: String(session.id), mentions: [{ uid: 91002, name: '员工甲' }] },
+      91001
     );
     expect(result).toMatchObject({ status: 'failed', isPreTrigger: true });
     expect(prepareVoice).not.toHaveBeenCalled();
@@ -526,6 +724,8 @@ describe('KK9Driver 原生媒体固定目标', () => {
     vi.mocked(prepareVoice).mockResolvedValue({ duration: 1, data: 'IyFBTVIK' });
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1', pageMatch: '离线' } });
     getDriverTestInternals(driver).bridgeMessageOps = new BridgeMessageOps(native.cdp);
+    // 此处只覆盖固定目标；真实 connect 身份绑定由 native-user-voice 专项覆盖。
+    getDriverTestInternals<{ currentUserId: string }>(driver).currentUserId = '91001';
     const options = { targetSessionId: String(session.id) };
     const pending = Promise.all([
       driver.sendUrlCard(
@@ -540,7 +740,10 @@ describe('KK9Driver 原生媒体固定目标', () => {
     const results = await pending;
     expect(results.map(result => result.status)).toEqual(['sent', 'sent', 'sent', 'sent']);
     for (const result of results) {
-      expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: result.messageId });
+      expect(result.receipt).toMatchObject({
+        sessionId: String(session.id),
+        messageId: result.messageId,
+      });
       if (!result.recall) throw new Error('已确认发送缺少快捷撤回');
       await expect(result.recall()).resolves.toBe(true);
     }
@@ -564,6 +767,7 @@ describe('KK9Driver 原生媒体固定目标', () => {
     const internals = getDriverTestInternals(driver);
     internals.cdp = native.cdp;
     internals.bridgeMessageOps = new BridgeMessageOps(native.cdp);
+    getDriverTestInternals<{ currentUserId: string }>(driver).currentUserId = '91001';
     internals.bridgeSessionOps.getSessions = vi.fn().mockResolvedValue([
       {
         id: String(session.id),
@@ -592,7 +796,10 @@ describe('KK9Driver 原生媒体固定目标', () => {
     );
     expect(result.status).toBe('sent');
     expect(native.sent[0]?.['sessionID']).toBe(session.id);
-    expect(result.receipt).toMatchObject({ sessionId: String(session.id), messageId: result.messageId });
+    expect(result.receipt).toMatchObject({
+      sessionId: String(session.id),
+      messageId: result.messageId,
+    });
   });
 });
 
@@ -640,7 +847,9 @@ describe('原生图片准备与提交', () => {
       },
     });
     let started!: () => void;
-    const submitted = new Promise<void>(resolve => { started = resolve; });
+    const submitted = new Promise<void>(resolve => {
+      started = resolve;
+    });
     const send = native.ipc.send.bind(native.ipc);
     native.ipc.send = (channel, request) => {
       if (request.args[0] === 'sendMessageNew') started();
@@ -710,12 +919,16 @@ describe('原生图片准备与提交', () => {
     const logs: DriverLogEntry[] = [];
     let failedDirectory = '';
     const requireNative = native.window['require'] as (name: string) => unknown;
-    native.window['require'] = (name: string) => name === 'fs' ? {
-      ...fs, rmSync: (directory: fs.PathLike) => {
-        failedDirectory = String(directory);
-        throw Object.assign(new Error('测试远端图片删除失败'), { code: 'EPERM' });
-      },
-    } : requireNative(name);
+    native.window['require'] = (name: string) =>
+      name === 'fs'
+        ? {
+            ...fs,
+            rmSync: (directory: fs.PathLike) => {
+              failedDirectory = String(directory);
+              throw Object.assign(new Error('测试远端图片删除失败'), { code: 'EPERM' });
+            },
+          }
+        : requireNative(name);
     const driver = new KK9Driver({ cdp: { url: 'http://127.0.0.1:1' } });
     getDriverTestInternals(driver).bridgeMessageOps = native.ops;
     const options = { targetSessionId: '93001', operationId: 'cleanup-failure-image' };
@@ -723,11 +936,22 @@ describe('原生图片准备与提交', () => {
     try {
       const result = await driver.sendImage(native.file, options);
       expect(result.status).toBe('sent');
-      expect(logs).toContainEqual(expect.objectContaining({
-        level: 'warn', event: 'Driver运行异常', errorType: 'driver', runId: expect.any(String),
-      }));
-      expect(await driver.sendImage(native.file, options)).toMatchObject({ status: 'sent', messageId: result.messageId });
-      expect(await driver.getSendStatus(options.operationId)).toMatchObject({ status: 'sent', messageId: result.messageId });
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          event: 'Driver运行异常',
+          errorType: 'driver',
+          runId: expect.any(String),
+        })
+      );
+      expect(await driver.sendImage(native.file, options)).toMatchObject({
+        status: 'sent',
+        messageId: result.messageId,
+      });
+      expect(await driver.getSendStatus(options.operationId)).toMatchObject({
+        status: 'sent',
+        messageId: result.messageId,
+      });
       expect(native.records).toHaveLength(1);
       expect(native.drafts).toHaveLength(1);
       expect(native.resized).toHaveBeenCalledTimes(1);

@@ -487,3 +487,14 @@ Fake群查询现与真实实现对齐：非法会话ID、非群目标及无效�
 
 审查临时把应用通知门面的工号模式固定为false，执行 `pnpm exec vitest run tests/native-user-cards.test.ts -t "公开应用通知门面"`，新回归因已确认卡片缺少快捷撤回而准确失败；恢复正确源码后同项通过。恢复后源码快照与全套通过时一致，没有保留变异。未发送、撤回或切换真实KK9会话；原有真机验收不扩展为新增定向媒体/卡片的接收端验收。
 
+
+## 定向语音与连接发送者绑定合入
+
+将消费插件的语音补丁合入源码：准确工号能力、取消 signal、正式会话日志/撤回及连接 UID 绑定由 Driver 自己提供，不再要求消费项目维护 Driver 自身补丁。公开 sendVoice 参数、operationId 指纹、结果及数据库格式不变；内部发送必须显式传入连接绑定 UID，不从准备后的账号猜测。新增 Vitest 模块复用原生运行时，仅替换外部 TTS、编码器和 IPC。
+
+本轮运行定向 prettier 后执行 pnpm check，首次新增回归错误地要求在途重复调用等到最终业务失败；既有 Store 在首次结果未确认时只返回 unknown。将测试改为用原生请求门闩确定性观察在途 unknown，释放后再核对最终 failed/unknown，保留单次编码/草稿/提交与重放断言，未改变产品防重实现。
+
+再次 pnpm check 的 build/typecheck 通过，42 文件中 757 项通过、1 项失败、1 项既有 Linux 专属跳过；新增原生语音 31 项与 Fake 21 项均通过。失败为历史已记录的 tests/bridge-search-deadline.test.ts:108 定时器期望0/实际1，本次发生于 getMemberDetail 分支。未改相关源码/测试、放宽断言或重复运行确认，不将完整检查称为全绿。单独 lint 指出新增 TTS 替身的无 await async，改为显式返回已完成 Promise；最终 `pnpm exec vitest run tests/native-user-voice.test.ts tests/fake-user-voice.test.ts && pnpm lint` 的52项及全量lint通过。
+
+复用构建产物的独立 Node 内联烟测实际导入本仓库 dist：准确工号正常语音为 sent；编码及查人期间由绑定 UID 1 改为99，均前置 failed、零草稿零提交。未连接真实 KK9、发送消息或验收播放；没有新增 Driver 补丁、依赖、锁文件或兼容层。
+

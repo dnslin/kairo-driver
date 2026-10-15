@@ -151,20 +151,42 @@ export class BridgeMessageOps {
       options.operationId === undefined ? randomUUID() : options.operationId.trim();
     if (!operationId) throw new SendError('operationId不能为空');
     const targetSessionId = options.targetSessionId?.trim();
-    const supportsLoginTarget = kind === 'url-card' || kind === 'biz-message' || kind === 'app-message' || kind === 'image' || kind === 'file';
+    const supportsLoginTarget =
+      kind === 'url-card' ||
+      kind === 'biz-message' ||
+      kind === 'app-message' ||
+      kind === 'image' ||
+      kind === 'file' ||
+      kind === 'voice';
     const optionLoginName = options.targetLoginName;
-    const loginName = kind === 'text-to-user' ? targetLoginName
-      : typeof optionLoginName === 'string' ? optionLoginName.trim() : undefined;
+    const loginName =
+      kind === 'text-to-user'
+        ? targetLoginName
+        : typeof optionLoginName === 'string'
+          ? optionLoginName.trim()
+          : undefined;
     const hasLoginTarget = kind === 'text-to-user' || optionLoginName !== undefined;
-    const targetError = optionLoginName !== undefined && !supportsLoginTarget ? '此发送方法不支持targetLoginName'
-      : hasLoginTarget && options.targetSessionId !== undefined ? 'targetLoginName与targetSessionId不能同时指定'
-      : hasLoginTarget && !loginName ? '按工号发送必须提供准确非空工号'
-      : undefined;
-    const effectiveOptions = targetError ? null : hasLoginTarget
-      ? { ...options, operationId, ...(supportsLoginTarget ? { targetLoginName: loginName } : {}) }
-      : targetSessionId && /^-?[0-9]+$/.test(targetSessionId) && Number.isSafeInteger(Number(targetSessionId))
-        ? { ...options, operationId, targetSessionId }
-        : null;
+    const targetError =
+      optionLoginName !== undefined && !supportsLoginTarget
+        ? '此发送方法不支持targetLoginName'
+        : hasLoginTarget && options.targetSessionId !== undefined
+          ? 'targetLoginName与targetSessionId不能同时指定'
+          : hasLoginTarget && !loginName
+            ? '按工号发送必须提供准确非空工号'
+            : undefined;
+    const effectiveOptions = targetError
+      ? null
+      : hasLoginTarget
+        ? {
+            ...options,
+            operationId,
+            ...(supportsLoginTarget ? { targetLoginName: loginName } : {}),
+          }
+        : targetSessionId &&
+            /^-?[0-9]+$/.test(targetSessionId) &&
+            Number.isSafeInteger(Number(targetSessionId))
+          ? { ...options, operationId, targetSessionId }
+          : null;
     const fingerprint = createSendOperationFingerprint({
       targetSessionId,
       targetLoginName: loginName,
@@ -181,7 +203,11 @@ export class BridgeMessageOps {
     const key = createNativeMessageKey(kind, operationId);
     this.inFlight.get(controller)!.key = key;
     if (!effectiveOptions)
-      outcome = { status: 'failed', error: targetError ?? '发送必须指定明确原生会话ID', isPreTrigger: true };
+      outcome = {
+        status: 'failed',
+        error: targetError ?? '发送必须指定明确原生会话ID',
+        isPreTrigger: true,
+      };
     else if (controller.signal.aborted)
       outcome = { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
     else if (isCdpUnavailableBeforeSend(this.cdp))
@@ -220,20 +246,37 @@ export class BridgeMessageOps {
       const page = await this.getHistoryPage(session, 200, endIdx, currentUserId);
       for (let i = page.messages.length - 1; i >= 0 && selected.length < limit; i--) {
         const message = page.messages[i]!;
-        if (message.timestamp < fromTimestamp || message.timestamp > toTimestamp || seen.has(message.id)) continue;
+        if (
+          message.timestamp < fromTimestamp ||
+          message.timestamp > toTimestamp ||
+          seen.has(message.id)
+        )
+          continue;
         seen.add(message.id);
         selected.push(message);
       }
       if (page.raw.length < 200 || selected.length >= limit) break;
-      const next = Math.min(...page.raw.map(row => row && typeof row === 'object' && 'msgIdx' in row ? Number(row.msgIdx) : NaN)) - 1;
-      if (!Number.isSafeInteger(next) || next >= endIdx) throw new DriverError(`getMessages 会话 ${session.id} endIdx ${endIdx} 无法继续分页`, 'IPC_INVALID_RESPONSE');
+      const next =
+        Math.min(
+          ...page.raw.map(row =>
+            row && typeof row === 'object' && 'msgIdx' in row ? Number(row.msgIdx) : NaN
+          )
+        ) - 1;
+      if (!Number.isSafeInteger(next) || next >= endIdx)
+        throw new DriverError(
+          `getMessages 会话 ${session.id} endIdx ${endIdx} 无法继续分页`,
+          'IPC_INVALID_RESPONSE'
+        );
       endIdx = next;
     }
     return selected.reverse();
   }
 
   private async getHistoryPage(
-    session: KK9Session, limit: number, endIdx: number, currentUserId?: string | number
+    session: KK9Session,
+    limit: number,
+    endIdx: number,
+    currentUserId?: string | number
   ): Promise<{ raw: unknown[]; messages: KK9Message[] }> {
     const sessionId = session?.id?.trim();
     if (!sessionId || !/^-?[0-9]+$/.test(sessionId) || !Number.isSafeInteger(Number(sessionId))) {
@@ -242,7 +285,11 @@ export class BridgeMessageOps {
     const response = await callIpcToData<unknown[]>(this.cdp, 'getMessages', [
       { sessionID: Number(sessionId), count: Math.max(1, limit), endIdx, sendTime: 0 },
     ]).catch((err: unknown) => {
-      throw new DriverError(`getMessages 会话 ${sessionId} endIdx ${endIdx}: ${String(err)}`, 'IPC_QUERY_FAILED', err instanceof Error ? err : undefined);
+      throw new DriverError(
+        `getMessages 会话 ${sessionId} endIdx ${endIdx}: ${String(err)}`,
+        'IPC_QUERY_FAILED',
+        err instanceof Error ? err : undefined
+      );
     });
     if (response.code !== 0) {
       throw new DriverError(
@@ -251,7 +298,10 @@ export class BridgeMessageOps {
       );
     }
     if (!Array.isArray(response.data)) {
-      throw new DriverError(`getMessages 会话 ${sessionId} endIdx ${endIdx} 未返回有效数组`, 'IPC_INVALID_RESPONSE');
+      throw new DriverError(
+        `getMessages 会话 ${sessionId} endIdx ${endIdx} 未返回有效数组`,
+        'IPC_INVALID_RESPONSE'
+      );
     }
     const messages = normalizeNativeMessage(
       {
@@ -289,9 +339,16 @@ export class BridgeMessageOps {
     options: SendToUserOptions = {}
   ): Promise<SendResult> {
     const target = typeof loginName === 'string' ? loginName.trim() : '';
-    const userOptions = { operationId: options.operationId, verifyTimeoutMs: options.verifyTimeoutMs };
-    return this.executeOperation('text-to-user', userOptions, text, (key, bound) =>
-      this.sendRichTextRaw(text, bound, key, target), target
+    const userOptions = {
+      operationId: options.operationId,
+      verifyTimeoutMs: options.verifyTimeoutMs,
+    };
+    return this.executeOperation(
+      'text-to-user',
+      userOptions,
+      text,
+      (key, bound) => this.sendRichTextRaw(text, bound, key, target),
+      target
     );
   }
   public sendRichText(content: FormattedText, options: SendOptions = {}): Promise<SendResult> {
@@ -338,9 +395,15 @@ export class BridgeMessageOps {
       let parsed;
       let mentions;
       try {
-        if (!target || !/^[1-9]\d*$/.test(target.messageId) || !Number.isSafeInteger(Number(target.messageId)) ||
-            (target.msgIdx !== undefined && (!Number.isSafeInteger(target.msgIdx) || target.msgIdx <= 0)) ||
-            Object.keys(target).some(field => field !== 'messageId' && field !== 'msgIdx')) throw new Error('引用必须指定原生消息ID及可选准确索引，不接受摘要或发送者');
+        if (
+          !target ||
+          !/^[1-9]\d*$/.test(target.messageId) ||
+          !Number.isSafeInteger(Number(target.messageId)) ||
+          (target.msgIdx !== undefined &&
+            (!Number.isSafeInteger(target.msgIdx) || target.msgIdx <= 0)) ||
+          Object.keys(target).some(field => field !== 'messageId' && field !== 'msgIdx')
+        )
+          throw new Error('引用必须指定原生消息ID及可选准确索引，不接受摘要或发送者');
         parsed = parseFormattedTextToKK(content);
         mentions = buildMentionNodes(bound.mentions);
       } catch (error) {
@@ -377,43 +440,56 @@ export class BridgeMessageOps {
           fs.closeSync(descriptor);
         }
       } catch (error) {
-        return { status: 'failed', error: '本地文件预检失败: ' + fullPath + '；' + String(error), isPreTrigger: true };
+        return {
+          status: 'failed',
+          error: '本地文件预检失败: ' + fullPath + '；' + String(error),
+          isPreTrigger: true,
+        };
       }
       let remote;
       try {
         remote = await uploadLocalFile(this.cdp, fullPath, MAX_FILE_SIZE_BYTES, signal);
       } catch (error) {
-        return { status: 'failed', error: '文件传输失败: ' + fullPath + '；' + String(error), isPreTrigger: true };
+        return {
+          status: 'failed',
+          error: '文件传输失败: ' + fullPath + '；' + String(error),
+          isPreTrigger: true,
+        };
       }
       let outcome: SendOutcome;
       try {
         outcome = signal.aborted
           ? { status: 'failed', error: '文件传输后发送已取消，未提交原生发送', isPreTrigger: true }
           : await this.sendContent(
-            3,
-            {
-              type: 'File',
-              mimetype: mime.lookup(fullPath) || 'application/octet-stream',
-              filepath: remote.path,
-              size: String(remote.size),
-              isValid: true,
-              filename: path.basename(fullPath),
-            },
-            bound,
-            key,
-            [],
-            undefined,
-            bound.targetLoginName,
-            remote.id
-          );
+              3,
+              {
+                type: 'File',
+                mimetype: mime.lookup(fullPath) || 'application/octet-stream',
+                filepath: remote.path,
+                size: String(remote.size),
+                isValid: true,
+                filename: path.basename(fullPath),
+              },
+              bound,
+              key,
+              [],
+              undefined,
+              bound.targetLoginName,
+              remote.id
+            );
       } catch (error) {
-        outcome = { status: 'unknown', error: '文件发送异常: ' + String(error), isPreTrigger: false };
+        outcome = {
+          status: 'unknown',
+          error: '文件发送异常: ' + String(error),
+          isPreTrigger: false,
+        };
       }
       try {
         await releaseRemoteFile(this.cdp, remote);
       } catch (error) {
         if (outcome.status !== 'sent')
-          outcome.error = (outcome.error ? outcome.error + '；' : '') + '远端文件清理失败: ' + String(error);
+          outcome.error =
+            (outcome.error ? outcome.error + '；' : '') + '远端文件清理失败: ' + String(error);
       }
       return outcome;
     });
@@ -518,23 +594,28 @@ export class BridgeMessageOps {
       picUrl: card.picUrl ?? '',
       // 远端图片由 KK9 自己下载；不预先伪造 isValid 或本地路径。
     };
-    return this.executeOperation('url-card', options, content, (nativeKey, effectiveOptions, signal) => {
-      const error = getCardInputError('url-card', content);
-      if (error) {
-        return Promise.resolve<SendOutcome>({
-          status: 'failed',
-          error,
-          isPreTrigger: true,
-        });
+    return this.executeOperation(
+      'url-card',
+      options,
+      content,
+      (nativeKey, effectiveOptions, signal) => {
+        const error = getCardInputError('url-card', content);
+        if (error) {
+          return Promise.resolve<SendOutcome>({
+            status: 'failed',
+            error,
+            isPreTrigger: true,
+          });
+        }
+        return sendNativeStructuredMessage(
+          this.cdp,
+          { kind: 'url-card', contentType: 10, content },
+          effectiveOptions,
+          nativeKey,
+          signal
+        );
       }
-      return sendNativeStructuredMessage(
-        this.cdp,
-        { kind: 'url-card', contentType: 10, content },
-        effectiveOptions,
-        nativeKey,
-        signal
-      );
-    });
+    );
   }
 
   /** 发送业务任务或通知卡片。 */
@@ -546,23 +627,28 @@ export class BridgeMessageOps {
       bizUrl: message.bizUrl,
       bizType: message.bizType,
     };
-    return this.executeOperation('biz-message', options, content, (nativeKey, effectiveOptions, signal) => {
-      const error = getCardInputError('biz-message', content);
-      if (error) {
-        return Promise.resolve<SendOutcome>({
-          status: 'failed',
-          error,
-          isPreTrigger: true,
-        });
+    return this.executeOperation(
+      'biz-message',
+      options,
+      content,
+      (nativeKey, effectiveOptions, signal) => {
+        const error = getCardInputError('biz-message', content);
+        if (error) {
+          return Promise.resolve<SendOutcome>({
+            status: 'failed',
+            error,
+            isPreTrigger: true,
+          });
+        }
+        return sendNativeStructuredMessage(
+          this.cdp,
+          { kind: 'biz-message', contentType: 17, content },
+          effectiveOptions,
+          nativeKey,
+          signal
+        );
       }
-      return sendNativeStructuredMessage(
-        this.cdp,
-        { kind: 'biz-message', contentType: 17, content },
-        effectiveOptions,
-        nativeKey,
-        signal
-      );
-    });
+    );
   }
 
   /** 发送工作台微应用通知卡片。 */
@@ -573,23 +659,28 @@ export class BridgeMessageOps {
       ...(message.linkUrl !== undefined ? { linkUrl: message.linkUrl } : {}),
       ...(message.pcAppCode !== undefined ? { pcAppCode: message.pcAppCode } : {}),
     };
-    return this.executeOperation('app-message', options, content, (nativeKey, effectiveOptions, signal) => {
-      const error = getCardInputError('app-message', content);
-      if (error) {
-        return Promise.resolve<SendOutcome>({
-          status: 'failed',
-          error,
-          isPreTrigger: true,
-        });
+    return this.executeOperation(
+      'app-message',
+      options,
+      content,
+      (nativeKey, effectiveOptions, signal) => {
+        const error = getCardInputError('app-message', content);
+        if (error) {
+          return Promise.resolve<SendOutcome>({
+            status: 'failed',
+            error,
+            isPreTrigger: true,
+          });
+        }
+        return sendNativeStructuredMessage(
+          this.cdp,
+          { kind: 'app-message', contentType: 8, content },
+          effectiveOptions,
+          nativeKey,
+          signal
+        );
       }
-      return sendNativeStructuredMessage(
-        this.cdp,
-        { kind: 'app-message', contentType: 8, content },
-        effectiveOptions,
-        nativeKey,
-        signal
-      );
-    });
+    );
   }
 
   /** 发送可点击查看详情的合并聊天记录卡片。 */
@@ -599,7 +690,9 @@ export class BridgeMessageOps {
   ): Promise<SendResult> {
     const content = {
       sourceSessionId: record.sourceSessionId,
-      msgArray: Array.isArray(record.msgArray) ? record.msgArray.map(item => ({ ...item })) : record.msgArray,
+      msgArray: Array.isArray(record.msgArray)
+        ? record.msgArray.map(item => ({ ...item }))
+        : record.msgArray,
     };
     return this.executeOperation('chat-record', options, content, (nativeKey, effectiveOptions) => {
       const error = getCardInputError('chat-record', content);
@@ -618,7 +711,11 @@ export class BridgeMessageOps {
       );
     });
   }
-  public sendVoice(voice: KK9VoiceOptions, options: SendOptions = {}): Promise<SendResult> {
+  public sendVoice(
+    voice: KK9VoiceOptions,
+    options: SendOptions,
+    expectedSenderUid: string | number | undefined
+  ): Promise<SendResult> {
     const input = { ...voice };
     return this.executeOperation('voice', options, input, async (key, bound, signal) => {
       if (bound.replyTo !== undefined || bound.mentions !== undefined)
@@ -627,6 +724,8 @@ export class BridgeMessageOps {
           error: '原生语音消息不支持replyTo或mentions',
           isPreTrigger: true,
         };
+      if (!Number.isSafeInteger(Number(expectedSenderUid)) || Number(expectedSenderUid) <= 0)
+        return { status: 'failed', error: '语音发送缺少连接绑定的实际登录UID', isPreTrigger: true };
       try {
         const prepared = await prepareVoice(this.cdp, input);
         if (signal.aborted)
@@ -635,7 +734,9 @@ export class BridgeMessageOps {
           this.cdp,
           { kind: 'voice', contentType: 2, content: prepared },
           bound,
-          key
+          key,
+          signal,
+          expectedSenderUid
         );
       } catch (error) {
         return { status: 'failed', error: '语音准备失败: ' + String(error), isPreTrigger: true };

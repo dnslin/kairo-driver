@@ -1,5 +1,12 @@
 import type { CdpClient } from '../cdp/client.js';
-import type { KK9UrlCardOptions, KK9BizMsgOptions, KK9AppMsgOptions, KK9ChatRecordOptions, SendOptions, SendOutcome } from '../types/index.js';
+import type {
+  KK9UrlCardOptions,
+  KK9BizMsgOptions,
+  KK9AppMsgOptions,
+  KK9ChatRecordOptions,
+  SendOptions,
+  SendOutcome,
+} from '../types/index.js';
 import { createNativeMessageKey, isCdpUnavailableBeforeSend } from './send-status.js';
 import {
   CONFIRM_SENT_MESSAGE_SCRIPT,
@@ -25,24 +32,37 @@ export function getCardInputError(
   const nonempty = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
   if (kind === 'chat-record') {
     const record = input as KK9ChatRecordOptions;
-    if (!/^[1-9]\d*$/.test(record.sourceSessionId) || !Number.isSafeInteger(Number(record.sourceSessionId)) ||
-        !Array.isArray(record.msgArray) || record.msgArray.length === 0 || record.msgArray.some(item =>
-          !/^[1-9]\d*$/.test(item.messageId) || !Number.isSafeInteger(Number(item.messageId)) ||
-          !Number.isSafeInteger(item.msgIdx) || item.msgIdx <= 0)) return '合并转发需要来源原生会话ID及准确消息ID/索引';
-    if (new Set(record.msgArray.map(item => item.messageId)).size !== record.msgArray.length) return '合并转发不能重复选择同一消息';
+    if (
+      !/^[1-9]\d*$/.test(record.sourceSessionId) ||
+      !Number.isSafeInteger(Number(record.sourceSessionId)) ||
+      !Array.isArray(record.msgArray) ||
+      record.msgArray.length === 0 ||
+      record.msgArray.some(
+        item =>
+          !/^[1-9]\d*$/.test(item.messageId) ||
+          !Number.isSafeInteger(Number(item.messageId)) ||
+          !Number.isSafeInteger(item.msgIdx) ||
+          item.msgIdx <= 0
+      )
+    )
+      return '合并转发需要来源原生会话ID及准确消息ID/索引';
+    if (new Set(record.msgArray.map(item => item.messageId)).size !== record.msgArray.length)
+      return '合并转发不能重复选择同一消息';
     return;
   }
   if (!('title' in input) || !nonempty(input.title)) return '卡片标题不能为空';
   if (kind === 'url-card') {
     const card = input as KK9UrlCardOptions;
-    if (!nonempty(card.summary) || !nonempty(card.linkUrl)) return 'UrlCard 的 summary 与 linkUrl 不能为空';
+    if (!nonempty(card.summary) || !nonempty(card.linkUrl))
+      return 'UrlCard 的 summary 与 linkUrl 不能为空';
   } else {
     const card = input as KK9BizMsgOptions | KK9AppMsgOptions;
     if (!nonempty(card.content)) return '卡片正文不能为空';
     if (kind === 'biz-message') {
       const biz = input as KK9BizMsgOptions;
       if (biz.bizType !== 1 && biz.bizType !== 2) return 'BizMsg 必须指定原生 bizType 1 或 2';
-      if (!nonempty(biz.bizUrl) || !biz.bizUrl.startsWith('/') || biz.bizUrl.startsWith('//')) return 'BizMsg 的 bizUrl 必须是相对于 ekp_outer_domain 的路径';
+      if (!nonempty(biz.bizUrl) || !biz.bizUrl.startsWith('/') || biz.bizUrl.startsWith('//'))
+        return 'BizMsg 的 bizUrl 必须是相对于 ekp_outer_domain 的路径';
     }
   }
   return undefined;
@@ -70,7 +90,8 @@ export async function sendNativeStructuredMessage(
   message: NativeStructuredMessage,
   options: SendOptions,
   nativeKey?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  expectedSenderUid?: string | number
 ): Promise<SendOutcome> {
   const unsupported = unsupportedOptionsResult(options);
   if (unsupported) return unsupported;
@@ -83,6 +104,7 @@ export async function sendNativeStructuredMessage(
   const payloadData = {
     target: options.targetSessionId || '',
     targetLoginName,
+    expectedSenderUid,
     msgFlag: nativeKey ?? createNativeMessageKey(message.kind),
     contentType: message.contentType,
     content: message.content,
@@ -107,6 +129,8 @@ export async function sendNativeStructuredMessage(
       try { context = await ${targetLoginName ? 'readNativeUserSendContext(data.targetLoginName)' : 'readNativeSendContext(data.target)'}; }
       catch (error) { return { status: 'failed', error: String(error), isPreTrigger: true }; }
       const { identity, session: targetSes, receiver } = context;
+      if (data.contentType === 2 && String(identity.id) !== String(data.expectedSenderUid))
+        return { status: 'failed', error: '语音准备后实际登录UID与连接绑定身份不符', isPreTrigger: true };
       const myUid = identity.id;
       const myName = identity.name;
       const sendTime = Math.floor(Date.now() / 1000);
@@ -174,6 +198,12 @@ export async function sendNativeStructuredMessage(
         msgFlag: data.msgFlag
       };
 
+      if (data.contentType === 2) {
+        // 工号查找也会等待IPC；创建草稿前再核对最新身份，不能采用准备后的账号替代原发送者。
+        const currentIdentity = await callIpc('getMemberDetail');
+        if (currentIdentity?.code !== 0 || String(currentIdentity?.data?.id) !== String(data.expectedSenderUid))
+          return { status: 'failed', error: '语音提交前实际登录UID与连接绑定身份不符', isPreTrigger: true };
+      }
       const submission = await submitNativeMessage(msgObj, targetSes, data.timeout, cancellation.signal, data.targetLoginName);
       if (submission.failure) return submission.failure;
       const confirmedMessage = submission.confirmedMessage;
@@ -183,7 +213,8 @@ export async function sendNativeStructuredMessage(
     })()
   `;
 
-  if (signal?.aborted) return { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
+  if (signal?.aborted)
+    return { status: 'failed', error: '本轮发送已取消，未提交原生发送', isPreTrigger: true };
   try {
     const result = await cdp.evaluate<SendOutcome>(script, cdpTimeoutMs);
     if (!result || !['sent', 'failed', 'unknown'].includes(result.status)) {

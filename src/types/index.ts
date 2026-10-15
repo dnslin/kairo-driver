@@ -315,7 +315,6 @@ export interface KK9GroupMember {
   position: string | null;
 }
 
-
 export interface CdpConfig {
   url: string;
   pageMatch: string;
@@ -395,11 +394,10 @@ export interface KK9RecalledEvent {
   timestamp?: number;
 }
 
-
 export interface SendOptions {
-  /** 原生会话ID；通知卡片及图片可改用targetLoginName，不使用当前窗口或会话名称。 */
+  /** 原生会话ID；通知卡片、图片及语音可改用targetLoginName，不使用当前窗口或会话名称。 */
   targetSessionId?: string;
-  /** sendAppMessage/sendUrlCard/sendBizMessage/sendImage支持准确工号；与targetSessionId互斥。 */
+  /** sendAppMessage/sendUrlCard/sendBizMessage/sendImage/sendVoice支持准确工号及首次联系；与targetSessionId互斥。 */
   targetLoginName?: string;
   /** 稳定发送意图ID；重复调用仅查询或返回原结果，不再次提交。 */
   operationId?: string;

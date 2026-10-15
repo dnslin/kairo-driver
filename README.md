@@ -276,9 +276,9 @@ async function notifyUser(loginName: string, text: string, operationId: string) 
 
 专项示例的Driver连接单独失联时，独立采集连接会先取消并等候本次消息键的任务退出，再清理本代Hook与绑定，不清理其他代资源。业务回执等待器属于发送任务；Hook关闭仅解除自己的观察登记，不移除其他任务的回执监听。
 
-### 按工号发送卡片、图片和文件
+### 按工号发送卡片、图片、文件和语音
 
-`sendAppMessage`、`sendUrlCard`、`sendBizMessage`、`sendImage` 和 `sendFile` 的选项支持 `targetLoginName`，与 `targetSessionId` 二选一；工号去首尾空白后精确匹配，保留大小写及前导零。支持首次联系和已有私聊，不先发文本建立会话，不查询当前窗口或切换聊天。语音、合并转发及普通文本发送不接受此选项；工号文本继续使用 `sendTextToUser`。
+`sendAppMessage`、`sendUrlCard`、`sendBizMessage`、`sendImage`、`sendFile` 和 `sendVoice` 的选项支持 `targetLoginName`，与 `targetSessionId` 二选一；工号去首尾空白后精确匹配，保留大小写及前导零。支持首次联系和已有私聊，不先发文本建立会话，不查询当前窗口或切换聊天。合并转发及普通文本发送不接受此选项；工号文本继续使用 `sendTextToUser`。
 
 ```ts
 async function sendImageToEmployee(loginName: string, imagePath: string, operationId: string) {
@@ -290,6 +290,9 @@ async function sendImageToEmployee(loginName: string, imagePath: string, operati
 附件输入仍是 Driver 所在机器上的本地路径，图片 20 MiB、文件 100 MiB，保留既有实际字节传输、原图/缩略图检查和临时文件清理。三类卡片字段、业务路径要求不变；卡片及附件不支持引用或提及。原生业务回执确认后返回正式 `sessionId`，日志和快捷撤回绑定该会话；成功不代表送达或接收端呈现。重复操作 ID 只返回原结果，改变工号或内容会冲突，unknown 不重发。查无工号、歧义、身份变化及权限拒绝均不改投其他员工。
 
 这些能力已作为 Driver 源码实现，不再需要消费项目额外维护 `@kairo/driver` 定向发送补丁；音频依赖的两份补丁仍按安装说明配置。本轮隔离验证不连接真实 KK9，首次媒体/卡片的接收端呈现仍需授权人工验收。
+
+语音既可传 `{ text }` 使用既有 Edge 合成，也可传 `{ filePath }` 使用有效本地音频。必须先连接 Driver；发送保留连接时取得的真实 UID，在准备完成后及创建草稿前核对最新账号。已观察到的换号、缺失身份或取消在提交前失败，不改用新账号继续发送；已提交但无有效回执仍为 unknown，不重发。身份查询与原生提交不是客户端提供的原子事务，接收端播放仍需授权人工验收。
+
 
 
 ### 原生富文本、提及与引用

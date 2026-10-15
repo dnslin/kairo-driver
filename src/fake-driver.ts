@@ -190,17 +190,25 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
       const id = String(numericId);
       let profile = profiles.get(id);
       if (!profile) {
-        profile = { employee: { id, name: null, loginName: null, departmentPaths: null }, paths: new Set() };
+        profile = {
+          employee: { id, name: null, loginName: null, departmentPaths: null },
+          paths: new Set(),
+        };
         profiles.set(id, profile);
       }
       if (!profile.employee.name && typeof employee.name === 'string' && employee.name.trim()) {
         profile.employee.name = employee.name;
       }
-      if (!profile.employee.loginName && typeof employee.loginName === 'string' && employee.loginName.trim()) {
+      if (
+        !profile.employee.loginName &&
+        typeof employee.loginName === 'string' &&
+        employee.loginName.trim()
+      ) {
         profile.employee.loginName = employee.loginName;
       }
       for (const departmentPath of employee.departmentPaths ?? []) {
-        if (typeof departmentPath === 'string' && departmentPath.trim()) profile.paths.add(departmentPath);
+        if (typeof departmentPath === 'string' && departmentPath.trim())
+          profile.paths.add(departmentPath);
       }
     }
     this.searchEmployeeProfiles = [...profiles.values()].map(({ employee, paths }) => ({
@@ -212,15 +220,23 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   public searchEmployees(keyword: string, timeoutMs = 30000): Promise<KK9EmployeeSearchResult> {
     const startedAt = Date.now();
     const query = keyword.trim();
-    if (!query) return Promise.reject(new DriverError('员工搜索关键词不能为空', 'IPC_QUERY_FAILED'));
+    if (!query)
+      return Promise.reject(new DriverError('员工搜索关键词不能为空', 'IPC_QUERY_FAILED'));
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      return Promise.reject(new DriverError(`员工搜索总期限必须为正有限毫秒数：${timeoutMs}`, 'IPC_QUERY_FAILED'));
+      return Promise.reject(
+        new DriverError(`员工搜索总期限必须为正有限毫秒数：${timeoutMs}`, 'IPC_QUERY_FAILED')
+      );
     }
     const employees = this.searchEmployeeProfiles
       .filter(employee => employee.name?.includes(query) || employee.loginName?.includes(query))
-      .map(employee => ({ ...employee, departmentPaths: employee.departmentPaths ? [...employee.departmentPaths] : null }));
+      .map(employee => ({
+        ...employee,
+        departmentPaths: employee.departmentPaths ? [...employee.departmentPaths] : null,
+      }));
     if (Date.now() - startedAt >= timeoutMs) {
-      return Promise.reject(new DriverError(`员工搜索超过总期限，超时 ${timeoutMs}ms`, 'IPC_QUERY_FAILED'));
+      return Promise.reject(
+        new DriverError(`员工搜索超过总期限，超时 ${timeoutMs}ms`, 'IPC_QUERY_FAILED')
+      );
     }
     return Promise.resolve({ employees, hasMore: false });
   }
@@ -237,22 +253,32 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
           member: {
             id,
             name: typeof member.name === 'string' && member.name.trim() ? member.name : null,
-            loginName: typeof member.loginName === 'string' && member.loginName.trim() ? member.loginName : null,
+            loginName:
+              typeof member.loginName === 'string' && member.loginName.trim()
+                ? member.loginName
+                : null,
             departmentPaths: null,
-            position: typeof member.position === 'string' && member.position.trim() ? member.position : null,
+            position:
+              typeof member.position === 'string' && member.position.trim()
+                ? member.position
+                : null,
           },
           paths: new Set(),
         };
         profiles.set(id, profile);
       }
       for (const departmentPath of member.departmentPaths ?? []) {
-        if (typeof departmentPath === 'string' && departmentPath.trim()) profile.paths.add(departmentPath);
+        if (typeof departmentPath === 'string' && departmentPath.trim())
+          profile.paths.add(departmentPath);
       }
     }
-    this.groupMemberProfiles.set(key, [...profiles.values()].map(({ member, paths }) => ({
-      ...member,
-      departmentPaths: paths.size ? [...paths] : null,
-    })));
+    this.groupMemberProfiles.set(
+      key,
+      [...profiles.values()].map(({ member, paths }) => ({
+        ...member,
+        departmentPaths: paths.size ? [...paths] : null,
+      }))
+    );
   }
 
   public getGroupMembers(sessionId: string, timeoutMs = 30000): Promise<KK9GroupMember[]> {
@@ -260,14 +286,24 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
       const startedAt = Date.now();
       const id = normalizeGroupQueryId(sessionId, '群成员查询原生会话 ID ', 'INVALID_SESSION_ID');
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-        throw new DriverError(`群成员查询总期限必须为正有限毫秒数：${timeoutMs}`, 'IPC_QUERY_FAILED');
+        throw new DriverError(
+          `群成员查询总期限必须为正有限毫秒数：${timeoutMs}`,
+          'IPC_QUERY_FAILED'
+        );
       }
-      const session = this.sessions.find(item => /^\d+$/.test(item.id.trim()) && String(Number(item.id)) === id);
-      if (!session) throw new DriverError(`群成员查询原生会话不存在：${id}`, 'IPC_INVALID_RESPONSE');
+      const session = this.sessions.find(
+        item => /^\d+$/.test(item.id.trim()) && String(Number(item.id)) === id
+      );
+      if (!session)
+        throw new DriverError(`群成员查询原生会话不存在：${id}`, 'IPC_INVALID_RESPONSE');
       if (session.type !== 'group' || session.nativeType !== 1) {
         throw new DriverError(`群成员查询目标不是原生群会话：${id}`, 'INVALID_SESSION_ID');
       }
-      normalizeGroupQueryId(session.receiverId, '群成员查询原生群接收对象 ID ', 'INVALID_SESSION_ID');
+      normalizeGroupQueryId(
+        session.receiverId,
+        '群成员查询原生群接收对象 ID ',
+        'INVALID_SESSION_ID'
+      );
       const members = (this.groupMemberProfiles.get(id) ?? []).map(member => ({
         ...member,
         departmentPaths: member.departmentPaths ? [...member.departmentPaths] : null,
@@ -310,7 +346,8 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     } catch (error) {
       throw new DriverError(
         `下载原图 ${uri || cache || '未知资源'} 到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
-        'IMAGE_DOWNLOAD_FAILED', error instanceof Error ? error : undefined
+        'IMAGE_DOWNLOAD_FAILED',
+        error instanceof Error ? error : undefined
       );
     }
   }
@@ -326,7 +363,8 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     } catch (error) {
       throw new DriverError(
         `保存文件 ${file.fileName}（KK9 缓存 ${file.filePath || '未缓存'}）到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
-        'FILE_SAVE_FAILED', error instanceof Error ? error : undefined
+        'FILE_SAVE_FAILED',
+        error instanceof Error ? error : undefined
       );
     }
   }
@@ -343,13 +381,22 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     } catch (error) {
       const errors = [error];
       if (!closed) {
-        try { await destination.close(); }
-        catch (closeError) { errors.push(closeError); }
+        try {
+          await destination.close();
+        } catch (closeError) {
+          errors.push(closeError);
+        }
       }
-      try { await rm(temporary, { force: true }); }
-      catch (cleanupError) { errors.push(cleanupError); }
+      try {
+        await rm(temporary, { force: true });
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
       if (errors.length > 1) {
-        throw new AggregateError(errors, `本地附件写入与清理失败：${errors.map(String).join('；')}`);
+        throw new AggregateError(
+          errors,
+          `本地附件写入与清理失败：${errors.map(String).join('；')}`
+        );
       }
       throw error;
     }
@@ -368,19 +415,41 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   public scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]> {
     const to = options.toTimestamp ?? Date.now();
     const limit = options.maxMessagesPerSession ?? 20;
-    if (!Number.isFinite(options.fromTimestamp) || !Number.isFinite(to) || options.fromTimestamp > to) return Promise.reject(new DriverError('补偿扫描时间窗口无效', 'COMPENSATION_SCAN_INVALID_WINDOW'));
-    if (!Number.isSafeInteger(limit) || limit <= 0) return Promise.reject(new DriverError('补偿扫描数量必须为正整数', 'COMPENSATION_SCAN_INVALID_LIMIT'));
+    if (
+      !Number.isFinite(options.fromTimestamp) ||
+      !Number.isFinite(to) ||
+      options.fromTimestamp > to
+    )
+      return Promise.reject(
+        new DriverError('补偿扫描时间窗口无效', 'COMPENSATION_SCAN_INVALID_WINDOW')
+      );
+    if (!Number.isSafeInteger(limit) || limit <= 0)
+      return Promise.reject(
+        new DriverError('补偿扫描数量必须为正整数', 'COMPENSATION_SCAN_INVALID_LIMIT')
+      );
     for (const id of options.sessionIds ?? []) {
-      if (!this.sessions.some(session => session.id === id)) return Promise.reject(new DriverError(`补偿扫描原生会话不存在: ${id}`, 'COMPENSATION_SCAN_SESSION_NOT_FOUND'));
+      if (!this.sessions.some(session => session.id === id))
+        return Promise.reject(
+          new DriverError(`补偿扫描原生会话不存在: ${id}`, 'COMPENSATION_SCAN_SESSION_NOT_FOUND')
+        );
     }
     const result: KK9Message[] = [];
     for (const session of this.sessions) {
       if (options.sessionIds && !options.sessionIds.includes(session.id)) continue;
       const seen = new Set<string>();
-      const selected = this.messages.filter(m => m.sessionId === session.id && m.timestamp >= options.fromTimestamp && m.timestamp <= to)
+      const selected = this.messages
+        .filter(
+          m =>
+            m.sessionId === session.id && m.timestamp >= options.fromTimestamp && m.timestamp <= to
+        )
         .sort((a, b) => (b.msgIdx ?? b.timestamp) - (a.msgIdx ?? a.timestamp))
-        .filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true; })
-        .slice(0, limit).reverse();
+        .filter(m => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        })
+        .slice(0, limit)
+        .reverse();
       result.push(...selected);
     }
     return Promise.resolve(result);
@@ -396,7 +465,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     }
   }
 
-
   public markSessionRead(sessionId: string): Promise<boolean> {
     this.markSessionReadCallsCount++;
     const session = this.sessions.find(item => item.id === sessionId.trim());
@@ -407,17 +475,27 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     return Promise.resolve(true);
   }
 
-
   public async sendText(text: string, options?: SendOptions): Promise<SendResult> {
     if (options?.replyTo !== undefined) return this.sendReply(options.replyTo, text, options);
     return this.executeSendAction('text', 'text', text, options);
   }
 
-  public async sendTextToUser(loginName: string, text: string, options?: SendToUserOptions): Promise<SendResult> {
-    return this.executeSendAction('text-to-user', 'textToUser', text, {
-      operationId: options?.operationId,
-      verifyTimeoutMs: options?.verifyTimeoutMs,
-    }, false, loginName.trim());
+  public async sendTextToUser(
+    loginName: string,
+    text: string,
+    options?: SendToUserOptions
+  ): Promise<SendResult> {
+    return this.executeSendAction(
+      'text-to-user',
+      'textToUser',
+      text,
+      {
+        operationId: options?.operationId,
+        verifyTimeoutMs: options?.verifyTimeoutMs,
+      },
+      false,
+      loginName.trim()
+    );
   }
 
   public async sendRichText(content: FormattedText, options?: SendOptions): Promise<SendResult> {
@@ -434,29 +512,64 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async sendImage(imagePath: string, options?: SendOptions): Promise<SendResult> {
-    return this.executeSendAction('image', 'image', imagePath, options, false, options?.targetLoginName?.trim());
+    return this.executeSendAction(
+      'image',
+      'image',
+      imagePath,
+      options,
+      false,
+      options?.targetLoginName?.trim()
+    );
   }
 
   public async sendFile(filePath: string, options?: SendFileOptions): Promise<SendResult> {
-    return this.executeSendAction('file', 'file', filePath, options, false, options?.targetLoginName?.trim());
+    return this.executeSendAction(
+      'file',
+      'file',
+      filePath,
+      options,
+      false,
+      options?.targetLoginName?.trim()
+    );
   }
 
   public async sendUrlCard(card: KK9UrlCardOptions, options?: SendOptions): Promise<SendResult> {
-    return this.executeSendAction('url-card', 'urlCard', card, options, false, options?.targetLoginName?.trim());
+    return this.executeSendAction(
+      'url-card',
+      'urlCard',
+      card,
+      options,
+      false,
+      options?.targetLoginName?.trim()
+    );
   }
 
   public async sendBizMessage(
     message: KK9BizMsgOptions,
     options?: SendOptions
   ): Promise<SendResult> {
-    return this.executeSendAction('biz-message', 'bizMessage', message, options, false, options?.targetLoginName?.trim());
+    return this.executeSendAction(
+      'biz-message',
+      'bizMessage',
+      message,
+      options,
+      false,
+      options?.targetLoginName?.trim()
+    );
   }
 
   public async sendAppMessage(
     message: KK9AppMsgOptions,
     options?: SendOptions
   ): Promise<SendResult> {
-    return this.executeSendAction('app-message', 'appMessage', message, options, false, options?.targetLoginName?.trim());
+    return this.executeSendAction(
+      'app-message',
+      'appMessage',
+      message,
+      options,
+      false,
+      options?.targetLoginName?.trim()
+    );
   }
 
   public async sendChatRecord(
@@ -467,7 +580,14 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public async sendVoice(voice: KK9VoiceOptions, options?: SendOptions): Promise<SendResult> {
-    return this.executeSendAction('voice', 'voice', voice, options, false);
+    return this.executeSendAction(
+      'voice',
+      'voice',
+      voice,
+      options,
+      false,
+      options?.targetLoginName?.trim()
+    );
   }
   public async getSendStatus(operationId: string): Promise<SendResult> {
     const operation = await this.sendOperationStore.get(operationId);
@@ -482,12 +602,26 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
 
   public recallMessage(messageId: string, session: KK9Session | string): Promise<boolean> {
     const sessionId = typeof session === 'string' ? session.trim() : session?.id;
-    const target = this.messages.find(message => message.sessionId === sessionId && message.id === messageId);
-    if (!sessionId || !/^[1-9]\d*$/.test(sessionId) || !target || target.isRecalled ||
-        !this.currentUserId || target.senderId !== this.currentUserId) return Promise.resolve(false);
+    const target = this.messages.find(
+      message => message.sessionId === sessionId && message.id === messageId
+    );
+    if (
+      !sessionId ||
+      !/^[1-9]\d*$/.test(sessionId) ||
+      !target ||
+      target.isRecalled ||
+      !this.currentUserId ||
+      target.senderId !== this.currentUserId
+    )
+      return Promise.resolve(false);
     target.isRecalled = true;
-    this.emitRecalled({ messageId, sessionId, sender: this.currentUserId,
-      time: new Date().toLocaleTimeString(), timestamp: Date.now() });
+    this.emitRecalled({
+      messageId,
+      sessionId,
+      sender: this.currentUserId,
+      time: new Date().toLocaleTimeString(),
+      timestamp: Date.now(),
+    });
     return Promise.resolve(true);
   }
 
@@ -509,8 +643,6 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
       ? this.getUserProfile(resolved.receiverId)
       : null;
   }
-
-
 
   private async executeSendAction(
     operationType: SendOperationMessageType,
@@ -541,24 +673,55 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
       try {
         const parsed = parseFormattedTextToKK(payload as FormattedText);
         const nodes = buildMentionNodes(mentions);
-        if (!parsed.plainText.trim() && (operationType === 'reply' || nodes.length === 0)) throw new Error('文本内容不能为空');
+        if (!parsed.plainText.trim() && (operationType === 'reply' || nodes.length === 0))
+          throw new Error('文本内容不能为空');
         if (operationType === 'reply') {
           const target = typeof replyTo === 'string' ? { messageId: replyTo } : replyTo;
-          if (!target || !/^[1-9]\d*$/.test(target.messageId) ||
-              Object.keys(target).some(key => key !== 'messageId' && key !== 'msgIdx')) throw new Error('引用必须指定原生消息ID及可选准确索引');
-          const message = this.messages.find(item => item.sessionId === options?.targetSessionId && item.id === target.messageId &&
-            (target.msgIdx === undefined || item.msgIdx === target.msgIdx));
-          if (!message || message.isRecalled || !message.senderId || !message.msgIdx) throw new Error('未在指定会话找到可引用的原生消息');
+          if (
+            !target ||
+            !/^[1-9]\d*$/.test(target.messageId) ||
+            Object.keys(target).some(key => key !== 'messageId' && key !== 'msgIdx')
+          )
+            throw new Error('引用必须指定原生消息ID及可选准确索引');
+          const message = this.messages.find(
+            item =>
+              item.sessionId === options?.targetSessionId &&
+              item.id === target.messageId &&
+              (target.msgIdx === undefined || item.msgIdx === target.msgIdx)
+          );
+          if (!message || message.isRecalled || !message.senderId || !message.msgIdx)
+            throw new Error('未在指定会话找到可引用的原生消息');
         }
-      } catch (error) { textError = String(error); }
+      } catch (error) {
+        textError = String(error);
+      }
     }
-    if (operationType === 'url-card' || operationType === 'biz-message' || operationType === 'app-message' || operationType === 'chat-record') {
-      textError = getCardInputError(operationType, payload as KK9UrlCardOptions | KK9BizMsgOptions | KK9AppMsgOptions | KK9ChatRecordOptions);
+    if (
+      operationType === 'url-card' ||
+      operationType === 'biz-message' ||
+      operationType === 'app-message' ||
+      operationType === 'chat-record'
+    ) {
+      textError = getCardInputError(
+        operationType,
+        payload as KK9UrlCardOptions | KK9BizMsgOptions | KK9AppMsgOptions | KK9ChatRecordOptions
+      );
       if (!textError && operationType === 'chat-record') {
         const record = payload as KK9ChatRecordOptions;
-        if (record.msgArray.some(ref => !this.messages.some(message =>
-          message.sessionId === record.sourceSessionId && message.id === ref.messageId &&
-          message.msgIdx === ref.msgIdx && !message.isRecalled && message.senderId && message.sender))) {
+        if (
+          record.msgArray.some(
+            ref =>
+              !this.messages.some(
+                message =>
+                  message.sessionId === record.sourceSessionId &&
+                  message.id === ref.messageId &&
+                  message.msgIdx === ref.msgIdx &&
+                  !message.isRecalled &&
+                  message.senderId &&
+                  message.sender
+              )
+          )
+        ) {
           textError = '合并来源消息不存在、索引不符、已撤回或缺少真实作者';
         }
       }
@@ -566,7 +729,10 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     let targetEmployee: KK9Employee | undefined;
     let targetError: string | undefined;
     const optionLoginName = options?.targetLoginName;
-    if (optionLoginName !== undefined && !['url-card', 'biz-message', 'app-message', 'image', 'file'].includes(operationType)) {
+    if (
+      optionLoginName !== undefined &&
+      !['url-card', 'biz-message', 'app-message', 'image', 'file', 'voice'].includes(operationType)
+    ) {
       targetError = '此发送方法不支持targetLoginName';
     } else if (targetLoginName !== undefined && options?.targetSessionId !== undefined) {
       targetError = 'targetLoginName与targetSessionId不能同时指定';
@@ -582,7 +748,8 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
           if (employee.loginName === targetLoginName) candidates.set(String(employee.id), employee);
         }
         if (candidates.size === 0) targetError = `未找到准确工号: ${targetLoginName}`;
-        else if (candidates.size > 1) targetError = `工号对应多个UID，拒绝歧义目标: ${targetLoginName}`;
+        else if (candidates.size > 1)
+          targetError = `工号对应多个UID，拒绝歧义目标: ${targetLoginName}`;
         else targetEmployee = candidates.values().next().value;
         if (targetEmployee && String(targetEmployee.id) === this.currentUserId.trim()) {
           targetError = '按工号发送仅支持其他人员，不能发送给本人';
@@ -619,16 +786,29 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     if (targetEmployee) {
       if (outcome.status === 'sent') {
         const receiverId = String(targetEmployee.id);
-        let sessionId = outcome.sessionId && /^[1-9]\d*$/.test(outcome.sessionId) ? outcome.sessionId : undefined;
-        let session = this.sessions.find(item => item.type === 'private' && item.receiverId === receiverId && /^[1-9]\d*$/.test(item.id) &&
-          (sessionId === undefined || item.id === sessionId));
+        let sessionId =
+          outcome.sessionId && /^[1-9]\d*$/.test(outcome.sessionId) ? outcome.sessionId : undefined;
+        let session = this.sessions.find(
+          item =>
+            item.type === 'private' &&
+            item.receiverId === receiverId &&
+            /^[1-9]\d*$/.test(item.id) &&
+            (sessionId === undefined || item.id === sessionId)
+        );
         if (!session) {
           if (!sessionId) {
             let nextId = 1;
             while (this.sessions.some(item => item.id === String(nextId))) nextId++;
             sessionId = String(nextId);
           }
-          session = { id: sessionId, name: targetEmployee.name, type: 'private', nativeType: 0, receiverId, unread: false };
+          session = {
+            id: sessionId,
+            name: targetEmployee.name,
+            type: 'private',
+            nativeType: 0,
+            receiverId,
+            unread: false,
+          };
           this.sessions.push(session);
         }
         outcome = { ...outcome, sessionId: session.id };
@@ -637,11 +817,16 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
         outcome = { ...outcome, sessionId: undefined };
       }
     }
-    const result = sendOperationRecordToResult(await this.sendOperationStore.update(operationId, outcome));
-    const confirmedSessionId = targetLoginName !== undefined ? result.sessionId : effectiveOptions.targetSessionId;
+    const result = sendOperationRecordToResult(
+      await this.sendOperationStore.update(operationId, outcome)
+    );
+    const confirmedSessionId =
+      targetLoginName !== undefined ? result.sessionId : effectiveOptions.targetSessionId;
     if (result.status === 'sent' && confirmedSessionId) {
-      this.confirmedSendKeys.set(createMessageIdentityKey(confirmedSessionId, result.messageId),
-        createNativeMessageKey(operationType, operationId));
+      this.confirmedSendKeys.set(
+        createMessageIdentityKey(confirmedSessionId, result.messageId),
+        createNativeMessageKey(operationType, operationId)
+      );
       if (this.confirmedSendKeys.size > 10000)
         this.confirmedSendKeys.delete(this.confirmedSendKeys.keys().next().value!);
     }
@@ -708,14 +893,17 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   }
 
   public emitMessage(msg: KK9Message): void {
-    const normalized = normalizeNativeMessage(msg, { currentUserId: this.currentUserId ?? undefined })[0];
+    const normalized = normalizeNativeMessage(msg, {
+      currentUserId: this.currentUserId ?? undefined,
+    })[0];
     if (!normalized) return;
     const key = createMessageIdentityKey(normalized.sessionId, normalized.id);
     if (this.knownMessageKeys.has(key)) return;
     this.knownMessageKeys.add(key);
     if (this.knownMessageKeys.size > 10000)
       this.knownMessageKeys.delete(this.knownMessageKeys.values().next().value!);
-    if (normalized.direction === 'outbound') normalized.sdkSendKey = this.confirmedSendKeys.get(key);
+    if (normalized.direction === 'outbound')
+      normalized.sdkSendKey = this.confirmedSendKeys.get(key);
     this.emit('message', normalized);
     if (normalized.atMe || normalized.atAll) this.emit('at', normalized);
   }
