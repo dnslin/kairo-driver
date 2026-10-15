@@ -528,6 +528,7 @@ export function normalizeNativeMessage(
           fileInfo = {
             fileName,
             filePath: toSafeString(contentObj['filepath'] || contentObj['filePath']) || undefined,
+            uri: toSafeString(contentObj['uri']) || undefined,
             fileSize: toSafeString(contentObj['size'] || contentObj['fileSize']) || undefined,
             fileExt: extMatch,
           };
@@ -549,6 +550,7 @@ export function normalizeNativeMessage(
                     : undefined,
             fileExt: typeof item['fileExt'] === 'string' ? item['fileExt'] : extMatch,
             filePath: typeof item['filePath'] === 'string' ? item['filePath'] : undefined,
+            uri: toSafeString(item['uri']) || undefined,
           };
         }
       }

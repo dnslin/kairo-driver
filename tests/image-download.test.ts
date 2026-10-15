@@ -337,7 +337,7 @@ describe('接收原图资源与原生下载', () => {
     expect(ipc.sent).toEqual([]);
   });
 
-  it('普通文件未缓存或缓存不存在明确失败，不下载且保留已有成功目标', async () => {
+  it('普通文件既无有效缓存也无 URI 时明确失败，不下载且保留已有成功目标', async () => {
     const target = targetPath();
     writeFileSync(target, '已有成功文件');
     const { driver: native, ipc } = nativeDriver(() => { throw new Error('普通文件不应下载'); });
