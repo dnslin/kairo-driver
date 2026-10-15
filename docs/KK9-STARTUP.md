@@ -730,3 +730,16 @@ pnpm exec tsx examples/verify-native-group-members.ts 3583 kairo 793803 29467 �
 保留首次 `tmp/group-members-bridge-conflict-evidence.json`：旧专项尝试建立Driver事件桥时发现生产桥接，拒绝且原资源保留；最终改为单一路径独立只读查询，不提供自动接管或回退。独立专项首轮误将 `sessionsInfo` 数组按对象校验，失败报告保留在 `tmp/group-members-snapshot-model-evidence.json`；按真实数组修正后定点ESLint及上述实际运行通过。
 
 未在真机制造200人以上、同名/重复UID、多部门、缺工号、原生故障或超时；这些由行为回归覆盖。原生可能吞同步错误的最新状态限制不变，未修改KK9安装包或已有生产进程。完整检查中的既有定时器失败及最终build/typecheck/lint结果见开发说明；不把全套检查记为通过。
+
+## 既有普通文件接收验收
+
+在已获授权的既有文件消息上执行，不发送新的测试文件：
+
+```sh
+CDP_URL=http://172.16.0.18:9222 node --import tsx examples/verify-native-file-receive.ts 3583 816219 76 23.txt 3
+```
+
+参数依次为实际登录UID、原生会话ID、msgIdx、预期文件名、可选预期字节数；PowerShell用 `$env:CDP_URL = "http://172.16.0.18:9222"` 后执行同一 Node 命令。脚本独立连接 CdpClient，仅查询实际身份与准确原生消息，规范化后使用 Driver 的 `saveNativeFile` 保存并读出字节，检查文件名和有效元数据大小；不安装或接管事件桥、不发送/撤回/切换/标已读。
+
+2026-10-15本轮原生私聊816219/索引76/消息137965419的 `23.txt` 实测：没有缓存路径、服务器URI存在，原生下载3字节成功，内容SHA-256为 `a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3`，临时租约观察值0→0，独立连接及本机自建目录在退出时清理。共享租约的前后数量仅报告观测值，不把其他实例的合法并发当作泄漏。没有向模型注入历史消息或改动生产服务。
+

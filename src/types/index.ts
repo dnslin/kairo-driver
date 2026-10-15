@@ -148,6 +148,8 @@ export interface KK9FileInfo {
   fileExt?: string;
   /** KK9 机器上的普通文件缓存路径；缺省表示未缓存，不能直接在 Driver 本机读取。 */
   filePath?: string;
+  /** 普通文件服务器资源 URI；KK9 缓存缺失时用于原生下载。 */
+  uri?: string;
 }
 
 /** 链接图文卡片发送参数。 */
@@ -463,7 +465,7 @@ export interface IKK9Driver extends EventEmitter {
   scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]>;
   /** 优先 KK9 原图缓存，否则原生下载准确原图；原子保存到 Driver 本机 fullPath，返回本机绝对路径，不降级缩略图。 */
   downloadImage(image: KK9ImageInfo, fullPath: string): Promise<string>;
-  /** 只保存 KK9 已缓存的普通文件到 Driver 本机 fullPath，返回本机绝对路径；未缓存抛 DriverError(FILE_SAVE_FAILED)。 */
+  /** 优先 KK9 普通文件缓存，缓存缺失时通过 URI 原生下载；原子保存到 Driver 本机 fullPath，返回本机绝对路径，失败抛 DriverError(FILE_SAVE_FAILED)。 */
   saveFile(file: KK9FileInfo, fullPath: string): Promise<string>;
 
   // 消息发送与撤回

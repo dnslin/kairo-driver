@@ -501,3 +501,14 @@ Fake群查询现与真实实现对齐：非法会话ID、非群目标及无效�
 
 随后移除原有源码及媒体测试的无关整文件格式化，仅保留已验证的语音差异、七处内部调用与两处已连接身份夹具。重新 build/typecheck 通过；三文件原生语音、Fake 及既有媒体共87项与全量lint通过，编译入口身份烟测再次退出0。没有重复运行已知失败的人员搜索检查。
 
+
+## 未缓存普通文件接收
+
+普通文件接收实现与回归统一放在 Driver。`KK9FileInfo.uri` 保留原生消息的服务器资源，`saveFile` 优先 KK9 缓存，无路径或缓存 ENOENT 时以 `download({uri,fullPath,override:true})` 原生下载。权限、非文件及原生错误继续保留 `FILE_SAVE_FAILED`；图片和文件共享实际下载与临时文件租约逻辑，原子发布及图片非空规则不变。Fake 提供独立 `setFileResource` 字节源。无新依赖、配置、兼容入口或消费者 Driver 补丁。
+
+行为回归放在 `tests/file-download.test.ts`，复用已有 renderer-runtime 与 Driver 内部测试助手，不引入 AstrBot、插件桥接或第二套渲染器。独立接收验收入口为 `examples/verify-native-file-receive.ts`，只连接 CdpClient，核对原生身份及准确会话/索引，不调用 Driver.connect、不安装 EventBridge、不进行聊天操作。
+
+本轮真实执行 `CDP_URL=http://172.16.0.18:9222 node --import tsx examples/verify-native-file-receive.ts 3583 816219 76 23.txt 3`：原消息137965419无缓存路径但URI存在，原生下载并实际读取3字节，SHA-256为 `a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3`，共享临时租约前后均0，退出时独立连接和自建本机目录清理完成。没有发送/撤回、切换会话、标已读、模型调用或生产进程重启；该结果不扩展为其他文件、Linux真机或模型读取验收。
+
+本轮 `pnpm check` 的 build/typecheck 通过；43文件中769项测试通过、1项失败、1项既有Linux专属跳过。新增普通文件12项及原图26项全部通过。唯一失败为未改动的 `tests/cdp-remote.test.ts:123` 的HTTP发现用例，错误 `CDP 连接失败: 探测 CDP 目标失败: fetch failed`，具体网络原因未定位；没有修改该实现/断言、掩盖错误或重复运行无关用例。历史人员搜索定时器失败本轮未发生，不宣称已修复。由于 test 阶段中断，另行执行 `pnpm lint`，全量通过。
+

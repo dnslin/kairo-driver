@@ -121,6 +121,7 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
   private behaviorSequence: FakeSendBehavior[] = [];
   private readonly sendOperationStore: SendOperationStore;
   private readonly imageResources = new Map<string, Uint8Array>();
+  private readonly fileResources = new Map<string, Uint8Array>();
   private readonly cachedFiles = new Map<string, Uint8Array>();
 
   private readonly confirmedSendKeys = new Map<string, string>();
@@ -286,6 +287,11 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     this.imageResources.set(uri, bytes);
   }
 
+  /** 注入服务器普通文件资源；独立于图片资源，保存时写入实际字节。 */
+  public setFileResource(uri: string, bytes: Uint8Array): void {
+    this.fileResources.set(uri, bytes);
+  }
+
   /** 注入 KK9 机器上的缓存字节；支持 Windows 路径，独立于 Driver 本地文件系统。 */
   public setCachedFile(filePath: string, bytes: Uint8Array): void {
     this.cachedFiles.set(cachedFileKey(filePath), bytes);
@@ -315,17 +321,24 @@ export class FakeKK9Driver extends EventEmitter implements IKK9Driver {
     }
   }
 
+  /** 优先保存 KK9 普通文件缓存，缓存缺失时使用注入的 URI 资源。 */
   public async saveFile(file: KK9FileInfo, fullPath: string): Promise<string> {
     const target = path.resolve(fullPath);
     try {
-      if (!file.filePath) throw new Error('普通文件尚未缓存，缺少 KK9 filePath');
-      const bytes = this.cachedFiles.get(cachedFileKey(file.filePath));
-      if (bytes === undefined) throw new Error(`ENOENT：KK9 缓存不存在：${file.filePath}`);
+      let bytes = file.filePath ? this.cachedFiles.get(cachedFileKey(file.filePath)) : undefined;
+      if (bytes === undefined) {
+        if (!file.uri) {
+          if (file.filePath) throw new Error(`ENOENT：KK9 缓存不存在：${file.filePath}，缺少可下载的 URI`);
+          throw new Error('普通文件缺少可用的 KK9 缓存和可下载的 URI');
+        }
+        bytes = this.fileResources.get(file.uri);
+        if (bytes === undefined) throw new Error(`普通文件资源不存在：${file.uri}`);
+      }
       await this.publishAttachmentBytes(target, bytes);
       return target;
     } catch (error) {
       throw new DriverError(
-        `保存文件 ${file.fileName}（KK9 缓存 ${file.filePath || '未缓存'}）到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
+        `保存文件 ${file.fileName}（KK9 缓存 ${file.filePath || '未缓存'}，URI ${file.uri || '无'}）到 ${target} 失败：${error instanceof Error ? error.message : String(error)}`,
         'FILE_SAVE_FAILED', error instanceof Error ? error : undefined
       );
     }

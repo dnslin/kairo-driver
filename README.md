@@ -143,7 +143,7 @@ async function sendToSession(targetSessionId: string, text: string) {
 | `sendImage(imagePath, options)` | 读取 Driver 本机图片，最多 20 MiB；SDK 分块传到 KK9，再由 KK9 解码、准备原图和缩略图、上传和发送。 |
 | `sendFile(filePath, options)` | 读取 Driver 本机普通文件，最多 100 MiB；SDK 分块传到 KK9，保留原文件名和扩展名，再由原生接口上传和发送。 |
 | `downloadImage(image, fullPath)` | 优先读取 KK9 的准确原图缓存；只有缓存不存在才由原生接口下载准确原图，然后保存到 Driver 本机 `fullPath`。返回本机绝对路径。 |
-| `saveFile(fileInfo, fullPath)` | 将 KK9 已缓存的普通附件保存到 Driver 本机 `fullPath`，返回本机绝对路径；未缓存明确抛 `DriverError(FILE_SAVE_FAILED)`，不新增普通文件下载协议。 |
+| `saveFile(fileInfo, fullPath)` | 优先读取 KK9 普通文件缓存；无路径或缓存不存在时按 `fileInfo.uri` 原生下载，再原子保存到 Driver 本机 `fullPath`，返回本机绝对路径。无来源、缓存权限或下载失败抛 `DriverError(FILE_SAVE_FAILED)` 并保留具体原因。 |
 
 `KK9ImageInfo.filePath/originalFilePath` 和 `KK9FileInfo.filePath` 属于 KK9 机器，可能是 Windows 路径；不要在 Linux 上 `resolve/stat/readFile` 这些字段。`readImageAsBase64/saveImageToFile` 仍是纯本地工具，不提供远程文件传输；跨机器消息附件使用上述 Driver 方法。
 
@@ -196,7 +196,7 @@ async function sendDownloadedFile(
 }
 ```
 
-接收失败应沿用插件的逐项 `attachment_error` 处理，不把不存在的本地路径当上传成功；不要仅因 `getOriginalImageUri()` 为空就提前拒绝仍有准确原图缓存的图片。普通文件未缓存时仍报告当前限制，不让插件直接调用 CDP 或猜测 KK 下载接口。
+接收失败应沿用插件的逐项 `attachment_error` 处理，不把不存在的本地路径当上传成功；不要仅因 `getOriginalImageUri()` 为空就提前拒绝仍有准确原图缓存的图片。普通文件由 Driver 保留原生 `uri` 并在缓存缺失时下载；调用方只调用 `saveFile`，不直接调用 CDP、猜测下载接口或维护 Driver 补丁。
 
 文件语音继续在 Driver 机器读取 WAV/MP3、解码和重采样，通过 CDP 传 PCM 给 Windows 的 AMR 编码器；发送内容内联携带 AMR，不改为临时上传文件，也不支持任意音频格式。文字语音由 Driver 机器访问 Edge TTS，遵循下文代理规则。跨机器附件阶段的文字 TTS 曾返回 HTTP 403；现已采用经真实合成验证的 SDK 新端点修复，见[独立文字语音验收](docs/KK9-STARTUP.md#edge-tts-403-修复与独立合成验收)。合成与编码成功不代表消息送达或接收端播放通过。
 
@@ -355,6 +355,7 @@ await driver.sendChatRecord({
 
 ## 未发布变更
 
+- 修复：普通文件规范化保留服务器 `uri`；`saveFile` 在没有缓存或缓存已不存在时调用 KK9 原生下载。有效缓存仍优先，失败保留原生错误和已有目标；Fake 同步提供 `setFileResource`。消费项目只更新固定 Driver 提交，无需维护接收补丁。
 - 修复：锁定经真实合成验证的 `node-edge-tts@1.2.11` 新服务端点，移植仍需要的超时、代理 CONNECT 取消及文件/WebSocket 清理补丁；代理优先级、KK 编码和发送防重不变。
 - 新增：三类通知卡片、图片和文件支持准确工号 `targetLoginName`，直接发送首次/已有私聊；与原生会话目标互斥，正式会话回执、防重、取消及附件清理沿用现有路径。消费项目不再需要另加 Driver 定向发送补丁。
 - 验证：语音相关54项通过；独立真实 MP3 解码4.176秒，最终 Driver 经 KK9 AMR 编码/回解4.18秒、有声、无聊天操作。构建、类型检查与lint通过；全套 `pnpm check` 被已有人员搜索工作区测试的定时器断言阻断，详情见开发说明。

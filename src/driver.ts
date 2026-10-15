@@ -335,7 +335,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return downloadNativeImage(this.cdp, image, fullPath);
   }
 
-  /** 将 KK9 已缓存的普通附件保存到 Driver 本机，不触发原生下载。 */
+  /** 将收到的普通附件保存到 Driver 本机；优先 KK9 缓存，缓存缺失时通过 URI 原生下载。 */
   public saveFile(file: KK9FileInfo, fullPath: string): Promise<string> {
     return saveNativeFile(this.cdp, file, fullPath);
   }
