@@ -315,6 +315,7 @@ export interface KK9GroupMember {
   position: string | null;
 }
 
+
 export interface CdpConfig {
   url: string;
   pageMatch: string;
@@ -393,6 +394,7 @@ export interface KK9RecalledEvent {
   time: string;
   timestamp?: number;
 }
+
 
 export interface SendOptions {
   /** 原生会话ID；通知卡片、图片及语音可改用targetLoginName，不使用当前窗口或会话名称。 */

@@ -7,6 +7,7 @@ import { BridgeOrgOps } from './bridge/org-ops.js';
 import { createMessageIdentityKey } from './bridge/converter.js';
 import { downloadNativeImage, saveNativeFile } from './bridge/attachment-ops.js';
 
+
 import type {
   CdpConnectionLostEvent,
   CompensationScanOptions,
@@ -61,6 +62,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
   private readonly bridgeMessageOps: BridgeMessageOps;
   private readonly bridgeOrgOps: BridgeOrgOps;
 
+
   private readonly knownRecalledMessageKeys = new Set<string>();
   private currentUserId?: string | number;
 
@@ -86,6 +88,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     this.bridgeSessionOps = new BridgeSessionOps(this.cdp);
     this.bridgeMessageOps = new BridgeMessageOps(this.cdp, sendOperationStore);
     this.bridgeOrgOps = new BridgeOrgOps(this.cdp);
+
 
     this.wireCdpEvents();
   }
@@ -159,10 +162,12 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     return this.bridgeSessionOps.getSessions();
   }
 
+
   /** 指定原生会话标记已读；不按名称解析，不默认当前窗口。 */
   public markSessionRead(sessionId: string): Promise<boolean> {
     return this.bridgeSessionOps.markSessionRead(sessionId);
   }
+
 
   private recordSendResult(result: SendResult, sessionId?: string): void {
     const status = result.status;
@@ -182,6 +187,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     }
   }
 
+
   private attachNativeRecall(result: SendResult, targetSessionId?: string): SendResult {
     this.recordSendResult(result, targetSessionId);
     if (result.status !== 'sent') return result;
@@ -190,35 +196,29 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     const sessionId = targetSessionId?.trim();
     return {
       ...result,
-      recall: sessionId
-        ? (): Promise<boolean> => this.recallMessage(messageId, sessionId)
-        : undefined,
+      recall: sessionId ? (): Promise<boolean> => this.recallMessage(messageId, sessionId) : undefined,
     };
   }
 
   /** 指定原生会话读取历史，不重放实时事件或回退 DOM。 */
   public getRecentMessages(session: KK9Session, limit = 20): Promise<KK9Message[]> {
-    return this.bridgeMessageOps.getRecentMessages(session, limit, this.currentUserId);
+    return this.bridgeMessageOps.getRecentMessages(
+      session,
+      limit,
+      this.currentUserId
+    );
   }
 
   public async scanCompensationWindow(options: CompensationScanOptions): Promise<KK9Message[]> {
     const toTimestamp = options.toTimestamp ?? Date.now();
-    if (
-      !Number.isFinite(options.fromTimestamp) ||
-      !Number.isFinite(toTimestamp) ||
-      options.fromTimestamp > toTimestamp
-    ) {
+    if (!Number.isFinite(options.fromTimestamp) || !Number.isFinite(toTimestamp) || options.fromTimestamp > toTimestamp) {
       throw new DriverError(
         `补偿扫描时间窗口无效: from=${options.fromTimestamp}, to=${toTimestamp}`,
         'COMPENSATION_SCAN_INVALID_WINDOW'
       );
     }
     const maxMessages = options.maxMessagesPerSession ?? 20;
-    if (!Number.isSafeInteger(maxMessages) || maxMessages <= 0)
-      throw new DriverError(
-        `补偿扫描数量必须为正整数: ${maxMessages}`,
-        'COMPENSATION_SCAN_INVALID_LIMIT'
-      );
+    if (!Number.isSafeInteger(maxMessages) || maxMessages <= 0) throw new DriverError(`补偿扫描数量必须为正整数: ${maxMessages}`, 'COMPENSATION_SCAN_INVALID_LIMIT');
     if (this.getStatus() !== 'connected') {
       throw new DriverError(
         `补偿扫描需要已连接的 CDP (当前状态: ${this.getStatus()})`,
@@ -231,27 +231,17 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       if (options.sessionIds) {
         for (const id of new Set(options.sessionIds)) {
           const session = await this.bridgeSessionOps.getSessionById(id);
-          if (!session)
-            throw new DriverError(
-              `补偿扫描原生会话不存在: ${id}`,
-              'COMPENSATION_SCAN_SESSION_NOT_FOUND'
-            );
+          if (!session) throw new DriverError(`补偿扫描原生会话不存在: ${id}`, 'COMPENSATION_SCAN_SESSION_NOT_FOUND');
           sessions.push(session);
         }
       } else {
-        sessions.push(...(await this.getSessions()));
+        sessions.push(...await this.getSessions());
       }
       const seen = new Set<string>();
       const recovered: KK9Message[] = [];
 
       for (const session of sessions) {
-        const messages = await this.bridgeMessageOps.getMessagesInRange(
-          session,
-          options.fromTimestamp,
-          toTimestamp,
-          maxMessages,
-          this.currentUserId
-        );
+        const messages = await this.bridgeMessageOps.getMessagesInRange(session, options.fromTimestamp, toTimestamp, maxMessages, this.currentUserId);
         for (const message of messages) {
           const messageId = message.messageId || message.id;
           const key = createMessageIdentityKey(message.sessionId, messageId);
@@ -417,13 +407,8 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
     const sessionId = typeof session === 'string' ? session.trim() : session?.id;
     const success = await this.bridgeMessageOps.recallMessage(messageId, sessionId ?? '');
     if (success && !this.invalidated) {
-      this.handleRecalledEvent({
-        messageId,
-        sessionId,
-        sender: String(this.currentUserId ?? '我'),
-        time: new Date().toLocaleTimeString(),
-        timestamp: Date.now(),
-      });
+      this.handleRecalledEvent({ messageId, sessionId,
+        sender: String(this.currentUserId ?? '我'), time: new Date().toLocaleTimeString(), timestamp: Date.now() });
     }
     return success;
   }
@@ -484,6 +469,7 @@ export class KK9Driver extends EventEmitter implements IKK9Driver {
       ? this.getUserProfile(resolved.receiverId)
       : null;
   }
+
 
   private wireCdpEvents(): void {
     this.cdp.on('status', (status: ConnectionStatus) => this.emit('status', status));
